@@ -1,0 +1,10 @@
+# Para la interfaz gráfica
+streamlit
+pandas
+
+# Para la exportación a Excel
+openpyxl
+
+# Para el backup a Google Drive (opcional, solo si usas esa función)
+google-auth-oauthlib
+google-api-python-client
