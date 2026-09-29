@@ -240,6 +240,69 @@ class Recetario:
     def buscar_menu(self, nombre: str) -> Optional[Menu]:
         return self.menus.get(nombre)
 
+    def previsualizar_consumo(self, servicio: Servicio, inventario: Inventario) -> Optional[list[dict]]:
+        """
+        Calcula, SIN tocar nada todavía, qué se descontaría del inventario
+        al completar este servicio. Devuelve None si el menú del servicio
+        no existe en el recetario.
+
+        Para cada ingrediente: cuánto hace falta, cuánto hay, cuánto se
+        descontará de verdad y cuánto faltaba. Si no hay stock suficiente,
+        se descuenta TODO lo que hay (se deja a 0) en vez de no descontar
+        nada: si el servicio se hizo, lo que había se gastó -- y lo que
+        faltaba tuvo que salir de algún sitio que no estaba registrado.
+        """
+        menu = self.buscar_menu(servicio.menu)
+        if menu is None:
+            return None
+
+        filas = []
+        for ingrediente, necesario in menu.calcular_ingredientes_totales(servicio.comensales).items():
+            producto = inventario.buscar_producto(ingrediente)
+            en_stock = producto.stock if producto else 0
+            # Sin round() a propósito: redondear podría dar un número
+            # ligeramente MAYOR que el stock real, y actualizar_stock()
+            # lo rechazaría por "stock insuficiente".
+            a_descontar = min(necesario, en_stock)
+            filas.append({
+                "ingrediente": ingrediente,
+                "unidad": producto.unidad if producto else "",
+                "necesario": necesario,
+                "en_stock": en_stock,
+                "a_descontar": a_descontar,
+                "faltante": round(necesario - a_descontar, 3),
+                "existe": producto is not None,
+            })
+        return filas
+
+    def completar_servicio(self, servicio: Servicio, inventario: Inventario) -> Optional[list[dict]]:
+        """
+        Marca el servicio como completado y descuenta del inventario los
+        ingredientes de su menú (motivo "consumo", así cuenta en Métricas).
+        Devuelve el mismo detalle que previsualizar_consumo(), para poder
+        informar de lo que faltaba. Devuelve None si el menú no existe (en
+        ese caso NO toca ni el servicio ni el inventario: decide quien llama).
+
+        Vive aquí (y no en main.py ni en app.py) para que la consola y la
+        interfaz gráfica usen EXACTAMENTE la misma lógica.
+        """
+        if servicio.estado in ("completado", "cancelado"):
+            # Sin esto, completar dos veces el mismo servicio descontaría
+            # el stock dos veces.
+            raise ValueError(f"El servicio #{servicio.id} ya está {servicio.estado}.")
+
+        filas = self.previsualizar_consumo(servicio, inventario)
+        if filas is None:
+            return None
+
+        for fila in filas:
+            if fila["existe"] and fila["a_descontar"] > 0:
+                inventario.actualizar_stock(
+                    fila["ingrediente"], fila["a_descontar"], sumar=False, motivo_salida="consumo"
+                )
+        servicio.completar()
+        return filas
+
     def recomendar_menus(self, inventario: Inventario, dias: int = 7) -> list[tuple[Menu, float]]:
         """
         Ordena los menús disponibles por urgencia TOTAL: caducidad

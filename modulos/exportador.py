@@ -44,7 +44,8 @@ def _ajustar_ancho_columnas(hoja, ancho: int = 18) -> None:
 def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
     hoja = wb.create_sheet("Inventario")
     columnas = ["Nombre", "Categoría", "Stock", "Unidad", "Precio unitario (€)",
-                "Valor total (€)", "Proveedor", "Stock mínimo", "Fecha caducidad"]
+                "Valor total (€)", "Proveedor", "Stock mínimo", "Fecha caducidad",
+                "Tipo", "Peso por unidad en bruto (kg)"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -60,6 +61,8 @@ def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
         hoja.cell(row=fila, column=8, value=producto.stock_minimo).font = Font(name=FUENTE)
         fecha = producto.fecha_caducidad.strftime("%d/%m/%Y") if producto.fecha_caducidad else "—"
         hoja.cell(row=fila, column=9, value=fecha).font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=10, value=producto.tipo_descripcion() or "—").font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=11, value=producto.peso_unitario or "—").font = Font(name=FUENTE)
         fila += 1
 
     if fila > 2:
@@ -67,6 +70,32 @@ def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
         hoja.cell(row=fila, column=6, value=f"=SUM(F2:F{fila - 1})").font = Font(name=FUENTE, bold=True)
 
     _ajustar_ancho_columnas(hoja)
+
+
+def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
+    """Historial de limpiezas/despieces: de dónde sale cada kilo limpio y cuánta merma hubo."""
+    hoja = wb.create_sheet("Limpiezas")
+    columnas = ["Fecha", "Producto en bruto", "Cantidad", "Unidad", "Peso bruto (kg)",
+                "Producto limpio", "Peso limpio (kg)", "Derivados aprovechados",
+                "Derivados (kg)", "Merma (kg)", "Rendimiento", "Coste (€)"]
+    _escribir_cabecera(hoja, columnas)
+
+    fila = 2
+    for l in inventario.limpiezas:
+        derivados = ", ".join(f"{n} ({round(kg, 3)} kg)" for n, kg in l.derivados_kg.items()) or "—"
+        valores = [
+            l.fecha.strftime("%d/%m/%Y"), l.producto_origen, l.cantidad_origen, l.unidad_origen,
+            l.peso_bruto_kg, l.producto_limpio, l.peso_limpio_kg, derivados,
+            round(sum(l.derivados_kg.values()), 3),
+            # Fórmulas reales: merma = bruto - limpio - derivados; rendimiento = limpio / bruto
+            f"=E{fila}-G{fila}-I{fila}", f"=G{fila}/E{fila}", l.coste,
+        ]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=11).number_format = "0.0%"
+        fila += 1
+
+    _ajustar_ancho_columnas(hoja, ancho=20)
 
 
 def _hoja_servicios(wb: Workbook, registro: RegistroServicios) -> None:
@@ -128,6 +157,7 @@ def exportar_todo(
     wb.remove(wb.active)  # quitamos la hoja "Sheet" vacía que crea por defecto
 
     _hoja_inventario(wb, inventario)
+    _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)
 

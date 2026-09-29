@@ -16,7 +16,7 @@ futuro que aún no hemos construido (sería un buen Módulo 6).
 
 import sys
 from pathlib import Path
-from datetime import date, time
+from datetime import date, time, timedelta
 from typing import Optional
 
 # Añadimos la carpeta modulos/ al path para poder importar sus archivos
@@ -24,7 +24,7 @@ from typing import Optional
 # venido haciendo en cada módulo por separado hasta ahora.
 sys.path.append(str(Path(__file__).parent / "modulos"))
 
-from inventario import Inventario, Producto, MovimientoStock, FACTORES_CONVERSION
+from inventario import Inventario, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
 from recetario import Recetario, Receta, Menu
 from compras import GestorCompras, ItemCompra
@@ -217,6 +217,41 @@ def pedir_hora(mensaje: str) -> time:
             print("⚠️  Formato no válido, usa HH:MM (ej: 21:30).")
 
 
+def pedir_peso_kg(mensaje: str) -> float:
+    """Pide un peso dejando elegir si se escribe en kg o en g, y lo devuelve siempre en kg."""
+    unidad = pedir_opcion(f"{mensaje} -- ¿en qué unidad?", UNIDADES_PESO)
+    while True:
+        valor = pedir_numero(f"{mensaje} (en {unidad}): ")
+        if valor > 0:
+            return convertir(valor, unidad, "kg")
+        print("⚠️  El peso debe ser mayor que 0.")
+
+
+def pedir_si_no_opcional(mensaje: str) -> Optional[bool]:
+    """Como pedir_si_no(), pero vacío = "no modificar" (devuelve None). Para formularios de edición."""
+    while True:
+        valor = input(f"{mensaje} (s/n, vacío para no cambiar): ").strip().lower()
+        if valor == "":
+            return None
+        if valor in ("s", "si", "sí"):
+            return True
+        if valor in ("n", "no"):
+            return False
+        print("⚠️  Responde 's', 'n' o deja vacío.")
+
+
+def pedir_peso_lote(producto) -> Optional[float]:
+    """
+    Si el producto tiene merma y se compra por unidades, pide el peso en
+    bruto de cada unidad del lote que entra (en kg). Si no, devuelve None.
+    """
+    if producto.tiene_merma and producto.unidad == "unidades":
+        actual = f" (media actual: {producto.peso_unitario} kg)" if producto.peso_unitario else ""
+        print(f"'{producto.nombre}' tiene merma y se compra por unidades{actual}.")
+        return pedir_peso_kg("Peso en bruto de cada unidad de este lote")
+    return None
+
+
 def pausa() -> None:
     input("\nPulsa Enter para continuar...")
 
@@ -232,6 +267,8 @@ def menu_inventario():
         print("4. Ver productos bajo mínimo")
         print("5. Ver próximos a caducar")
         print("6. Editar producto")
+        print("7. Limpiar / despiezar un producto con merma")
+        print("8. Historial de limpiezas y rendimiento medio")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -242,14 +279,21 @@ def menu_inventario():
             categoria = pedir_texto_no_numerico("Categoría: ")
             stock = pedir_numero("Stock inicial: ")
             unidad = pedir_opcion("Unidad", Producto.UNIDADES_VALIDAS)
-            precio = pedir_numero("Precio unitario (€): ")
+            tiene_merma = False
+            peso_unitario = None
+            if unidad in UNIDADES_PESO + ("unidades",):
+                tiene_merma = pedir_si_no("¿Es un producto con merma (se limpia o despieza antes de usarse)?")
+                if tiene_merma and unidad == "unidades":
+                    peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
+            precio = pedir_numero(f"Precio (€ por {'unidad' if unidad == 'unidades' else unidad}): ")
             proveedor = pedir_texto_no_numerico("Proveedor: ")
             stock_minimo = pedir_numero("Stock mínimo: ")
             tiene_caducidad = pedir_si_no("¿Tiene fecha de caducidad?")
             fecha_caducidad = pedir_fecha("Fecha de caducidad") if tiene_caducidad else None
             try:
                 inventario.agregar_producto(Producto(
-                    nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad
+                    nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad,
+                    tiene_merma=tiene_merma, peso_unitario=peso_unitario,
                 ))
             except ValueError as e:
                 print(f"❌ {e}")
@@ -263,14 +307,17 @@ def menu_inventario():
                 es_entrada = pedir_si_no("¿Es una entrada de mercancía (sumar stock)?")
                 nueva_fecha = None
                 motivo = None
+                peso_lote = None
                 if es_entrada:
+                    peso_lote = pedir_peso_lote(producto)
                     renovar = pedir_si_no("¿Quieres renovar la fecha de caducidad con este lote nuevo?")
                     if renovar:
                         nueva_fecha = pedir_fecha("Nueva fecha de caducidad")
                 else:
                     motivo = pedir_opcion("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA)
                 inventario.actualizar_stock(
-                    nombre, cantidad, sumar=es_entrada, nueva_fecha_caducidad=nueva_fecha, motivo_salida=motivo
+                    nombre, cantidad, sumar=es_entrada, nueva_fecha_caducidad=nueva_fecha, motivo_salida=motivo,
+                    peso_unitario_lote=peso_lote,
                 )
         elif opcion == "4":
             productos = inventario.productos_bajo_minimo()
@@ -328,6 +375,20 @@ def menu_inventario():
                 elif accion_fecha == "borrar":
                     borrar_fecha = True
 
+                tiene_merma = None
+                peso_unitario = None
+                if producto.unidad in UNIDADES_PESO + ("unidades",):
+                    actual = "sí" if producto.tiene_merma else "no"
+                    tiene_merma = pedir_si_no_opcional(f"¿Producto con merma? [actual: {actual}]")
+                    merma_final = producto.tiene_merma if tiene_merma is None else tiene_merma
+                    if merma_final and producto.unidad == "unidades":
+                        if producto.peso_unitario:
+                            peso_unitario = pedir_numero_opcional(
+                                f"Peso en bruto por unidad, en kg [{producto.peso_unitario}]: "
+                            )
+                        else:
+                            peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
+
                 nombre_original = producto.nombre
                 try:
                     exito = inventario.editar_producto(
@@ -340,6 +401,8 @@ def menu_inventario():
                         stock_minimo=stock_minimo,
                         fecha_caducidad=nueva_fecha_caducidad,
                         borrar_fecha_caducidad=borrar_fecha,
+                        tiene_merma=tiene_merma,
+                        peso_unitario=peso_unitario,
                     )
                 except ValueError as e:
                     print(f"❌ {e}")
@@ -356,11 +419,103 @@ def menu_inventario():
                         receta.ingredientes_por_comensal[nuevo_nombre] = cantidad
                     nombres = ", ".join(r.nombre for r in recetas_afectadas)
                     print(f"🔄 Recetas actualizadas automáticamente: {nombres}")
+        elif opcion == "7":
+            accion_limpiar_producto()
+        elif opcion == "8":
+            mostrar_historial_limpiezas()
         elif opcion == "0":
             return
         else:
             print("⚠️  Opción no válida.")
         pausa()
+
+
+def accion_limpiar_producto() -> None:
+    """Limpia o despieza un producto con merma: bruto -> limpio + derivados + merma."""
+    con_merma = inventario.productos_con_merma()
+    if not con_merma:
+        print("No hay productos con merma. Márcalos al añadirlos o en 'Editar producto'.")
+        return
+    print("Productos con merma: " + ", ".join(f"{p.nombre} ({p.stock} {p.unidad})" for p in con_merma))
+
+    nombre = pedir_texto("Producto a limpiar: ")
+    origen = inventario.buscar_producto(nombre)
+    if origen is None or not origen.tiene_merma:
+        print(f"❌ '{nombre}' no existe o no es un producto con merma.")
+        return
+
+    cantidad = pedir_numero(f"¿Cuánto vas a limpiar? (en {origen.unidad}; hay {origen.stock}): ")
+    if cantidad <= 0 or cantidad > origen.stock:
+        print(f"❌ La cantidad debe ser mayor que 0 y como mucho {origen.stock} {origen.unidad}.")
+        return
+    try:
+        peso_bruto = origen.peso_kg(cantidad)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return
+    print(f"Peso en bruto: {round(peso_bruto, 3)} kg")
+    rendimiento = inventario.rendimiento_medio(nombre)
+    if rendimiento:
+        print(f"Rendimiento medio hasta ahora: {rendimiento:.0%} (se esperan ~{peso_bruto * rendimiento:.2f} kg limpios)")
+
+    unidad_peso = pedir_opcion("¿En qué unidad vas a pesar el resultado?", UNIDADES_PESO)
+    sugerido = inventario.producto_limpio_de(nombre) or f"{nombre} limpio"
+    producto_limpio = pedir_texto(f"Producto limpio [{sugerido}]: ") or sugerido
+    peso_limpio = pedir_numero(f"Peso de '{producto_limpio}' ({unidad_peso}): ")
+    caducidades = {}
+    if pedir_si_no(f"¿Poner fecha de caducidad a '{producto_limpio}'?"):
+        caducidades[producto_limpio] = pedir_fecha("Fecha de caducidad")
+
+    print("\nDerivados que se aprovechan. Lo que no indiques se registra como merma.")
+    derivados: dict[str, float] = {}
+    for habitual in inventario.derivados_habituales(nombre):
+        peso = pedir_numero_opcional(f"  {habitual} ({unidad_peso}, vacío si esta vez no se aprovecha): ")
+        if peso:
+            derivados[habitual] = peso
+    print("Otros derivados (nombre vacío para terminar):")
+    while True:
+        derivado = pedir_texto("  Derivado: ")
+        if not derivado:
+            break
+        derivados[derivado] = pedir_numero(f"  Peso de '{derivado}' ({unidad_peso}): ")
+
+    peso_limpio_kg = convertir(peso_limpio, unidad_peso, "kg")
+    derivados_kg = convertir(sum(derivados.values()), unidad_peso, "kg")
+    merma_kg = peso_bruto - peso_limpio_kg - derivados_kg
+    print("\n--- Resumen ---")
+    print(f"Bruto: {round(peso_bruto, 3)} kg de {nombre}")
+    print(f"Limpio: {round(peso_limpio_kg, 3)} kg de {producto_limpio} (rendimiento {peso_limpio_kg / peso_bruto:.1%})")
+    for derivado, peso in derivados.items():
+        print(f"Derivado: {peso} {unidad_peso} de {derivado} (coste 0 €)")
+    print(f"Merma: {round(merma_kg, 3)} kg")
+
+    if pedir_si_no("¿Confirmar la limpieza?"):
+        try:
+            inventario.limpiar_producto(
+                nombre, cantidad, producto_limpio, peso_limpio, derivados,
+                unidad_peso=unidad_peso, caducidades=caducidades,
+            )
+            print("✅ Limpieza registrada.")
+        except ValueError as e:
+            print(f"❌ {e}")
+
+
+def mostrar_historial_limpiezas() -> None:
+    if not inventario.limpiezas:
+        print("Todavía no hay limpiezas registradas.")
+        return
+    print("--- Rendimiento medio por producto ---")
+    for nombre in sorted({l.producto_origen for l in inventario.limpiezas}):
+        limpiezas = inventario.limpiezas_de(nombre)
+        bruto = sum(l.peso_bruto_kg for l in limpiezas)
+        merma = sum(l.merma_kg for l in limpiezas)
+        print(
+            f"{nombre}: rendimiento medio {inventario.rendimiento_medio(nombre):.1%} "
+            f"en {len(limpiezas)} limpieza(s) | merma media {merma / bruto:.1%}"
+        )
+    print("\n--- Historial ---")
+    for limpieza in inventario.limpiezas:
+        print(limpieza)
 
 
 # ---------- Menú: Servicios ----------
@@ -403,33 +558,32 @@ def menu_servicios():
             servicio = registro_servicios.buscar_por_id(id_servicio)
             if servicio is None:
                 print(f"❌ No existe un servicio con id {id_servicio}")
+            elif servicio.estado in ("completado", "cancelado"):
+                print(f"❌ El servicio #{id_servicio} ya está {servicio.estado}.")
             else:
-                menu = recetario.buscar_menu(servicio.menu)
-                if menu is None:
+                filas = recetario.previsualizar_consumo(servicio, inventario)
+                if filas is None:
                     print(f"⚠️  No se encontró el menú '{servicio.menu}' en el recetario.")
                     confirmar = pedir_si_no("¿Marcar como completado igualmente (sin tocar el inventario)?")
                     if confirmar:
                         servicio.completar()
                         print(f"✅ Servicio #{id_servicio} completado (sin descuento de stock).")
                 else:
-                    necesarios = menu.calcular_ingredientes_totales(servicio.comensales)
-                    print(f"Descontando ingredientes para {servicio.comensales} comensales de '{menu.nombre}':")
-                    fallidos = []
-                    for ingrediente, cantidad in necesarios.items():
-                        if inventario.buscar_producto(ingrediente) is None:
-                            print(f"⚠️  '{ingrediente}' no existe en el inventario, se omite.")
-                            fallidos.append(ingrediente)
-                            continue
-                        exito = inventario.actualizar_stock(
-                            ingrediente, cantidad, sumar=False, motivo_salida="consumo"
-                        )
-                        if not exito:
-                            fallidos.append(ingrediente)
-                    servicio.completar()
-                    if fallidos:
-                        print(f"⚠️  Servicio #{id_servicio} completado, pero no se pudo descontar: {', '.join(fallidos)}")
-                    else:
-                        print(f"✅ Servicio #{id_servicio} completado, stock descontado correctamente.")
+                    # Primero enseñamos qué va a pasar, y solo después se aplica.
+                    print(f"\nSe descontará para {servicio.comensales} comensales de '{servicio.menu}':")
+                    for f in filas:
+                        if not f["existe"]:
+                            print(f"  ⚠️  {f['ingrediente']}: no existe en el inventario, no se descontará")
+                        elif f["faltante"] > 0:
+                            print(
+                                f"  ⚠️  {f['ingrediente']}: necesario {f['necesario']} {f['unidad']}, "
+                                f"solo hay {f['en_stock']} -> se descuenta todo (faltaban {f['faltante']})"
+                            )
+                        else:
+                            print(f"  ✅ {f['ingrediente']}: -{f['a_descontar']} {f['unidad']}")
+                    if pedir_si_no("¿Confirmar y completar el servicio?"):
+                        recetario.completar_servicio(servicio, inventario)
+                        print(f"✅ Servicio #{id_servicio} completado.")
         elif opcion == "0":
             return
         else:
@@ -565,13 +719,15 @@ def menu_compras():
                 print(f"Cantidad calculada como necesaria: {item.cantidad} {item.unidad}")
                 cantidad_real = pedir_numero(f"¿Cuánta cantidad has comprado de verdad (en {item.unidad})?: ")
                 unidad = item.unidad
+                producto = inventario.buscar_producto(nombre)
+                peso_lote = pedir_peso_lote(producto) if producto else None
                 gestor_compras.marcar_comprado(nombre, cantidad_comprada=cantidad_real)
                 # Comprarlo implica que ahora está físicamente en el almacén
                 # -- lo reponemos en el inventario en el mismo paso, para no
                 # tener que acordarte de hacerlo tú a mano por separado.
                 # actualizar_stock() ya registra esto en el historial (y por
                 # tanto en las métricas de gasto) automáticamente.
-                inventario.actualizar_stock(nombre, cantidad_real, sumar=True)
+                inventario.actualizar_stock(nombre, cantidad_real, sumar=True, peso_unitario_lote=peso_lote)
                 print(f"📦 Stock repuesto: +{cantidad_real} {unidad} de {nombre}")
         elif opcion == "4":
             print(f"💰 Coste total pendiente: {gestor_compras.costo_total_pendiente()} €")
@@ -633,10 +789,18 @@ def accion_backup_drive():
 def accion_cargar_datos_ejemplo():
     inventario.agregar_producto(Producto("Harina de trigo", "Panadería", 1, "kg", 1.2, "Harinas del Sur", stock_minimo=2))
     inventario.agregar_producto(Producto("Aceite de oliva", "Aceites", 20, "litros", 4.5, "Oleícola Andaluza", stock_minimo=5))
-    inventario.agregar_producto(Producto("Tomate", "Verduras", 0.5, "kg", 2.1, "Huerta Local", stock_minimo=2, fecha_caducidad=date(2026, 9, 1)))
+    # Fechas relativas a hoy, para que los datos de ejemplo no "caduquen" con el tiempo.
+    hoy = date.today()
+    inventario.agregar_producto(Producto(
+        "Tomate", "Verduras", 0.5, "kg", 2.1, "Huerta Local", stock_minimo=2, fecha_caducidad=hoy + timedelta(days=1)
+    ))
+    # Producto con merma comprado por unidades: 2 patas de ~7 kg en bruto, a 45 € cada una.
+    inventario.agregar_producto(Producto(
+        "Pata de cerdo", "Carnes", 2, "unidades", 45, "Carnicería Pepe", tiene_merma=True, peso_unitario=7
+    ))
 
-    registro_servicios.agregar_servicio(Servicio(date(2026, 9, 2), time(21, 0), 8, "Menú del día"))
-    registro_servicios.agregar_servicio(Servicio(date(2026, 9, 15), time(21, 0), 12, "Menú de bodas"))
+    registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=3), time(21, 0), 8, "Menú del día"))
+    registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=16), time(21, 0), 12, "Menú de bodas"))
 
     pan_casero = Receta("Pan casero", "Panadería", {"Harina de trigo": 0.15, "Aceite de oliva": 0.01})
     ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
@@ -660,10 +824,11 @@ def menu_metricas():
         print("6. Generar informe mensual (y guardarlo)")
         print("7. Ver informes guardados")
         print("8. Comparar dos meses")
+        print("9. Merma y rendimiento de las limpiezas")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
-        if opcion in ("1", "2", "3", "4", "5"):
+        if opcion in ("1", "2", "3", "4", "5", "9"):
             periodo = pedir_opcion("Periodo", PERIODOS_VALIDOS)
             desde, hasta = rango_desde_periodo(periodo)
             metricas = Metricas(inventario)
@@ -722,6 +887,18 @@ def menu_metricas():
                     f"Desperdicio: {resultado['desperdicio_1']}€ -> {resultado['desperdicio_2']}€ "
                     f"(diferencia: {resultado['diferencia_desperdicio']:+}€)"
                 )
+        elif opcion == "9":
+            resumen = metricas.resumen_limpiezas(desde, hasta)
+            if not resumen:
+                print("No hay limpiezas registradas en ese periodo.")
+            for nombre, fila in resumen.items():
+                print(
+                    f"{nombre}: {fila['limpiezas']} limpieza(s) | bruto {fila['bruto_kg']} kg -> "
+                    f"limpio {fila['limpio_kg']} kg ({fila['rendimiento']:.1%}) | "
+                    f"derivados {fila['derivados_kg']} kg | merma {fila['merma_kg']} kg"
+                )
+            if resumen:
+                print(f"🦴 Merma total ({periodo}): {metricas.merma_total_kg(desde, hasta)} kg")
         elif opcion == "0":
             return
         else:

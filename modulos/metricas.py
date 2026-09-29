@@ -103,12 +103,45 @@ class Metricas:
         return sorted(acumulado.items(), key=lambda par: par[1], reverse=True)[:top]
 
     def gasto_por_categoria(self, fecha_inicio: date, fecha_fin: date) -> dict[str, float]:
-        """Dinero gastado (entradas de stock) agrupado por categoría, en el rango dado."""
+        """
+        Dinero gastado (COMPRAS) agrupado por categoría, en el rango dado.
+
+        Solo cuentan las compras: la carne limpia que sale de una pata ya
+        se pagó al comprar la pata, y contarla otra vez duplicaría el gasto.
+        """
         gasto: dict[str, float] = {}
         for m in self._en_rango(fecha_inicio, fecha_fin):
-            if m.tipo == "entrada":
+            if m.es_compra():
                 gasto[m.categoria] = round(gasto.get(m.categoria, 0) + m.valor(), 2)
         return gasto
+
+    def resumen_limpiezas(self, fecha_inicio: date, fecha_fin: date) -> dict[str, dict]:
+        """
+        Por cada producto con merma limpiado en el rango: kg en bruto, kg
+        limpios, kg aprovechados como derivados, kg de merma y rendimiento.
+        La merma va aparte del desperdicio: es inevitable (el hueso existe),
+        mientras que el desperdicio (algo que caducó) se puede evitar.
+        """
+        resumen: dict[str, dict] = {}
+        for l in self.inventario.limpiezas:
+            if not (fecha_inicio <= l.fecha <= fecha_fin):
+                continue
+            fila = resumen.setdefault(l.producto_origen, {
+                "limpiezas": 0, "bruto_kg": 0.0, "limpio_kg": 0.0, "derivados_kg": 0.0, "merma_kg": 0.0,
+            })
+            fila["limpiezas"] += 1
+            fila["bruto_kg"] += l.peso_bruto_kg
+            fila["limpio_kg"] += l.peso_limpio_kg
+            fila["derivados_kg"] += sum(l.derivados_kg.values())
+            fila["merma_kg"] += l.merma_kg
+        for fila in resumen.values():
+            fila["rendimiento"] = fila["limpio_kg"] / fila["bruto_kg"] if fila["bruto_kg"] else 0.0
+            for clave in ("bruto_kg", "limpio_kg", "derivados_kg", "merma_kg"):
+                fila[clave] = round(fila[clave], 3)
+        return resumen
+
+    def merma_total_kg(self, fecha_inicio: date, fecha_fin: date) -> float:
+        return round(sum(f["merma_kg"] for f in self.resumen_limpiezas(fecha_inicio, fecha_fin).values()), 3)
 
     def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date) -> float:
         """Valor económico estimado de TODO lo desperdiciado (todas las categorías) en el rango dado."""
@@ -135,7 +168,12 @@ class Metricas:
 
         hoy = date.today()
         desde = hoy - timedelta(days=dias_historial)
-        consumido = self.cantidad_consumida(producto_nombre, desde, hoy)
+        # Un producto en bruto no se "consume" en los servicios: se gasta al
+        # limpiarlo. Por eso aquí cuentan las dos cosas.
+        consumido = sum(
+            m.cantidad for m in self._en_rango(desde, hoy)
+            if m.producto_nombre == producto_nombre and m.tipo == "salida" and m.motivo in ("consumo", "limpieza")
+        )
 
         if consumido <= 0:
             return None  # sin consumo reciente, no se puede proyectar nada

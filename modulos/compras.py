@@ -17,9 +17,10 @@ Conceptos de Python nuevos en este módulo:
   agrupar elementos en listas dentro de un diccionario
 """
 
+import math
 from typing import Optional
 
-from inventario import Inventario
+from inventario import Inventario, convertir
 from servicios import Servicio
 from recetario import Recetario
 
@@ -79,16 +80,24 @@ class GestorCompras:
 
     def generar_lista_desde_servicios(
         self, servicios: list[Servicio], recetario: Recetario, inventario: Inventario
-    ) -> None:
+    ) -> list[str]:
         """
         Consolida las necesidades de ingredientes de VARIOS servicios y
         genera items de compra solo para lo que realmente falta.
 
         Paso 1: sumar TODAS las necesidades de TODOS los servicios primero.
-        Paso 2: comparar esa suma contra el stock, UNA sola vez.
+        Paso 2: lo que falta de un producto LIMPIO no se compra tal cual:
+                se convierte en producto EN BRUTO usando su rendimiento medio
+                (faltan 2 kg de carne limpia y rinde un 64 % -> 3,13 kg de pata).
+        Paso 3: comparar esa suma contra el stock, UNA sola vez.
         (Si se comparara servicio por servicio, el mismo stock parecería
         cubrir el déficit de varios servicios a la vez, lo cual es incorrecto.)
+
+        Devuelve una lista de avisos para quien la muestre (consola o
+        interfaz), por ejemplo cuando un producto aún no tiene limpiezas
+        registradas y no se conoce su rendimiento.
         """
+        avisos: list[str] = []
         necesidades_acumuladas: dict[str, float] = {}
 
         for servicio in servicios:
@@ -102,7 +111,52 @@ class GestorCompras:
                     necesidades_acumuladas.get(ingrediente, 0) + cantidad, 3
                 )
 
+        # --- Paso 2: productos limpios y subproductos ---
+        no_se_compran: set[str] = set()
+        for ingrediente in list(necesidades_acumuladas):
+            producto = inventario.buscar_producto(ingrediente)
+            if producto is None:
+                continue
+            faltante = necesidades_acumuladas[ingrediente] - producto.stock
+            if faltante <= 1e-9:
+                continue
+
+            if producto.es_subproducto:
+                no_se_compran.add(ingrediente)
+                avisos.append(
+                    f"Faltan {round(faltante, 3)} {producto.unidad} de '{ingrediente}': es un subproducto "
+                    "(sale de limpiar otros productos), así que no se añade a la lista."
+                )
+                continue
+
+            origen = inventario.buscar_producto(producto.origen) if producto.origen else None
+            if origen is None:
+                continue  # se compra tal cual (o su bruto ya no existe)
+
+            rendimiento = inventario.rendimiento_medio(origen.nombre)
+            if rendimiento is None:
+                rendimiento = 1.0
+                avisos.append(
+                    f"'{origen.nombre}' todavía no tiene limpiezas registradas: se calcula como si no tuviera "
+                    "merma. Compra algo más de lo indicado."
+                )
+            kg_bruto = producto.peso_kg(faltante) / rendimiento
+            if origen.unidad == "unidades":
+                cantidad_bruto = kg_bruto / origen.peso_unitario
+            else:
+                cantidad_bruto = convertir(kg_bruto, "kg", origen.unidad)
+
+            no_se_compran.add(ingrediente)
+            necesidades_acumuladas[origen.nombre] = necesidades_acumuladas.get(origen.nombre, 0) + cantidad_bruto
+            avisos.append(
+                f"Faltan {round(faltante, 3)} {producto.unidad} de '{ingrediente}': salen de limpiar "
+                f"~{round(cantidad_bruto, 2)} {origen.unidad} de '{origen.nombre}' (rendimiento {rendimiento:.0%})."
+            )
+
+        # --- Paso 3: comparar contra el stock ---
         for ingrediente, cantidad_necesaria in necesidades_acumuladas.items():
+            if ingrediente in no_se_compran:
+                continue
             producto = inventario.buscar_producto(ingrediente)
             stock_actual = producto.stock if producto else 0
             faltante = round(cantidad_necesaria - stock_actual, 3)
@@ -110,10 +164,18 @@ class GestorCompras:
             if faltante <= 0:
                 continue  # hay suficiente stock, no hace falta comprar nada de esto
 
-            proveedor = producto.proveedor if producto else "Desconocido"
             unidad = producto.unidad if producto else ""
+            if unidad == "unidades":
+                # No se compran 0,4 patas: se redondea hacia arriba a unidades enteras.
+                faltante = math.ceil(faltante - 1e-9)
+
+            proveedor = producto.proveedor if producto else "Desconocido"
             precio = producto.precio_unitario if producto else 0
             self.agregar_item(ItemCompra(ingrediente, faltante, unidad, proveedor, precio))
+
+        for aviso in avisos:
+            print(f"ℹ️  {aviso}")
+        return avisos
 
     def agregar_item(self, item: ItemCompra) -> None:
         # generar_lista_desde_servicios() SIEMPRE recalcula el hueco TOTAL

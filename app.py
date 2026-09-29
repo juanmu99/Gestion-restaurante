@@ -24,13 +24,14 @@ Conceptos nuevos en este archivo:
 import sys
 from pathlib import Path
 from datetime import date, time, timedelta
+from typing import Optional
 
 sys.path.append(str(Path(__file__).parent / "modulos"))
 
 import streamlit as st
 import pandas as pd
 
-from inventario import Inventario, Producto, MovimientoStock, FACTORES_CONVERSION
+from inventario import Inventario, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
 from recetario import Recetario, Receta, Menu
 from compras import GestorCompras
@@ -154,6 +155,25 @@ hr { border-color: var(--border) !important; }
 
 # ---------- Estado de la sesión ----------
 
+def avisar(tipo: str, texto: str) -> None:
+    """
+    Guarda un aviso para mostrarlo en la SIGUIENTE ejecución del script.
+
+    Por qué hace falta: st.rerun() vuelve a ejecutar todo el script desde
+    cero, y cualquier st.success()/st.warning() mostrado justo antes se
+    borra sin que dé tiempo a leerlo. Guardándolo en session_state (que sí
+    sobrevive al rerun) y mostrándolo al principio de la página, el aviso
+    aparece DESPUÉS de recargar. tipo: "success", "warning", "error" o "info".
+    """
+    st.session_state.setdefault("avisos", []).append((tipo, texto))
+
+
+def mostrar_avisos() -> None:
+    """Muestra (y vacía) los avisos pendientes de la ejecución anterior."""
+    for tipo, texto in st.session_state.pop("avisos", []):
+        getattr(st, tipo)(texto)
+
+
 def inicializar_estado() -> None:
     """
     Se ejecuta en CADA rerun del script, pero el 'if "inventario" not in
@@ -190,6 +210,10 @@ def cargar_datos_ejemplo() -> None:
     inv.agregar_producto(Producto(
         "Tomate", "Verduras", 0.5, "kg", 2.1, "Huerta Local",
         stock_minimo=2, fecha_caducidad=date.today() + timedelta(days=1),
+    ))
+    # Producto con merma comprado por unidades: 2 patas de ~7 kg en bruto, a 45 € cada una.
+    inv.agregar_producto(Producto(
+        "Pata de cerdo", "Carnes", 2, "unidades", 45, "Carnicería Pepe", tiene_merma=True, peso_unitario=7
     ))
 
     serv.agregar_servicio(Servicio(date.today() + timedelta(days=3), time(21, 0), 8, "Menú del día"))
@@ -268,17 +292,43 @@ def pagina_dashboard() -> None:
 
 # ---------- Página: Inventario ----------
 
+# Nota sobre st.form: dentro de un formulario, cambiar una casilla o un
+# desplegable NO vuelve a ejecutar la página hasta pulsar el botón. Por eso
+# los campos que aparecen o desaparecen según otra respuesta (la fecha de
+# caducidad, el motivo de salida, el peso por unidad...) no funcionan bien
+# dentro de un st.form. Aquí se usan widgets sueltos + un botón normal.
+
+def _filas_inventario(productos: list) -> list[dict]:
+    return [{
+        "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
+        "Mínimo": p.stock_minimo, "Precio (€)": p.precio_unitario, "Proveedor": p.proveedor,
+        "Caducidad": p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—",
+        "Tipo": p.tipo_descripcion() or "—",
+        "Peso/unidad (kg)": p.peso_unitario if p.peso_unitario else "—",
+    } for p in productos]
+
+
+def _campo_peso(etiqueta: str, clave: str, valor_kg: float = 0.0) -> Optional[float]:
+    """Número + desplegable kg/g. Devuelve el peso en kg, o None si se deja a 0."""
+    c1, c2 = st.columns([3, 1])
+    unidad = c2.selectbox("Unidad del peso", UNIDADES_PESO, key=f"{clave}_unidad")
+    valor_inicial = convertir(valor_kg, "kg", unidad) if valor_kg else 0.0
+    valor = c1.number_input(etiqueta, min_value=0.0, value=float(valor_inicial), step=0.1, key=f"{clave}_{unidad}")
+    return convertir(valor, unidad, "kg") if valor > 0 else None
+
+
 def pagina_inventario() -> None:
     st.header("📦 Inventario")
     inv = st.session_state.inventario
 
     if inv.productos:
-        filas = [{
-            "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
-            "Mínimo": p.stock_minimo, "Precio (€)": p.precio_unitario, "Proveedor": p.proveedor,
-            "Caducidad": p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—",
-        } for p in inv.productos.values()]
-        st.dataframe(filas, use_container_width=True, hide_index=True)
+        vista = st.radio(
+            "Mostrar", ["Todos", "Solo productos con merma y sus derivados"], horizontal=True, key="inv_vista"
+        )
+        productos = list(inv.productos.values())
+        if vista != "Todos":
+            productos = [p for p in productos if p.tiene_merma or p.origen or p.es_subproducto]
+        st.dataframe(_filas_inventario(productos), use_container_width=True, hide_index=True)
     else:
         st.info("El inventario está vacío todavía.")
 
@@ -294,121 +344,324 @@ def pagina_inventario() -> None:
             st.warning(f"⏳ Próximos a caducar: {detalle}")
 
     st.divider()
-    tab_add, tab_edit, tab_stock = st.tabs(["➕ Añadir producto", "✏️ Editar producto", "📦 Actualizar stock"])
+    tab_add, tab_edit, tab_stock, tab_limpiar, tab_limpiezas = st.tabs([
+        "➕ Añadir producto", "✏️ Editar producto", "📦 Actualizar stock", "🔪 Limpiar producto", "📜 Limpiezas",
+    ])
 
     with tab_add:
-        with st.form("form_add_producto", clear_on_submit=True):
-            nombre = st.text_input("Nombre", key="add_nombre")
-            categoria = st.text_input("Categoría", key="add_categoria")
-            c1, c2 = st.columns(2)
-            stock = c1.number_input("Stock inicial", min_value=0.0, step=0.1, key="add_stock")
-            unidad = c2.selectbox("Unidad", Producto.UNIDADES_VALIDAS, key="add_unidad")
-            c3, c4 = st.columns(2)
-            precio = c3.number_input("Precio unitario (€)", min_value=0.0, step=0.1, key="add_precio")
-            stock_minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.1, key="add_stock_minimo")
-            proveedor = st.text_input("Proveedor", key="add_proveedor")
-            tiene_caducidad = st.checkbox("¿Tiene fecha de caducidad?", key="add_tiene_caducidad")
-            fecha_caducidad = st.date_input("Fecha de caducidad", key="add_fecha") if tiene_caducidad else None
-            enviado = st.form_submit_button("Añadir producto", type="primary")
-
-            if enviado:
-                try:
-                    inv.agregar_producto(Producto(
-                        nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad
-                    ))
-                    st.success(f"Producto '{nombre}' añadido.")
-                except ValueError as e:
-                    st.error(str(e))
-
+        _pestana_anadir(inv)
     with tab_edit:
-        if not inv.productos:
-            st.info("No hay productos para editar.")
-        else:
-            nombre_sel = st.selectbox("Producto a editar", list(inv.productos.keys()), key="editar_select")
-            producto = inv.buscar_producto(nombre_sel)
-            # Las keys incluyen `nombre_sel`: si no, Streamlit reutilizaría el
-            # valor que ya tuviera guardado bajo esa key (el del producto
-            # anterior) en vez de tomar el `value` nuevo que le pasamos aquí.
-            with st.form(f"form_editar_producto_{nombre_sel}"):
-                nuevo_nombre = st.text_input("Nombre", value=producto.nombre, key=f"edit_nombre_{nombre_sel}")
-                categoria = st.text_input("Categoría", value=producto.categoria, key=f"edit_categoria_{nombre_sel}")
-                c1, c2 = st.columns(2)
-                stock = c1.number_input("Stock", value=float(producto.stock), min_value=0.0, step=0.1, key=f"edit_stock_{nombre_sel}")
-                stock_minimo = c2.number_input("Stock mínimo", value=float(producto.stock_minimo), min_value=0.0, step=0.1, key=f"edit_stock_minimo_{nombre_sel}")
-                precio = st.number_input("Precio unitario (€)", value=float(producto.precio_unitario), min_value=0.0, step=0.1, key=f"edit_precio_{nombre_sel}")
-                proveedor = st.text_input("Proveedor", value=producto.proveedor, key=f"edit_proveedor_{nombre_sel}")
-
-                tiene_fecha_actual = producto.fecha_caducidad is not None
-                tiene_fecha = st.checkbox(
-                    "¿Tiene fecha de caducidad?", value=tiene_fecha_actual, key=f"edit_tiene_fecha_{nombre_sel}"
-                )
-                nueva_fecha = st.date_input(
-                    "Fecha de caducidad",
-                    value=producto.fecha_caducidad if tiene_fecha_actual else date.today(),
-                    key=f"edit_fecha_{nombre_sel}",
-                    disabled=not tiene_fecha,
-                )
-
-                guardar = st.form_submit_button("Guardar cambios", type="primary")
-
-                if guardar:
-                    recetas_afectadas = []
-                    if nuevo_nombre != producto.nombre:
-                        recetas_afectadas = [
-                            r for r in st.session_state.recetario.recetas.values()
-                            if producto.nombre in r.ingredientes_por_comensal
-                        ]
-                    nombre_original = producto.nombre
-                    try:
-                        exito = inv.editar_producto(
-                            nombre_sel,
-                            nuevo_nombre=nuevo_nombre if nuevo_nombre != producto.nombre else None,
-                            categoria=categoria, stock=stock, precio_unitario=precio,
-                            proveedor=proveedor, stock_minimo=stock_minimo,
-                            # Si se desmarca la casilla, se BORRA la fecha (no
-                            # se ignora) -- misma idea que en main.py: None es
-                            # ambiguo aquí, así que hay un parámetro aparte.
-                            fecha_caducidad=nueva_fecha if tiene_fecha else None,
-                            borrar_fecha_caducidad=not tiene_fecha,
-                        )
-                        if exito:
-                            if recetas_afectadas:
-                                for receta in recetas_afectadas:
-                                    cantidad = receta.ingredientes_por_comensal.pop(nombre_original)
-                                    receta.ingredientes_por_comensal[nuevo_nombre] = cantidad
-                                nombres = ", ".join(r.nombre for r in recetas_afectadas)
-                                st.info(f"🔄 Recetas actualizadas: {nombres}")
-                            st.success("Producto actualizado.")
-                            st.rerun()
-                    except ValueError as e:
-                        st.error(str(e))
-
+        _pestana_editar(inv)
     with tab_stock:
-        if not inv.productos:
-            st.info("No hay productos.")
+        _pestana_stock(inv)
+    with tab_limpiar:
+        _pestana_limpiar(inv)
+    with tab_limpiezas:
+        _pestana_limpiezas(inv)
+
+
+def _pestana_anadir(inv: Inventario) -> None:
+    # "Versión" del formulario: al añadir un producto se incrementa, las keys
+    # cambian y los campos aparecen vacíos otra vez (lo que hacía clear_on_submit).
+    v = st.session_state.setdefault("add_version", 0)
+
+    nombre = st.text_input("Nombre", key=f"add_nombre_{v}")
+    categoria = st.text_input("Categoría", key=f"add_categoria_{v}")
+    c1, c2 = st.columns(2)
+    stock = c1.number_input("Stock inicial", min_value=0.0, step=0.1, key=f"add_stock_{v}")
+    unidad = c2.selectbox("Unidad", Producto.UNIDADES_VALIDAS, key=f"add_unidad_{v}")
+
+    tiene_merma = False
+    peso_unitario = None
+    if unidad in UNIDADES_PESO + ("unidades",):
+        tiene_merma = st.checkbox(
+            "Producto con merma (se limpia o despieza antes de usarse)", key=f"add_merma_{v}",
+            help="Por ejemplo una pata de cerdo o un pescado entero. Solo de estos productos se pueden obtener derivados.",
+        )
+        if tiene_merma and unidad == "unidades":
+            peso_unitario = _campo_peso("Peso en bruto de cada unidad", f"add_peso_{v}")
+
+    c3, c4 = st.columns(2)
+    precio = c3.number_input(
+        f"Precio (€ por {'unidad' if unidad == 'unidades' else unidad})", min_value=0.0, step=0.1, key=f"add_precio_{v}"
+    )
+    stock_minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.1, key=f"add_stock_minimo_{v}")
+    proveedor = st.text_input("Proveedor", key=f"add_proveedor_{v}")
+    tiene_caducidad = st.checkbox("¿Tiene fecha de caducidad?", key=f"add_tiene_caducidad_{v}")
+    fecha_caducidad = st.date_input("Fecha de caducidad", key=f"add_fecha_{v}") if tiene_caducidad else None
+
+    if st.button("Añadir producto", type="primary", key=f"add_boton_{v}"):
+        nombre = nombre.strip()
+        if not nombre:
+            st.error("Ponle un nombre al producto.")
+        elif nombre in inv.productos:
+            st.error(f"Ya existe un producto llamado '{nombre}'. Para cambiar su stock usa 'Actualizar stock'.")
         else:
-            nombre_sel2 = st.selectbox("Producto", list(inv.productos.keys()), key="stock_select")
-            with st.form("form_actualizar_stock"):
-                cantidad = st.number_input("Cantidad", min_value=0.0, step=0.1)
-                es_entrada = st.radio("Tipo de movimiento", ["Entrada (compra)", "Salida"]) == "Entrada (compra)"
-                nueva_fecha = None
-                motivo = None
-                if es_entrada:
-                    renovar = st.checkbox("Renovar fecha de caducidad con este lote")
-                    if renovar:
-                        nueva_fecha = st.date_input("Nueva fecha de caducidad", key="nueva_fecha_stock")
-                else:
-                    motivo = st.selectbox(
-                        "Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA, key="motivo_salida_stock"
-                    )
-                enviado2 = st.form_submit_button("Actualizar stock", type="primary")
-                if enviado2:
-                    inv.actualizar_stock(
-                        nombre_sel2, cantidad, sumar=es_entrada,
-                        nueva_fecha_caducidad=nueva_fecha, motivo_salida=motivo,
-                    )
-                    st.success("Stock actualizado.")
-                    st.rerun()
+            try:
+                inv.agregar_producto(Producto(
+                    nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad,
+                    tiene_merma=tiene_merma, peso_unitario=peso_unitario,
+                ))
+                avisar("success", f"Producto '{nombre}' añadido.")
+                st.session_state.add_version += 1
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+
+def _pestana_editar(inv: Inventario) -> None:
+    if not inv.productos:
+        st.info("No hay productos para editar.")
+        return
+    nombre_sel = st.selectbox("Producto a editar", list(inv.productos.keys()), key="editar_select")
+    producto = inv.buscar_producto(nombre_sel)
+    # Las keys incluyen `nombre_sel`: si no, Streamlit reutilizaría el
+    # valor que ya tuviera guardado bajo esa key (el del producto
+    # anterior) en vez de tomar el `value` nuevo que le pasamos aquí.
+    k = lambda campo: f"edit_{campo}_{nombre_sel}"
+
+    nuevo_nombre = st.text_input("Nombre", value=producto.nombre, key=k("nombre"))
+    categoria = st.text_input("Categoría", value=producto.categoria, key=k("categoria"))
+    c1, c2 = st.columns(2)
+    stock = c1.number_input("Stock", value=float(producto.stock), min_value=0.0, step=0.1, key=k("stock"))
+    stock_minimo = c2.number_input("Stock mínimo", value=float(producto.stock_minimo), min_value=0.0, step=0.1, key=k("stock_minimo"))
+    precio = st.number_input("Precio unitario (€)", value=float(producto.precio_unitario), min_value=0.0, step=0.1, key=k("precio"))
+    proveedor = st.text_input("Proveedor", value=producto.proveedor, key=k("proveedor"))
+
+    tiene_merma = producto.tiene_merma
+    peso_unitario = None
+    if producto.unidad in UNIDADES_PESO + ("unidades",):
+        tiene_merma = st.checkbox("Producto con merma (se limpia o despieza)", value=producto.tiene_merma, key=k("merma"))
+        if tiene_merma and producto.unidad == "unidades":
+            peso_unitario = _campo_peso("Peso medio en bruto por unidad", k("peso"), producto.peso_unitario or 0.0)
+    if producto.tipo_descripcion() in ("Subproducto",) or producto.origen:
+        st.caption(f"Este producto sale de una limpieza ({producto.tipo_descripcion()}).")
+
+    tiene_fecha_actual = producto.fecha_caducidad is not None
+    tiene_fecha = st.checkbox("¿Tiene fecha de caducidad?", value=tiene_fecha_actual, key=k("tiene_fecha"))
+    nueva_fecha = st.date_input(
+        "Fecha de caducidad",
+        value=producto.fecha_caducidad if tiene_fecha_actual else date.today(),
+        key=k("fecha"),
+        disabled=not tiene_fecha,
+    )
+
+    if st.button("Guardar cambios", type="primary", key=k("boton")):
+        recetas_afectadas = []
+        if nuevo_nombre != producto.nombre:
+            recetas_afectadas = [
+                r for r in st.session_state.recetario.recetas.values()
+                if producto.nombre in r.ingredientes_por_comensal
+            ]
+        nombre_original = producto.nombre
+        try:
+            exito = inv.editar_producto(
+                nombre_sel,
+                nuevo_nombre=nuevo_nombre if nuevo_nombre != producto.nombre else None,
+                categoria=categoria, stock=stock, precio_unitario=precio,
+                proveedor=proveedor, stock_minimo=stock_minimo,
+                # Si se desmarca la casilla, se BORRA la fecha (no
+                # se ignora) -- misma idea que en main.py: None es
+                # ambiguo aquí, así que hay un parámetro aparte.
+                fecha_caducidad=nueva_fecha if tiene_fecha else None,
+                borrar_fecha_caducidad=not tiene_fecha,
+                tiene_merma=tiene_merma,
+                peso_unitario=peso_unitario,
+            )
+            if exito:
+                if recetas_afectadas:
+                    for receta in recetas_afectadas:
+                        cantidad = receta.ingredientes_por_comensal.pop(nombre_original)
+                        receta.ingredientes_por_comensal[nuevo_nombre] = cantidad
+                    nombres = ", ".join(r.nombre for r in recetas_afectadas)
+                    avisar("info", f"🔄 Recetas actualizadas: {nombres}")
+                avisar("success", "Producto actualizado.")
+                st.rerun()
+            else:
+                st.error(f"No se ha guardado: ya existe otro producto llamado '{nuevo_nombre}'.")
+        except ValueError as e:
+            st.error(str(e))
+
+
+def _pestana_stock(inv: Inventario) -> None:
+    if not inv.productos:
+        st.info("No hay productos.")
+        return
+    nombre_sel = st.selectbox("Producto", list(inv.productos.keys()), key="stock_select")
+    producto = inv.buscar_producto(nombre_sel)
+    k = lambda campo: f"stock_{campo}_{nombre_sel}"
+
+    cantidad = st.number_input(f"Cantidad ({producto.unidad})", min_value=0.0, step=0.1, key=k("cantidad"))
+    es_entrada = st.radio(
+        "Tipo de movimiento", ["Entrada (compra)", "Salida"], horizontal=True, key=k("tipo")
+    ) == "Entrada (compra)"
+
+    nueva_fecha = None
+    motivo = None
+    peso_lote = None
+    if es_entrada:
+        if producto.tiene_merma and producto.unidad == "unidades":
+            peso_lote = _campo_peso("Peso en bruto de cada unidad de este lote", k("peso"), producto.peso_unitario or 0.0)
+        if st.checkbox("Renovar fecha de caducidad con este lote", key=k("renovar")):
+            nueva_fecha = st.date_input("Nueva fecha de caducidad", key=k("fecha"))
+    else:
+        motivo = st.selectbox("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA, key=k("motivo"))
+        if producto.tiene_merma:
+            st.caption("Para limpiar o despiezar este producto usa la pestaña 'Limpiar producto': así queda registrado el rendimiento.")
+
+    if st.button("Actualizar stock", type="primary", key=k("boton")):
+        if es_entrada and producto.tiene_merma and producto.unidad == "unidades" and peso_lote is None:
+            st.error("Indica el peso en bruto de cada unidad de este lote.")
+            return
+        stock_antes = producto.stock
+        exito = inv.actualizar_stock(
+            nombre_sel, cantidad, sumar=es_entrada,
+            nueva_fecha_caducidad=nueva_fecha, motivo_salida=motivo, peso_unitario_lote=peso_lote,
+        )
+        if exito:
+            avisar("success", "Stock actualizado.")
+            st.rerun()
+        # actualizar_stock() solo lo explica por consola, que en
+        # la interfaz no se ve -- lo repetimos aquí para el usuario.
+        elif cantidad <= 0:
+            st.error("La cantidad debe ser mayor que 0.")
+        else:
+            st.error(
+                f"No se ha actualizado: no puedes sacar {cantidad} si solo hay {stock_antes} "
+                f"de '{nombre_sel}'. El stock nunca puede quedar en negativo."
+            )
+
+
+def _pestana_limpiar(inv: Inventario) -> None:
+    con_merma = inv.productos_con_merma()
+    if not con_merma:
+        st.info(
+            "No hay productos con merma. Marca la casilla 'Producto con merma' al añadirlos "
+            "o en 'Editar producto'."
+        )
+        return
+
+    origen_nombre = st.selectbox("Producto a limpiar", [p.nombre for p in con_merma], key="limpiar_origen")
+    origen = inv.buscar_producto(origen_nombre)
+    if origen.stock <= 0:
+        st.warning(f"No queda stock de '{origen_nombre}'.")
+        return
+
+    # Versión: tras registrar una limpieza, los campos se vacían solos.
+    v = st.session_state.setdefault("limpiar_version", 0)
+    k = lambda campo: f"limpiar_{campo}_{origen_nombre}_{v}"
+
+    c1, c2 = st.columns(2)
+    por_unidades = origen.unidad == "unidades"
+    cantidad = c1.number_input(
+        f"Cantidad a limpiar ({origen.unidad}, hay {origen.stock})",
+        min_value=0.0, max_value=float(origen.stock),
+        value=float(min(1.0, origen.stock)) if por_unidades else float(origen.stock),
+        step=1.0 if por_unidades else 0.1, key=k("cantidad"),
+    )
+    peso_bruto_kg = origen.peso_kg(cantidad) if cantidad > 0 else 0.0
+    c2.metric("Peso en bruto", f"{peso_bruto_kg:.3f} kg")
+    rendimiento = inv.rendimiento_medio(origen_nombre)
+    if rendimiento:
+        st.caption(
+            f"Rendimiento medio hasta ahora: {rendimiento:.0%} -> se esperan ~{peso_bruto_kg * rendimiento:.2f} kg limpios."
+        )
+
+    unidad_peso = st.radio("Pesos del resultado en", UNIDADES_PESO, horizontal=True, key=k("unidad"))
+    c3, c4 = st.columns(2)
+    sugerido = inv.producto_limpio_de(origen_nombre) or f"{origen_nombre} limpio"
+    producto_limpio = c3.text_input("Producto limpio", value=sugerido, key=k("limpio"))
+    peso_limpio = c4.number_input(f"Peso limpio ({unidad_peso})", min_value=0.0, step=0.1, key=k("peso_limpio"))
+    fecha_caducidad = None
+    if st.checkbox("Poner fecha de caducidad al producto limpio", key=k("tiene_fecha")):
+        fecha_caducidad = st.date_input("Fecha de caducidad del producto limpio", key=k("fecha"))
+
+    st.markdown("**Derivados que se aprovechan**")
+    st.caption("Una fila por cada parte que se reaprovecha, con su peso. Lo que no pongas aquí se registra como merma.")
+    habituales = inv.derivados_habituales(origen_nombre)
+    tabla_inicial = pd.DataFrame({
+        "Derivado": pd.Series(habituales, dtype="string"),
+        "Peso": pd.Series([0.0] * len(habituales), dtype="float"),
+    })
+    tabla = st.data_editor(
+        tabla_inicial, num_rows="dynamic", use_container_width=True, hide_index=True, key=k("derivados"),
+        column_config={
+            "Derivado": st.column_config.TextColumn("Derivado"),
+            "Peso": st.column_config.NumberColumn(f"Peso ({unidad_peso})", min_value=0.0, step=0.01),
+        },
+    )
+    derivados: dict[str, float] = {}
+    for _, fila in tabla.iterrows():
+        nombre = fila["Derivado"]
+        peso = fila["Peso"]
+        if pd.isna(nombre) or not str(nombre).strip() or pd.isna(peso) or peso <= 0:
+            continue
+        nombre = str(nombre).strip()
+        derivados[nombre] = derivados.get(nombre, 0.0) + float(peso)
+
+    if cantidad > 0 and peso_limpio > 0:
+        limpio_kg = convertir(peso_limpio, unidad_peso, "kg")
+        derivados_kg = convertir(sum(derivados.values()), unidad_peso, "kg")
+        merma_kg = peso_bruto_kg - limpio_kg - derivados_kg
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Limpio", f"{limpio_kg:.3f} kg")
+        m2.metric("Derivados", f"{derivados_kg:.3f} kg")
+        m3.metric("Merma", f"{max(merma_kg, 0):.3f} kg")
+        m4.metric("Rendimiento", f"{limpio_kg / peso_bruto_kg:.1%}")
+        if merma_kg < -1e-6:
+            st.error("El limpio más los derivados pesan más que el bruto. Revisa los pesos.")
+
+    if st.button("Registrar limpieza", type="primary", key=k("boton")):
+        try:
+            limpieza = inv.limpiar_producto(
+                origen_nombre, cantidad, producto_limpio, peso_limpio, derivados,
+                unidad_peso=unidad_peso,
+                caducidades={producto_limpio.strip(): fecha_caducidad} if fecha_caducidad else None,
+            )
+            avisar(
+                "success",
+                f"Limpieza registrada: {limpieza.peso_limpio_kg} kg de '{limpieza.producto_limpio}' "
+                f"(rendimiento {limpieza.rendimiento:.1%}, merma {limpieza.merma_kg} kg).",
+            )
+            st.session_state.limpiar_version += 1
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+
+def _pestana_limpiezas(inv: Inventario) -> None:
+    if not inv.limpiezas:
+        st.info("Todavía no hay limpiezas registradas.")
+        return
+
+    st.subheader("Rendimiento medio por producto")
+    filas_resumen = []
+    for nombre in sorted({l.producto_origen for l in inv.limpiezas}):
+        limpiezas = inv.limpiezas_de(nombre)
+        bruto = sum(l.peso_bruto_kg for l in limpiezas)
+        filas_resumen.append({
+            "Producto": nombre,
+            "Limpiezas": len(limpiezas),
+            "Bruto total (kg)": round(bruto, 3),
+            "Rendimiento medio": f"{inv.rendimiento_medio(nombre):.1%}",
+            "Derivados aprovechados": f"{sum(sum(l.derivados_kg.values()) for l in limpiezas) / bruto:.1%}",
+            "Merma media": f"{sum(l.merma_kg for l in limpiezas) / bruto:.1%}",
+        })
+    st.dataframe(filas_resumen, use_container_width=True, hide_index=True)
+
+    st.subheader("Historial")
+    st.dataframe([{
+        "Fecha": l.fecha.strftime("%d/%m/%Y"),
+        "Producto": l.producto_origen,
+        "Cantidad": f"{l.cantidad_origen} {l.unidad_origen}",
+        "Bruto (kg)": round(l.peso_bruto_kg, 3),
+        "Producto limpio": l.producto_limpio,
+        "Limpio (kg)": round(l.peso_limpio_kg, 3),
+        "Derivados": ", ".join(f"{n} ({round(kg, 3)} kg)" for n, kg in l.derivados_kg.items()) or "—",
+        "Merma (kg)": l.merma_kg,
+        "Rendimiento": f"{l.rendimiento:.1%}",
+        "Coste (€)": l.coste,
+    } for l in reversed(inv.limpiezas)], use_container_width=True, hide_index=True)
 
 
 # ---------- Página: Servicios ----------
@@ -455,7 +708,7 @@ def pagina_servicios() -> None:
             elegido = st.selectbox("Servicio a cancelar", list(opciones.keys()), key="cancelar_select")
             if st.button("Cancelar servicio"):
                 serv.cancelar_servicio(opciones[elegido])
-                st.success("Servicio cancelado.")
+                avisar("success", "Servicio cancelado.")
                 st.rerun()
 
     with tab_completar:
@@ -465,32 +718,49 @@ def pagina_servicios() -> None:
         else:
             opciones2 = {f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}": s.id for s in pendientes}
             elegido2 = st.selectbox("Servicio a completar", list(opciones2.keys()), key="completar_select")
-            st.caption("Al completar, se descuentan del inventario los ingredientes del menú (motivo: consumo).")
+            servicio = serv.buscar_por_id(opciones2[elegido2])
+
+            # Vista previa: se muestra ANTES de pulsar el botón, para que
+            # sepas exactamente qué va a pasar con el inventario.
+            filas = rec.previsualizar_consumo(servicio, inv)
+
+            if filas is None:
+                st.warning(
+                    f"El menú '{servicio.menu}' no existe en el recetario: si completas el servicio, "
+                    "no se descontará nada del inventario."
+                )
+            else:
+                st.caption(f"Se descontará para {servicio.comensales} comensales (motivo: consumo):")
+                st.dataframe([{
+                    "Ingrediente": f["ingrediente"],
+                    "Necesario": f"{f['necesario']} {f['unidad']}",
+                    "En stock": f"{f['en_stock']} {f['unidad']}" if f["existe"] else "no existe",
+                    "Se descontará": f"{round(f['a_descontar'], 3)} {f['unidad']}",
+                    "Faltaba": f"{f['faltante']} {f['unidad']}" if f["faltante"] > 0 else "—",
+                } for f in filas], use_container_width=True, hide_index=True)
+
+                cortos = [f for f in filas if f["faltante"] > 0]
+                if cortos:
+                    st.warning(
+                        "No hay stock suficiente de: " + ", ".join(f["ingrediente"] for f in cortos)
+                        + ". Se descontará todo lo disponible (quedará a 0)."
+                    )
 
             if st.button("Completar servicio", type="primary"):
-                servicio = serv.buscar_por_id(opciones2[elegido2])
-                menu = rec.buscar_menu(servicio.menu)
-
-                if menu is None:
-                    st.warning(f"No se encontró el menú '{servicio.menu}' en el recetario. No se ha tocado el inventario.")
+                if filas is None:
                     servicio.completar()
-                    st.success(f"Servicio #{servicio.id} completado (sin descuento de stock).")
+                    avisar("warning", f"Servicio #{servicio.id} completado sin descontar stock (menú no encontrado).")
                 else:
-                    necesarios = menu.calcular_ingredientes_totales(servicio.comensales)
-                    fallidos = []
-                    for ingrediente, cantidad in necesarios.items():
-                        if inv.buscar_producto(ingrediente) is None:
-                            fallidos.append(ingrediente)
-                            continue
-                        exito = inv.actualizar_stock(ingrediente, cantidad, sumar=False, motivo_salida="consumo")
-                        if not exito:
-                            fallidos.append(ingrediente)
-                    servicio.completar()
-
-                    if fallidos:
-                        st.warning(f"Servicio #{servicio.id} completado, pero no se pudo descontar: {', '.join(fallidos)}")
+                    rec.completar_servicio(servicio, inv)
+                    cortos = [f["ingrediente"] for f in filas if f["faltante"] > 0]
+                    if cortos:
+                        avisar(
+                            "warning",
+                            f"Servicio #{servicio.id} completado. Stock insuficiente de: {', '.join(cortos)} "
+                            "(se descontó todo lo que había).",
+                        )
                     else:
-                        st.success(f"Servicio #{servicio.id} completado y stock descontado correctamente.")
+                        avisar("success", f"Servicio #{servicio.id} completado y stock descontado correctamente.")
                 st.rerun()
 
 
@@ -571,7 +841,7 @@ def pagina_recetario() -> None:
                     else:
                         rec.agregar_receta(Receta(nombre_receta, categoria_receta, dict(st.session_state.receta_ingredientes)))
                         st.session_state.receta_ingredientes = {}
-                        st.success(f"Receta '{nombre_receta}' creada.")
+                        avisar("success", f"Receta '{nombre_receta}' creada.")
                         st.rerun()
 
     with tab_crear_menu:
@@ -586,7 +856,7 @@ def pagina_recetario() -> None:
                 else:
                     recetas_obj = [rec.recetas[n] for n in recetas_elegidas]
                     rec.agregar_menu(Menu(nombre_menu, recetas_obj))
-                    st.success(f"Menú '{nombre_menu}' creado.")
+                    avisar("success", f"Menú '{nombre_menu}' creado.")
                     st.rerun()
 
     with tab_recomendar:
@@ -637,8 +907,10 @@ def pagina_compras() -> None:
             if not servicios:
                 st.info("No hay servicios próximos en ese rango.")
             else:
-                comp.generar_lista_desde_servicios(servicios, rec, inv)
-                st.success("Lista de compra generada/actualizada.")
+                avisos = comp.generar_lista_desde_servicios(servicios, rec, inv)
+                avisar("success", "Lista de compra generada/actualizada.")
+                for aviso in avisos:
+                    avisar("info", aviso)
                 st.rerun()
 
     st.divider()
@@ -672,11 +944,26 @@ def pagina_compras() -> None:
                 min_value=0.0, value=float(item_marcar.cantidad), step=0.1,
                 key=f"cantidad_real_{nombre_marcar}",
             )
+            producto_marcar = inv.buscar_producto(nombre_marcar)
+            peso_lote = None
+            necesita_peso = (
+                producto_marcar is not None and producto_marcar.tiene_merma and producto_marcar.unidad == "unidades"
+            )
+            if necesita_peso:
+                peso_lote = _campo_peso(
+                    "Peso en bruto de cada unidad de este lote", f"compra_peso_{nombre_marcar}",
+                    producto_marcar.peso_unitario or 0.0,
+                )
             if st.button("Marcar como comprado y reponer inventario"):
-                comp.marcar_comprado(nombre_marcar, cantidad_comprada=cantidad_real)
-                inv.actualizar_stock(nombre_marcar, cantidad_real, sumar=True)
-                st.success(f"'{nombre_marcar}' marcado como comprado y repuesto en inventario (+{cantidad_real} {item_marcar.unidad}).")
-                st.rerun()
+                if necesita_peso and peso_lote is None:
+                    st.error("Indica el peso en bruto de cada unidad de este lote.")
+                elif cantidad_real <= 0:
+                    st.error("La cantidad comprada debe ser mayor que 0.")
+                else:
+                    comp.marcar_comprado(nombre_marcar, cantidad_comprada=cantidad_real)
+                    inv.actualizar_stock(nombre_marcar, cantidad_real, sumar=True, peso_unitario_lote=peso_lote)
+                    avisar("success", f"'{nombre_marcar}' marcado como comprado y repuesto en inventario (+{cantidad_real} {item_marcar.unidad}).")
+                    st.rerun()
 
 
 # ---------- Página: Exportar / Backup ----------
@@ -735,9 +1022,32 @@ def pagina_metricas() -> None:
         )
         return
 
-    tab_consumo, tab_desperdicio, tab_ranking, tab_gasto = st.tabs(
-        ["Consumo por producto", "Desperdicio por producto", "🏆 Más consumidos", "💰 Gasto por categoría"]
+    tab_consumo, tab_desperdicio, tab_ranking, tab_gasto, tab_merma = st.tabs(
+        ["Consumo por producto", "Desperdicio por producto", "🏆 Más consumidos", "💰 Gasto por categoría", "🦴 Merma"]
     )
+
+    with tab_merma:
+        # La merma va aparte del desperdicio: el hueso es inevitable, lo que
+        # caduca en la cámara no.
+        resumen = metricas.resumen_limpiezas(desde, hasta)
+        if not resumen:
+            st.info("No hay limpiezas registradas en este periodo.")
+        else:
+            st.metric("Merma total del periodo", f"{metricas.merma_total_kg(desde, hasta)} kg")
+            st.dataframe([{
+                "Producto": nombre,
+                "Limpiezas": fila["limpiezas"],
+                "Bruto (kg)": fila["bruto_kg"],
+                "Limpio (kg)": fila["limpio_kg"],
+                "Derivados (kg)": fila["derivados_kg"],
+                "Merma (kg)": fila["merma_kg"],
+                "Rendimiento": f"{fila['rendimiento']:.1%}",
+            } for nombre, fila in resumen.items()], use_container_width=True, hide_index=True)
+            df_merma = pd.DataFrame(
+                {nombre: [fila["limpio_kg"], fila["derivados_kg"], fila["merma_kg"]] for nombre, fila in resumen.items()},
+                index=["Limpio", "Derivados", "Merma"],
+            ).T
+            st.bar_chart(df_merma)
 
     with tab_consumo:
         nombre = st.selectbox("Producto", list(inv.productos.keys()), key="metricas_consumo_producto")
@@ -786,7 +1096,7 @@ def pagina_metricas() -> None:
         mes_gen = c2.selectbox("Mes", list(range(1, 13)), format_func=lambda m: NOMBRES_MESES[m].capitalize(), key="informe_mes_gen")
         if st.button("Generar y guardar informe", type="primary"):
             archivo.generar_informe(inv, int(año_gen), mes_gen)
-            st.success(f"Informe de {NOMBRES_MESES[mes_gen].capitalize()} {año_gen} generado y guardado.")
+            avisar("success", f"Informe de {NOMBRES_MESES[mes_gen].capitalize()} {año_gen} generado y guardado.")
             st.rerun()
 
     with tab_ver:
@@ -882,6 +1192,8 @@ if st.sidebar.button("🧪 Cargar datos de ejemplo"):
     cargar_datos_ejemplo()
     st.sidebar.success("Datos de ejemplo cargados")
     st.rerun()
+
+mostrar_avisos()
 
 if pagina == "Dashboard":
     pagina_dashboard()

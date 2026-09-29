@@ -1,0 +1,18 @@
+# Credenciales y sesión de Google Drive -- NUNCA deben subirse a un
+# repositorio público, son las llaves de acceso a tu cuenta.
+credentials.json
+token.json
+
+# Datos generados por la app en tiempo de ejecución (sesión guardada,
+# excels exportados) -- no hace falta subirlos, la app los crea sola.
+datos/
+
+# Archivos que Python genera solo al ejecutar, no son código fuente.
+__pycache__/
+*.pyc
+
+# Archivos de sistema de macOS
+.DS_Store
+
+# Por si en el futuro usas secretos de Streamlit (claves de API, etc.)
+.streamlit/secrets.toml
