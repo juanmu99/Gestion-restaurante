@@ -6,6 +6,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # Los cambios que solo tocan las pruebas no cambian el programa:
+    # no hace falta reconstruir el .exe por ellos.
+    paths-ignore:
+      - "pruebas/**"
+      - ".github/workflows/probar-interfaz.yml"
 
 jobs:
   build:

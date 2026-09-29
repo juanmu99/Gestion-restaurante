@@ -130,12 +130,17 @@ class RegistroServicios:
         return [s for s in self.servicios if s.fecha == fecha]
 
     def servicios_proximos(self, dias: int = 7) -> list[Servicio]:
-        """Servicios (no cancelados) entre hoy y dentro de `dias` días."""
+        """
+        Servicios TODAVÍA POR HACER entre hoy y dentro de `dias` días.
+        Se excluyen los cancelados y también los completados: un servicio
+        ya hecho no es "próximo", y si contara en la lista de la compra
+        pediría otra vez los ingredientes que ya se gastaron.
+        """
         hoy = date.today()
         limite = hoy + timedelta(days=dias)
         return [
             s for s in self.servicios
-            if hoy <= s.fecha <= limite and s.estado != "cancelado"
+            if hoy <= s.fecha <= limite and s.estado not in ("cancelado", "completado")
         ]
 
     def total_comensales_periodo(self, fecha_inicio: date, fecha_fin: date) -> int:

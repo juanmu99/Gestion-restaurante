@@ -1,0 +1,78 @@
+name: Probar interfaz
+
+# Prueba la interfaz gráfica con Streamlit real cada vez que se suben
+# cambios a main (o a mano, con "Run workflow" en la pestaña Actions).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# Necesario para publicar los resultados en la rama "resultados-pruebas".
+permissions:
+  contents: write
+
+# Si se suben dos cambios seguidos, se esperan en fila en vez de pisarse
+# al publicar los resultados.
+concurrency:
+  group: probar-interfaz
+
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el código del repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias y el navegador para las capturas
+        run: |
+          pip install -r requirements.txt playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Probar la interfaz (Streamlit real, sin navegador)
+        id: pruebas
+        continue-on-error: true
+        run: python pruebas/probar_interfaz.py
+
+      - name: Hacer capturas de pantalla de cada página
+        id: capturas
+        continue-on-error: true
+        run: |
+          mkdir -p resultados
+          streamlit run app.py --server.headless true --server.port 8501 --browser.gatherUsageStats false > resultados/servidor.log 2>&1 &
+          python pruebas/capturas.py
+
+      # Los "artefactos" normales de GitHub no se pueden descargar desde el
+      # entorno de Claude, así que los resultados se publican también en una
+      # rama aparte del repositorio. Se sobrescribe en cada ejecución: solo
+      # guarda los resultados de la ÚLTIMA prueba, sin acumular historial.
+      - name: Publicar resultados en la rama "resultados-pruebas"
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resultados
+          cp -r resultados /tmp/publicar
+          cd /tmp/publicar
+          {
+            echo "Resultados de las pruebas del cambio ${GITHUB_SHA}"
+            echo "Pruebas de la interfaz: ${{ steps.pruebas.outcome }}"
+            echo "Capturas de pantalla: ${{ steps.capturas.outcome }}"
+          } > LEEME.txt
+          git init -q -b resultados-pruebas
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Resultados de las pruebas de ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:resultados-pruebas
+
+      - name: Marcar la ejecución como fallida si alguna prueba falló
+        if: steps.pruebas.outcome == 'failure' || steps.capturas.outcome == 'failure'
+        run: |
+          echo "Alguna prueba ha fallado: revisa resultado.txt en la rama resultados-pruebas."
+          exit 1

@@ -16,3 +16,6 @@ __pycache__/
 
 # Por si en el futuro usas secretos de Streamlit (claves de API, etc.)
 .streamlit/secrets.toml
+
+# Resultados de las pruebas automáticas (se publican en la rama resultados-pruebas)
+resultados/
