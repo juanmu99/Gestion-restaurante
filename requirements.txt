@@ -1,5 +1,6 @@
 # Para la interfaz gráfica
-streamlit
+# 1.50 o posterior: la app usa width="stretch" en tablas y gráficos
+streamlit>=1.50
 pandas
 
 # Para la exportación a Excel

@@ -304,7 +304,7 @@ def _filas_inventario(productos: list) -> list[dict]:
         "Mínimo": p.stock_minimo, "Precio (€)": p.precio_unitario, "Proveedor": p.proveedor,
         "Caducidad": p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—",
         "Tipo": p.tipo_descripcion() or "—",
-        "Peso/unidad (kg)": p.peso_unitario if p.peso_unitario else "—",
+        "Peso/unidad (kg)": round(p.peso_unitario, 2) if p.peso_unitario else "—",
     } for p in productos]
 
 
@@ -328,7 +328,7 @@ def pagina_inventario() -> None:
         productos = list(inv.productos.values())
         if vista != "Todos":
             productos = [p for p in productos if p.tiene_merma or p.origen or p.es_subproducto]
-        st.dataframe(_filas_inventario(productos), use_container_width=True, hide_index=True)
+        st.dataframe(_filas_inventario(productos), width="stretch", hide_index=True)
     else:
         st.info("El inventario está vacío todavía.")
 
@@ -584,7 +584,7 @@ def _pestana_limpiar(inv: Inventario) -> None:
         "Peso": pd.Series([0.0] * len(habituales), dtype="float"),
     })
     tabla = st.data_editor(
-        tabla_inicial, num_rows="dynamic", use_container_width=True, hide_index=True, key=k("derivados"),
+        tabla_inicial, num_rows="dynamic", width="stretch", hide_index=True, key=k("derivados"),
         column_config={
             "Derivado": st.column_config.TextColumn("Derivado"),
             "Peso": st.column_config.NumberColumn(f"Peso ({unidad_peso})", min_value=0.0, step=0.01),
@@ -647,13 +647,13 @@ def _pestana_limpiezas(inv: Inventario) -> None:
             "Derivados aprovechados": f"{sum(sum(l.derivados_kg.values()) for l in limpiezas) / bruto:.1%}",
             "Merma media": f"{sum(l.merma_kg for l in limpiezas) / bruto:.1%}",
         })
-    st.dataframe(filas_resumen, use_container_width=True, hide_index=True)
+    st.dataframe(filas_resumen, width="stretch", hide_index=True)
 
     st.subheader("Historial")
     st.dataframe([{
         "Fecha": l.fecha.strftime("%d/%m/%Y"),
         "Producto": l.producto_origen,
-        "Cantidad": f"{l.cantidad_origen} {l.unidad_origen}",
+        "Cantidad": f"{l.cantidad_origen:g} {l.unidad_origen}",
         "Bruto (kg)": round(l.peso_bruto_kg, 3),
         "Producto limpio": l.producto_limpio,
         "Limpio (kg)": round(l.peso_limpio_kg, 3),
@@ -661,7 +661,7 @@ def _pestana_limpiezas(inv: Inventario) -> None:
         "Merma (kg)": l.merma_kg,
         "Rendimiento": f"{l.rendimiento:.1%}",
         "Coste (€)": l.coste,
-    } for l in reversed(inv.limpiezas)], use_container_width=True, hide_index=True)
+    } for l in reversed(inv.limpiezas)], width="stretch", hide_index=True)
 
 
 # ---------- Página: Servicios ----------
@@ -677,7 +677,7 @@ def pagina_servicios() -> None:
             "ID": s.id, "Fecha": s.fecha.strftime("%d/%m/%Y"), "Hora": s.hora.strftime("%H:%M"),
             "Comensales": s.comensales, "Menú": s.menu, "Estado": s.estado, "Notas": s.notas,
         } for s in sorted(serv.servicios, key=lambda s: (s.fecha, s.hora))]
-        st.dataframe(filas, use_container_width=True, hide_index=True)
+        st.dataframe(filas, width="stretch", hide_index=True)
     else:
         st.info("No hay servicios registrados.")
 
@@ -737,7 +737,7 @@ def pagina_servicios() -> None:
                     "En stock": f"{f['en_stock']} {f['unidad']}" if f["existe"] else "no existe",
                     "Se descontará": f"{round(f['a_descontar'], 3)} {f['unidad']}",
                     "Faltaba": f"{f['faltante']} {f['unidad']}" if f["faltante"] > 0 else "—",
-                } for f in filas], use_container_width=True, hide_index=True)
+                } for f in filas], width="stretch", hide_index=True)
 
                 cortos = [f for f in filas if f["faltante"] > 0]
                 if cortos:
@@ -925,7 +925,7 @@ def pagina_compras() -> None:
                 {"Ingrediente": i.ingrediente, "Cantidad": i.cantidad, "Unidad": i.unidad, "Coste (€)": i.costo_estimado()}
                 for i in items
             ]
-            st.dataframe(filas, use_container_width=True, hide_index=True)
+            st.dataframe(filas, width="stretch", hide_index=True)
 
         st.metric("💰 Coste total pendiente", f"{comp.costo_total_pendiente()} €")
 
@@ -1042,7 +1042,7 @@ def pagina_metricas() -> None:
                 "Derivados (kg)": fila["derivados_kg"],
                 "Merma (kg)": fila["merma_kg"],
                 "Rendimiento": f"{fila['rendimiento']:.1%}",
-            } for nombre, fila in resumen.items()], use_container_width=True, hide_index=True)
+            } for nombre, fila in resumen.items()], width="stretch", hide_index=True)
             df_merma = pd.DataFrame(
                 {nombre: [fila["limpio_kg"], fila["derivados_kg"], fila["merma_kg"]] for nombre, fila in resumen.items()},
                 index=["Limpio", "Derivados", "Merma"],
@@ -1068,7 +1068,7 @@ def pagina_metricas() -> None:
         else:
             df_ranking = pd.DataFrame(ranking, columns=["Producto", "Cantidad consumida"]).set_index("Producto")
             st.bar_chart(df_ranking)
-            st.dataframe(df_ranking.reset_index(), use_container_width=True, hide_index=True)
+            st.dataframe(df_ranking.reset_index(), width="stretch", hide_index=True)
 
     with tab_gasto:
         gasto = metricas.gasto_por_categoria(desde, hasta)
@@ -1077,7 +1077,7 @@ def pagina_metricas() -> None:
         else:
             df_gasto = pd.DataFrame(list(gasto.items()), columns=["Categoría", "Gasto (€)"]).set_index("Categoría")
             st.bar_chart(df_gasto)
-            st.dataframe(df_gasto.reset_index(), use_container_width=True, hide_index=True)
+            st.dataframe(df_gasto.reset_index(), width="stretch", hide_index=True)
             st.metric("Gasto total", f"{round(sum(gasto.values()), 2)} €")
 
     st.divider()
@@ -1093,7 +1093,10 @@ def pagina_metricas() -> None:
     with tab_generar:
         c1, c2 = st.columns(2)
         año_gen = c1.number_input("Año", min_value=2000, max_value=2100, value=date.today().year, step=1, key="informe_año_gen")
-        mes_gen = c2.selectbox("Mes", list(range(1, 13)), format_func=lambda m: NOMBRES_MESES[m].capitalize(), key="informe_mes_gen")
+        mes_gen = c2.selectbox(
+            "Mes", list(range(1, 13)), index=date.today().month - 1,
+            format_func=lambda m: NOMBRES_MESES[m].capitalize(), key="informe_mes_gen",
+        )
         if st.button("Generar y guardar informe", type="primary"):
             archivo.generar_informe(inv, int(año_gen), mes_gen)
             avisar("success", f"Informe de {NOMBRES_MESES[mes_gen].capitalize()} {año_gen} generado y guardado.")
@@ -1109,7 +1112,7 @@ def pagina_metricas() -> None:
                 "Gasto total (€)": i.gasto_total,
                 "Desperdicio (€)": i.valor_desperdiciado_total,
             } for i in informes]
-            st.dataframe(filas, use_container_width=True, hide_index=True)
+            st.dataframe(filas, width="stretch", hide_index=True)
 
     with tab_comparar:
         informes = archivo.listar_informes()
@@ -1154,7 +1157,7 @@ def pagina_metricas() -> None:
                         {"Categoría": cat, "Diferencia (€)": diff}
                         for cat, diff in resultado["diferencia_por_categoria"].items()
                     ]
-                    st.dataframe(filas_diff, use_container_width=True, hide_index=True)
+                    st.dataframe(filas_diff, width="stretch", hide_index=True)
 
 
 # ---------- Programa principal ----------

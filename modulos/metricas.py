@@ -187,7 +187,9 @@ class Metricas:
         ritmo de consumo actual, ordenados de más a menos urgente.
         """
         resultado = []
-        for nombre in self.inventario.productos:
+        for nombre, producto in self.inventario.productos.items():
+            if producto.stock <= 0:
+                continue  # ya está agotado: no "se agotará" (eso ya lo avisa "bajo mínimo")
             dias = self.dias_estimados_para_agotarse(nombre, dias_historial)
             if dias is not None and dias <= dias_aviso:
                 resultado.append((nombre, dias))
