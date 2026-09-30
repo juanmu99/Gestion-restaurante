@@ -163,11 +163,13 @@ def prueba_anadir(at: AppTest) -> None:
     at.text_input(key=f"add_categoria_{v}").input("Lácteos")
     at.selectbox(key=f"add_unidad_{v}").select("litros")
     at.text_input(key=f"add_proveedor_{v}").input("Lácteos SA")
+    at.number_input(key=f"add_stock_{v}").set_value(2.0).run()
     at.checkbox(key=f"add_tiene_caducidad_{v}").check().run()
     at.date_input(key=f"add_fecha_{v}").set_value(fecha)
     at.button(key=f"add_boton_{v}").click().run()
     nata = inv.buscar_producto("Nata")
-    comprobar(nata is not None and nata.fecha_caducidad == fecha, "Se guarda la fecha de caducidad elegida")
+    comprobar(nata is not None and nata.fecha_caducidad == fecha and nata.lotes[0].fecha_caducidad == fecha,
+              "Se guarda la fecha de caducidad elegida (en su primer lote)")
 
 
 @prueba("Actualizar stock")

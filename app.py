@@ -495,8 +495,14 @@ def _pestana_anadir(inv: Inventario) -> None:
     )
     stock_minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.1, key=f"add_stock_minimo_{v}")
     proveedor = st.text_input("Proveedor habitual", key=f"add_proveedor_{v}")
-    tiene_caducidad = st.checkbox("¿Tiene fecha de caducidad?", key=f"add_tiene_caducidad_{v}")
-    fecha_caducidad = st.date_input("Fecha de caducidad", key=f"add_fecha_{v}") if tiene_caducidad else None
+    fecha_caducidad = None
+    # La caducidad es de cada lote: sin stock inicial no hay lote al que ponérsela
+    # (se indicará al registrar la primera compra).
+    if stock > 0:
+        if st.checkbox("¿Este primer lote tiene fecha de caducidad?", key=f"add_tiene_caducidad_{v}"):
+            fecha_caducidad = st.date_input("Fecha de caducidad", key=f"add_fecha_{v}")
+    else:
+        st.caption("Sin stock inicial: la caducidad se indicará en cada compra (cada compra es un lote).")
 
     if st.button("Añadir producto", type="primary", key=f"add_boton_{v}"):
         nombre = nombre.strip()
