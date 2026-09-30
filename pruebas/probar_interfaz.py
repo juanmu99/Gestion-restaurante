@@ -297,6 +297,23 @@ def prueba_editar(at: AppTest) -> None:
     comprobar(at.text_input(key="edit_nombre_Aceite de oliva").value == "Aceite de oliva",
               "Al cambiar de producto se cargan sus datos")
 
+    # Producto con UN lote: sus datos de compra se corrigen directamente
+    kl = lambda campo: f"edit_lote_{campo}_Aceite de oliva_1"
+    comprobar(at.number_input(key=kl("cantidad")).value == 20, "Con un solo lote, sus datos aparecen sin elegir nada")
+    at.number_input(key=kl("cantidad")).set_value(18.0)
+    at.number_input(key=kl("precio")).set_value(5.0)
+    at.text_input(key=kl("proveedor")).input("Aceites Jaén")
+    at.checkbox(key=kl("tiene_fecha")).check().run()
+    at.date_input(key=kl("fecha")).set_value(date.today() + timedelta(days=200))
+    at.text_input(key="edit_categoria_Aceite de oliva").input("Aceites y grasas")
+    at.button(key="edit_boton_Aceite de oliva").click().run()
+    aceite = inv.buscar_producto("Aceite de oliva")
+    lote = aceite.lotes[0]
+    comprobar(sin_excepciones(at, "editar con lote") and aceite.categoria == "Aceites y grasas" and aceite.stock == 18
+              and lote.precio_unitario == 5 and lote.proveedor == "Aceites Jaén"
+              and lote.fecha_caducidad == date.today() + timedelta(days=200),
+              "Editar producto corrige a la vez los datos generales y los de la compra (cantidad, precio, proveedor, caducidad)")
+
 
 @prueba("Lotes: corregir y desechar")
 def prueba_lotes(at: AppTest) -> None:
@@ -304,14 +321,16 @@ def prueba_lotes(at: AppTest) -> None:
     inv = at.session_state["inventario"]
     secreto = inv.buscar_producto("Secreto ibérico")
 
-    # Corregir la caducidad del lote 1 a ayer: pasa a estar caducado
-    at.selectbox(key="lotes_select").select("Secreto ibérico").run()
-    lote_sb = at.selectbox(key="lotes_lote_Secreto ibérico")
+    # Producto con VARIOS lotes: en 'Editar producto' se elige cuál corregir.
+    # Se pone la caducidad del lote 1 a ayer: pasa a estar caducado.
+    at.selectbox(key="editar_select").select("Secreto ibérico").run()
+    lote_sb = at.selectbox(key="edit_lote_Secreto ibérico")
     lote_sb.select(opcion(lote_sb, "Lote 1 ·")).run()
-    at.date_input(key="lotes_fecha_Secreto ibérico_1").set_value(date.today() - timedelta(days=1))
-    at.button(key="lotes_guardar_Secreto ibérico_1").click().run()
-    comprobar(sin_excepciones(at, "corregir lote") and secreto.buscar_lote(1).esta_caducado(),
-              "Corregir la caducidad de un lote")
+    at.date_input(key="edit_lote_fecha_Secreto ibérico_1").set_value(date.today() - timedelta(days=1))
+    at.button(key="edit_boton_Secreto ibérico").click().run()
+    comprobar(sin_excepciones(at, "corregir lote") and secreto.buscar_lote(1).esta_caducado()
+              and not secreto.buscar_lote(2).esta_caducado(),
+              "Editar producto con varios lotes: se corrige solo el lote elegido")
     comprobar(any("Caducado" in t and "Secreto ibérico" in t for t in textos(at.error)),
               "El lote caducado se avisa en rojo arriba")
 

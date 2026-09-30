@@ -239,6 +239,14 @@ def _num(valor: float) -> str:
     return f"{round(valor, 3):g}"
 
 
+def _parece_numero(texto: str) -> bool:
+    try:
+        float(texto.replace(",", "."))
+        return True
+    except ValueError:
+        return False
+
+
 def _texto_lote(producto: Producto, lote) -> str:
     """Texto de un lote en los desplegables. Empieza siempre por 'Lote N ·'."""
     aviso = " · ⚠️ CADUCADO" if lote.esta_caducado() else ""
@@ -533,11 +541,8 @@ def _pestana_editar(inv: Inventario) -> None:
     # valor que ya tuviera guardado bajo esa key (el del producto
     # anterior) en vez de tomar el `value` nuevo que le pasamos aquí.
     k = lambda campo: f"edit_{campo}_{nombre_sel}"
-    st.caption(
-        "Aquí se corrigen los datos generales del producto. La cantidad, el precio, el proveedor "
-        "y la caducidad de cada compra se corrigen en la pestaña 'Lotes'."
-    )
 
+    st.markdown("**Datos generales**")
     nuevo_nombre = st.text_input("Nombre", value=producto.nombre, key=k("nombre"))
     categoria = st.text_input("Categoría", value=producto.categoria, key=k("categoria"))
     c1, c2 = st.columns(2)
@@ -556,7 +561,50 @@ def _pestana_editar(inv: Inventario) -> None:
     if producto.tipo_descripcion() in ("Subproducto",) or producto.origen:
         st.caption(f"Este producto sale de una limpieza ({producto.tipo_descripcion()}).")
 
+    # --- Datos de la compra (del lote) ---
+    lote = None
+    datos_lote = {}
+    if not producto.lotes:
+        st.caption("No queda stock de este producto: no hay ninguna compra (lote) que corregir.")
+    else:
+        st.markdown("**Datos de la compra**")
+        if len(producto.lotes) == 1:
+            lote = producto.lotes[0]
+        else:
+            lote = producto.buscar_lote(_elegir_lote(
+                producto, f"Este producto tiene {len(producto.lotes)} lotes: ¿cuál corriges?", k("lote"),
+            ))
+        kl = lambda campo: f"edit_lote_{campo}_{nombre_sel}_{lote.id}"
+        c3, c4 = st.columns(2)
+        datos_lote["cantidad"] = c3.number_input(
+            f"Cantidad ({producto.unidad})", min_value=0.0, value=float(lote.cantidad), step=0.1, key=kl("cantidad"),
+        )
+        datos_lote["precio"] = c4.number_input(
+            "Precio (€)", min_value=0.0, value=float(lote.precio_unitario), step=0.1, key=kl("precio"),
+        )
+        datos_lote["proveedor"] = st.text_input("Proveedor de esta compra", value=lote.proveedor, key=kl("proveedor"))
+        datos_lote["peso"] = None
+        if producto.unidad == "unidades":
+            datos_lote["peso"] = _campo_peso("Peso en bruto de cada unidad", kl("peso"), lote.peso_unitario or 0.0)
+        datos_lote["tiene_fecha"] = st.checkbox(
+            "¿Tiene fecha de caducidad?", value=lote.fecha_caducidad is not None, key=kl("tiene_fecha"),
+        )
+        datos_lote["fecha"] = st.date_input(
+            "Fecha de caducidad", value=lote.fecha_caducidad or date.today(), key=kl("fecha"),
+            disabled=not datos_lote["tiene_fecha"],
+        )
+        st.caption(
+            "Corregir no es un movimiento de stock: no queda en el historial. Si algo se ha gastado o tirado, "
+            "regístralo como salida en 'Actualizar stock'. Poner la cantidad a 0 elimina este lote."
+        )
+
     if st.button("Guardar cambios", type="primary", key=k("boton")):
+        # Se comprueba todo ANTES de guardar nada: o se guarda todo o nada.
+        if lote is not None:
+            texto = datos_lote["proveedor"].strip()
+            if not texto or _parece_numero(texto):
+                st.error("El proveedor de la compra debe ser texto, no puede estar vacío ni ser un número.")
+                return
         recetas_afectadas = []
         if nuevo_nombre != producto.nombre:
             recetas_afectadas = [
@@ -571,6 +619,14 @@ def _pestana_editar(inv: Inventario) -> None:
                 categoria=categoria, proveedor=proveedor, stock_minimo=stock_minimo,
                 tiene_merma=tiene_merma, peso_unitario=peso_unitario,
             )
+            if exito and lote is not None:
+                inv.editar_lote(
+                    producto.nombre, lote.id, cantidad=datos_lote["cantidad"], precio_unitario=datos_lote["precio"],
+                    proveedor=datos_lote["proveedor"],
+                    fecha_caducidad=datos_lote["fecha"] if datos_lote["tiene_fecha"] else None,
+                    borrar_fecha_caducidad=not datos_lote["tiene_fecha"],
+                    peso_unitario=datos_lote["peso"],
+                )
             if exito:
                 if recetas_afectadas:
                     for receta in recetas_afectadas:
@@ -661,42 +717,14 @@ def _pestana_lotes(inv: Inventario) -> None:
     st.dataframe(_filas_lotes(producto), width="stretch", hide_index=True)
     st.caption(
         f"Total: {_num(producto.stock)} {producto.unidad} · valor {producto.valor_total()} € · "
-        f"precio medio {_num(producto.precio_unitario)} €/{producto.unidad}"
+        f"precio medio {_num(producto.precio_unitario)} €/{producto.unidad}. "
+        "Para corregir los datos de un lote, usa 'Editar producto'."
     )
 
-    st.subheader("Corregir o desechar un lote")
+    st.subheader("Desechar un lote")
     lote_id = _elegir_lote(producto, "Lote", f"lotes_lote_{nombre_sel}")
     lote = producto.buscar_lote(lote_id)
-    k = lambda campo: f"lotes_{campo}_{nombre_sel}_{lote.id}"
-    st.caption(
-        "Corregir sirve para arreglar un dato mal apuntado o un recuento, y no queda en el historial. "
-        "Para registrar algo que se ha gastado o tirado, usa una salida en 'Actualizar stock'."
-    )
-    c1, c2 = st.columns(2)
-    cantidad = c1.number_input(f"Cantidad ({producto.unidad})", min_value=0.0, value=float(lote.cantidad), step=0.1, key=k("cantidad"))
-    precio = c2.number_input("Precio (€)", min_value=0.0, value=float(lote.precio_unitario), step=0.1, key=k("precio"))
-    proveedor = st.text_input("Proveedor", value=lote.proveedor, key=k("proveedor"))
-    peso = None
-    if producto.unidad == "unidades":
-        peso = _campo_peso("Peso en bruto de cada unidad", k("peso"), lote.peso_unitario or 0.0)
-    tiene_fecha = st.checkbox("¿Tiene fecha de caducidad?", value=lote.fecha_caducidad is not None, key=k("tiene_fecha"))
-    fecha = st.date_input(
-        "Fecha de caducidad", value=lote.fecha_caducidad or date.today(), key=k("fecha"), disabled=not tiene_fecha
-    )
-
-    b1, b2 = st.columns(2)
-    if b1.button("Guardar corrección", type="primary", key=k("guardar")):
-        try:
-            inv.editar_lote(
-                nombre_sel, lote.id, cantidad=cantidad, precio_unitario=precio, proveedor=proveedor,
-                fecha_caducidad=fecha if tiene_fecha else None, borrar_fecha_caducidad=not tiene_fecha,
-                peso_unitario=peso,
-            )
-            avisar("success", f"Lote {lote.id} de '{nombre_sel}' corregido.")
-            st.rerun()
-        except ValueError as e:
-            st.error(str(e))
-    if b2.button("🗑️ Desechar este lote entero (desperdicio)", key=k("desechar")):
+    if st.button("🗑️ Desechar este lote entero (desperdicio)", key=f"lotes_desechar_{nombre_sel}_{lote.id}"):
         cantidad_tirada = lote.cantidad
         if inv.desechar_lote(nombre_sel, lote.id):
             avisar("success", f"Lote {lote.id} de '{nombre_sel}' desechado ({_num(cantidad_tirada)} {producto.unidad} a desperdicio).")

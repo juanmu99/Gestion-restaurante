@@ -306,7 +306,7 @@ def menu_inventario():
         print("6. Editar producto")
         print("7. Limpiar / despiezar un producto con merma")
         print("8. Historial de limpiezas y rendimiento medio")
-        print("9. Ver, corregir o desechar los lotes de un producto")
+        print("9. Ver los lotes de un producto o desechar uno")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -391,7 +391,6 @@ def menu_inventario():
                         if producto.nombre in r.ingredientes_por_comensal
                     ]
 
-                print("(La cantidad, el precio y la caducidad de cada compra se corrigen en sus lotes: opción 9.)")
                 categoria = pedir_texto_no_numerico_opcional(f"Nueva categoría [{producto.categoria}]: ")
                 proveedor = pedir_texto_no_numerico_opcional(f"Nuevo proveedor habitual [{producto.proveedor}]: ")
                 stock_minimo = pedir_numero_opcional(f"Nuevo stock mínimo [{producto.stock_minimo}]: ")
@@ -410,6 +409,20 @@ def menu_inventario():
                         else:
                             peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
 
+                # Datos de la compra (el lote): se piden ahora y se guardan
+                # después, junto con los datos generales.
+                lote = None
+                correccion = None
+                if producto.lotes:
+                    print("\n--- Datos de la compra ---")
+                    if len(producto.lotes) == 1:
+                        lote = producto.lotes[0]
+                        mostrar_lotes(producto)
+                    else:
+                        print(f"Este producto tiene {len(producto.lotes)} lotes:")
+                        lote = pedir_lote(producto, "¿Cuál corriges?")
+                    correccion = pedir_correccion_lote(lote)
+
                 nombre_original = producto.nombre
                 try:
                     exito = inventario.editar_producto(
@@ -421,6 +434,8 @@ def menu_inventario():
                         tiene_merma=tiene_merma,
                         peso_unitario=peso_unitario,
                     )
+                    if exito and lote is not None:
+                        inventario.editar_lote(producto.nombre, lote.id, **correccion)
                 except ValueError as e:
                     print(f"❌ {e}")
                     exito = False
@@ -449,8 +464,22 @@ def menu_inventario():
         pausa()
 
 
+def pedir_correccion_lote(lote) -> dict:
+    """Pide las correcciones de un lote (vacío = no cambiar). Devuelve los argumentos para editar_lote()."""
+    print("Corregir no es un movimiento de stock (no queda en el historial). Deja vacío lo que no cambie.")
+    print("Si algo se ha gastado o tirado, regístralo como salida (opción 3). Cantidad 0 = eliminar el lote.")
+    cantidad = pedir_numero_opcional(f"Cantidad [{lote.cantidad}]: ")
+    precio = pedir_numero_opcional(f"Precio [{lote.precio_unitario}]: ")
+    proveedor = pedir_texto_no_numerico_opcional(f"Proveedor de esta compra [{lote.proveedor}]: ")
+    fecha_actual = lote.fecha_caducidad.strftime("%d/%m/%Y") if lote.fecha_caducidad else "sin fecha"
+    accion_fecha = pedir_opcion(f"Caducidad (ahora: {fecha_actual})", ("mantener", "cambiar", "borrar"))
+    fecha = pedir_fecha("Nueva fecha de caducidad") if accion_fecha == "cambiar" else None
+    return {"cantidad": cantidad, "precio_unitario": precio, "proveedor": proveedor,
+            "fecha_caducidad": fecha, "borrar_fecha_caducidad": accion_fecha == "borrar"}
+
+
 def accion_lotes() -> None:
-    """Muestra los lotes de un producto y permite corregir uno o desecharlo entero."""
+    """Muestra los lotes de un producto y permite desechar uno entero."""
     nombre = pedir_texto("Producto: ")
     producto = inventario.buscar_producto(nombre)
     if producto is None:
@@ -461,27 +490,10 @@ def accion_lotes() -> None:
         return
     print(f"Lotes de {nombre} (total {producto.stock} {producto.unidad}, valor {producto.valor_total()} €):")
     mostrar_lotes(producto)
-    if not pedir_si_no("¿Quieres corregir o desechar alguno?"):
-        return
-    lote = pedir_lote(producto, "Número de lote", sugerir=False, mostrar=False)
-    accion = pedir_opcion("¿Qué quieres hacer?", ("corregir", "desechar"))
-    if accion == "desechar":
+    print("(Para corregir los datos de un lote, usa 'Editar producto'.)")
+    if pedir_si_no("¿Quieres desechar alguno entero (desperdicio)?"):
+        lote = pedir_lote(producto, "Número de lote", sugerir=False, mostrar=False)
         inventario.desechar_lote(nombre, lote.id)
-        return
-    print("Corregir no es un movimiento de stock (no queda en el historial). Deja vacío lo que no cambie.")
-    cantidad = pedir_numero_opcional(f"Cantidad [{lote.cantidad}]: ")
-    precio = pedir_numero_opcional(f"Precio [{lote.precio_unitario}]: ")
-    proveedor = pedir_texto_no_numerico_opcional(f"Proveedor [{lote.proveedor}]: ")
-    fecha_actual = lote.fecha_caducidad.strftime("%d/%m/%Y") if lote.fecha_caducidad else "sin fecha"
-    accion_fecha = pedir_opcion(f"Caducidad (ahora: {fecha_actual})", ("mantener", "cambiar", "borrar"))
-    fecha = pedir_fecha("Nueva fecha de caducidad") if accion_fecha == "cambiar" else None
-    try:
-        inventario.editar_lote(
-            nombre, lote.id, cantidad=cantidad, precio_unitario=precio, proveedor=proveedor,
-            fecha_caducidad=fecha, borrar_fecha_caducidad=accion_fecha == "borrar",
-        )
-    except ValueError as e:
-        print(f"❌ {e}")
 
 
 def accion_limpiar_producto() -> None:
