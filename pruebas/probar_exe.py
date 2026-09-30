@@ -193,8 +193,12 @@ def probar(exe_original: Path) -> None:
             page = abrir_app(navegador)
             ir_a(page, "Inventario")
             captura(page, "09_inventario_tras_reabrir")
-            comprobar("Pata de cerdo" in page.inner_text("body"),
-                      "Al reabrir, los datos guardados siguen ahí")
+            # La tabla se dibuja como imagen (su texto no se puede leer), así
+            # que miramos el aviso de "Bajo mínimo", que sí es texto y solo
+            # aparece si se han cargado los productos guardados.
+            avisos = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
+            comprobar("Harina de trigo" in avisos,
+                      "Al reabrir, los datos guardados siguen ahí", avisos[:300])
             navegador.close()
     finally:
         cerrar_exe(proceso)

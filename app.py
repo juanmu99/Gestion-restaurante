@@ -304,7 +304,9 @@ def _filas_inventario(productos: list) -> list[dict]:
         "Mínimo": p.stock_minimo, "Precio (€)": p.precio_unitario, "Proveedor": p.proveedor,
         "Caducidad": p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—",
         "Tipo": p.tipo_descripcion() or "—",
-        "Peso/unidad (kg)": round(p.peso_unitario, 2) if p.peso_unitario else "—",
+        # Siempre texto: si la columna mezcla números y "—", Streamlit
+        # tiene que corregir los tipos por su cuenta (y avisa en la consola).
+        "Peso/unidad (kg)": f"{round(p.peso_unitario, 2):g}" if p.peso_unitario else "—",
     } for p in productos]
 
 
