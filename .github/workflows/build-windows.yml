@@ -9,8 +9,16 @@ on:
     # Los cambios que solo tocan las pruebas no cambian el programa:
     # no hace falta reconstruir el .exe por ellos.
     paths-ignore:
-      - "pruebas/**"
+      - "pruebas/probar_interfaz.py"
+      - "pruebas/capturas.py"
       - ".github/workflows/probar-interfaz.yml"
+
+# Necesario para publicar los resultados en la rama "resultados-exe".
+permissions:
+  contents: write
+
+concurrency:
+  group: build-windows
 
 jobs:
   build:
@@ -68,8 +76,54 @@ jobs:
           --collect-all streamlit
           iniciar_app.py
 
+      # Probar el .exe de verdad, como lo usaría el cliente: arrancarlo,
+      # abrir todas las páginas, guardar, exportar, cerrarlo y reabrirlo.
+      # Ver pruebas/probar_exe.py.
+      - name: Instalar el navegador para probar el .exe
+        run: |
+          pip install playwright==1.63.0 -c restricciones.txt
+          python -m playwright install chromium
+
+      - name: Probar el .exe
+        id: prueba_exe
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python pruebas/probar_exe.py dist/GestionRestaurante.exe
+
+      # Igual que en probar-interfaz.yml: los resultados se publican en una
+      # rama aparte (solo guarda los de la ÚLTIMA ejecución).
+      - name: Publicar resultados en la rama "resultados-exe"
+        if: always()
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resultados
+          cp -r resultados /tmp/publicar
+          cd /tmp/publicar
+          {
+            echo "Resultados de la prueba del .exe del cambio ${GITHUB_SHA}"
+            echo "Prueba del .exe: ${{ steps.prueba_exe.outcome }}"
+          } > LEEME.txt
+          git init -q -b resultados-exe
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Resultados de la prueba del .exe de ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:resultados-exe
+
+      # Solo se ofrece la descarga si el .exe ha pasado la prueba: así
+      # nunca se entrega por error un ejecutable que no funciona.
       - name: Subir el .exe como descarga
+        if: steps.prueba_exe.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: GestionRestaurante-Windows
           path: dist/GestionRestaurante.exe
+
+      - name: Marcar la ejecución como fallida si el .exe no pasó la prueba
+        if: steps.prueba_exe.outcome != 'success'
+        run: |
+          echo "El .exe no ha pasado la prueba: revisa resultado_exe.txt en la rama resultados-exe."
+          exit 1

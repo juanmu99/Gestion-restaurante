@@ -46,7 +46,23 @@ def _abrir_navegador(url: str) -> None:
     webbrowser.open(url)
 
 
+def _salida_en_utf8() -> None:
+    """
+    Los módulos imprimen emojis (✅, ❌...). En Windows, si la salida del
+    programa no va a una ventana de consola (por ejemplo, si se guarda en
+    un archivo de registro), Python usa una codificación antigua que no
+    los conoce y el print() fallaría con UnicodeEncodeError. Con esto se
+    escriben en UTF-8 y, si algún carácter no se puede, se sustituye en
+    vez de romper el programa.
+    """
+    for flujo in (sys.stdout, sys.stderr):
+        if flujo is not None and hasattr(flujo, "reconfigure"):
+            flujo.reconfigure(encoding="utf-8", errors="replace")
+
+
 if __name__ == "__main__":
+    _salida_en_utf8()
+
     from streamlit.web import cli as stcli
 
     puerto = "8501"
