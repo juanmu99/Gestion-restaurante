@@ -123,11 +123,18 @@ class Menu:
     """
     Un menú es una COMPOSICIÓN de recetas: simplemente guarda una lista
     de objetos Receta que lo forman.
+
+    Además puede llevar CONSUMIBLES por comensal (servilletas, vasos
+    desechables...): {"Servilletas de papel": 2} = 2 servilletas por
+    comensal. Se descuentan al completar el servicio y entran en la lista
+    de la compra igual que los ingredientes, pero se guardan aparte para
+    que el menú siga "hablando" de comida a simple vista.
     """
 
-    def __init__(self, nombre: str, recetas: list[Receta]):
+    def __init__(self, nombre: str, recetas: list[Receta], consumibles_por_comensal: Optional[dict[str, float]] = None):
         self.nombre = nombre
         self.recetas = recetas
+        self.consumibles_por_comensal = dict(consumibles_por_comensal or {})
 
     def calcular_ingredientes_totales(self, comensales: int) -> dict[str, float]:
         """Suma los ingredientes de TODAS las recetas del menú, ya escalados."""
@@ -140,9 +147,33 @@ class Menu:
                 totales[ingrediente] = round(totales.get(ingrediente, 0) + cantidad, 3)
         return totales
 
+    def calcular_consumibles(self, comensales: int) -> dict[str, float]:
+        """Los consumibles del menú, ya escalados al número de comensales."""
+        return {nombre: round(cantidad * comensales, 3) for nombre, cantidad in self.consumibles_por_comensal.items()}
+
+    def calcular_necesidades_totales(self, comensales: int) -> dict[str, float]:
+        """TODO lo que se gasta del inventario en un servicio: ingredientes + consumibles."""
+        totales = self.calcular_ingredientes_totales(comensales)
+        for nombre, cantidad in self.calcular_consumibles(comensales).items():
+            totales[nombre] = round(totales.get(nombre, 0) + cantidad, 3)
+        return totales
+
+    def ingredientes_por_comensal(self) -> dict[str, float]:
+        """Los ingredientes de todas sus recetas, sumados, por comensal (para verlos de un vistazo)."""
+        return self.calcular_ingredientes_totales(1)
+
     def costo_por_comensal(self, inventario: Inventario) -> float:
-        """Suma el coste por comensal de todas sus recetas -- ver Receta.costo_por_comensal()."""
+        """Coste de la COMIDA por comensal: suma de sus recetas -- ver Receta.costo_por_comensal()."""
         return round(sum(r.costo_por_comensal(inventario) for r in self.recetas), 2)
+
+    def costo_consumibles_por_comensal(self, inventario: Inventario) -> float:
+        """Coste de los consumibles por comensal, a los precios actuales."""
+        total = 0.0
+        for nombre, cantidad in self.consumibles_por_comensal.items():
+            producto = inventario.buscar_producto(nombre)
+            if producto is not None:
+                total += cantidad * producto.precio_unitario
+        return round(total, 2)
 
     def __str__(self) -> str:
         platos = ", ".join(r.nombre for r in self.recetas)
@@ -151,7 +182,11 @@ class Menu:
     def to_dict(self) -> dict:
         # Guardamos solo los NOMBRES de las recetas, no la receta completa,
         # para no duplicar datos que ya viven en Recetario.recetas.
-        return {"nombre": self.nombre, "recetas": [r.nombre for r in self.recetas]}
+        return {
+            "nombre": self.nombre,
+            "recetas": [r.nombre for r in self.recetas],
+            "consumibles_por_comensal": self.consumibles_por_comensal,
+        }
 
     @classmethod
     def from_dict(cls, datos: dict, recetas_disponibles: dict[str, Receta]) -> "Menu":
@@ -167,7 +202,8 @@ class Menu:
             for nombre in datos["recetas"]
             if nombre in recetas_disponibles
         ]
-        return cls(datos["nombre"], recetas)
+        # .get(): los menús guardados antes de los consumibles no los tienen.
+        return cls(datos["nombre"], recetas, datos.get("consumibles_por_comensal", {}))
 
     def urgencia_caducidad(self, inventario: Inventario, dias: int = 7) -> float:
         """Suma la urgencia de todas sus recetas -- ver Receta.urgencia_caducidad()."""
@@ -212,8 +248,8 @@ class Menu:
         return productos_riesgo
 
     def se_puede_preparar(self, inventario: Inventario, comensales: int) -> bool:
-        """True si TODOS los ingredientes de este menú alcanzan en stock para `comensales`, sin comprar nada."""
-        necesarios = self.calcular_ingredientes_totales(comensales)
+        """True si TODO lo que gasta este menú (ingredientes y consumibles) alcanza en stock para `comensales`."""
+        necesarios = self.calcular_necesidades_totales(comensales)
         for ingrediente, cantidad_necesaria in necesarios.items():
             producto = inventario.buscar_producto(ingrediente)
             stock_actual = producto.stock if producto else 0
@@ -236,6 +272,29 @@ class Recetario:
     def agregar_menu(self, menu: Menu) -> None:
         self.menus[menu.nombre] = menu
         print(f"✅ Menú añadido: {menu.nombre}")
+
+    def renombrar_producto(self, antiguo: str, nuevo: str) -> list[str]:
+        """
+        Al renombrar un producto del inventario, lo renombra también en las
+        recetas (como ingrediente) y en los menús (como consumible),
+        conservando las cantidades. Devuelve los nombres de lo que se ha
+        actualizado. (Los menús no guardan copia de sus recetas, solo una
+        referencia, así que ven el cambio de las recetas automáticamente.)
+        """
+        actualizados = []
+        for receta in self.recetas.values():
+            if antiguo in receta.ingredientes_por_comensal:
+                receta.ingredientes_por_comensal = {
+                    (nuevo if n == antiguo else n): c for n, c in receta.ingredientes_por_comensal.items()
+                }
+                actualizados.append(receta.nombre)
+        for menu in self.menus.values():
+            if antiguo in menu.consumibles_por_comensal:
+                menu.consumibles_por_comensal = {
+                    (nuevo if n == antiguo else n): c for n, c in menu.consumibles_por_comensal.items()
+                }
+                actualizados.append(f"menú {menu.nombre}")
+        return actualizados
 
     def buscar_menu(self, nombre: str) -> Optional[Menu]:
         return self.menus.get(nombre)
@@ -275,7 +334,7 @@ class Recetario:
         elecciones = elecciones or {}
 
         filas = []
-        for ingrediente, necesario in menu.calcular_ingredientes_totales(servicio.comensales).items():
+        for ingrediente, necesario in menu.calcular_necesidades_totales(servicio.comensales).items():
             producto = inventario.buscar_producto(ingrediente)
             en_stock = producto.stock if producto else 0
             # Sin round() a propósito: redondear podría dar un número
@@ -284,6 +343,7 @@ class Recetario:
             a_descontar = min(necesario, en_stock)
             fila = {
                 "ingrediente": ingrediente,
+                "tipo": producto.tipo if producto else "alimento",
                 "unidad": producto.unidad if producto else "",
                 "necesario": necesario,
                 "en_stock": en_stock,
@@ -399,7 +459,7 @@ class Recetario:
             print(f"❌ No se encontró el menú '{servicio.menu}' en el recetario.")
             return {}
 
-        necesarios = menu.calcular_ingredientes_totales(servicio.comensales)
+        necesarios = menu.calcular_necesidades_totales(servicio.comensales)
 
         resultado = {}
         for ingrediente, cantidad_necesaria in necesarios.items():

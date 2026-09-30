@@ -222,6 +222,15 @@ def cargar_datos_ejemplo() -> None:
     )
     secreto.nuevo_lote(0.8, 15, "Ibéricos Sierra", date.today() + timedelta(days=9), procedencia="inicial")
     inv.agregar_producto(secreto)
+    # Consumibles: se gastan pero no se comen (lista aparte, sin caducidad).
+    inv.agregar_producto(Producto(
+        "Servilletas de papel", "Desechables", 500, "unidades", 0.02, "Hostelería Total", stock_minimo=200,
+        tipo="consumible",
+    ))
+    inv.agregar_producto(Producto(
+        "Vasos desechables", "Desechables", 150, "unidades", 0.05, "Hostelería Total", stock_minimo=100,
+        tipo="consumible",
+    ))
 
     serv.agregar_servicio(Servicio(date.today() + timedelta(days=3), time(21, 0), 8, "Menú del día"))
 
@@ -229,7 +238,7 @@ def cargar_datos_ejemplo() -> None:
     ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
     rec.agregar_receta(pan)
     rec.agregar_receta(ensalada)
-    rec.agregar_menu(Menu("Menú del día", [pan, ensalada]))
+    rec.agregar_menu(Menu("Menú del día", [pan, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1}))
 
 
 # ---------- Lotes: piezas de interfaz compartidas ----------
@@ -294,7 +303,7 @@ def _campos_entrada(producto: Producto, k) -> dict:
     if necesita_peso:
         peso = _campo_peso("Peso en bruto de cada unidad de este lote", k("peso"), producto.peso_unitario or 0.0)
     fecha = None
-    if st.checkbox("¿Este lote tiene fecha de caducidad?", key=k("tiene_fecha")):
+    if not producto.es_consumible() and st.checkbox("¿Este lote tiene fecha de caducidad?", key=k("tiene_fecha")):
         fecha = st.date_input("Fecha de caducidad de este lote", key=k("fecha"))
     return {"precio": precio, "proveedor": proveedor, "peso": peso, "fecha": fecha, "necesita_peso": necesita_peso}
 
@@ -312,8 +321,10 @@ def _filas_lotes(producto: Producto) -> list[dict]:
         fila = {
             "Lote": l.id, "Cantidad": f"{_num(l.cantidad)} {producto.unidad}", "Precio (€)": _num(l.precio_unitario),
             "Valor (€)": _num(l.valor()), "Proveedor": l.proveedor, "Entrada": l.fecha_entrada.strftime("%d/%m/%Y"),
-            "Caducidad": l.fecha_caducidad.strftime("%d/%m/%Y") if l.fecha_caducidad else "—", "Estado": estado,
         }
+        if not producto.es_consumible():
+            fila["Caducidad"] = l.fecha_caducidad.strftime("%d/%m/%Y") if l.fecha_caducidad else "—"
+            fila["Estado"] = estado
         if producto.unidad == "unidades":
             fila["Peso/unidad (kg)"] = _num(l.peso_unitario) if l.peso_unitario else "—"
         filas.append(fila)
@@ -396,17 +407,22 @@ def pagina_dashboard() -> None:
 # caducidad, el motivo de salida, el peso por unidad...) no funcionan bien
 # dentro de un st.form. Aquí se usan widgets sueltos + un botón normal.
 
-def _filas_inventario(productos: list) -> list[dict]:
-    return [{
-        "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
-        "Mínimo": p.stock_minimo, "Precio medio (€)": round(p.precio_unitario, 2), "Proveedor habitual": p.proveedor,
-        "Próxima caducidad": p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—",
-        "Lotes": len(p.lotes),
-        "Tipo": p.tipo_descripcion() or "—",
-        # Siempre texto: si la columna mezcla números y "—", Streamlit
-        # tiene que corregir los tipos por su cuenta (y avisa en la consola).
-        "Peso/unidad (kg)": f"{round(p.peso_unitario, 2):g}" if p.peso_unitario else "—",
-    } for p in productos]
+def _filas_inventario(productos: list, tipo: str = "alimento") -> list[dict]:
+    filas = []
+    for p in productos:
+        fila = {
+            "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
+            "Mínimo": p.stock_minimo, "Precio medio (€)": round(p.precio_unitario, 2), "Proveedor habitual": p.proveedor,
+            "Lotes": len(p.lotes),
+        }
+        if tipo == "alimento":
+            fila["Próxima caducidad"] = p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—"
+            fila["Tipo"] = p.tipo_descripcion() or "—"
+            # Siempre texto: si la columna mezcla números y "—", Streamlit
+            # tiene que corregir los tipos por su cuenta (y avisa en la consola).
+            fila["Peso/unidad (kg)"] = f"{round(p.peso_unitario, 2):g}" if p.peso_unitario else "—"
+        filas.append(fila)
+    return filas
 
 
 def _campo_peso(etiqueta: str, clave: str, valor_kg: float = 0.0) -> Optional[float]:
@@ -418,19 +434,34 @@ def _campo_peso(etiqueta: str, clave: str, valor_kg: float = 0.0) -> Optional[fl
     return convertir(valor, unidad, "kg") if valor > 0 else None
 
 
+# Las dos "listas" del inventario. Todo lo de la página Inventario (tabla,
+# avisos y pestañas) trabaja solo con la lista elegida arriba, para que los
+# alimentos y los consumibles no se mezclen.
+VISTAS_INVENTARIO = {"🍅 Alimentos": "alimento", "🧻 Consumibles": "consumible"}
+
+
 def pagina_inventario() -> None:
     st.header("📦 Inventario")
     inv = st.session_state.inventario
 
-    if inv.productos:
-        vista = st.radio(
-            "Mostrar", ["Todos", "Solo productos con merma y sus derivados"], horizontal=True, key="inv_vista"
+    tipo = VISTAS_INVENTARIO[st.radio("Lista", list(VISTAS_INVENTARIO), horizontal=True, key="inv_tipo")]
+    productos_tipo = inv.consumibles() if tipo == "consumible" else inv.alimentos()
+
+    if productos_tipo:
+        productos = productos_tipo
+        if tipo == "alimento":
+            vista = st.radio(
+                "Mostrar", ["Todos", "Solo productos con merma y sus derivados"], horizontal=True, key="inv_vista"
+            )
+            if vista != "Todos":
+                productos = [p for p in productos if p.tiene_merma or p.origen or p.es_subproducto]
+        st.dataframe(_filas_inventario(productos, tipo), width="stretch", hide_index=True)
+        st.caption("Cada compra es un lote con su precio y proveedor: los verás en la pestaña 'Lotes'.")
+    elif tipo == "consumible":
+        st.info(
+            "Todavía no hay consumibles: servilletas, vasos y platos desechables, film, productos de limpieza... "
+            "Añádelos en la pestaña 'Añadir producto' de esta lista."
         )
-        productos = list(inv.productos.values())
-        if vista != "Todos":
-            productos = [p for p in productos if p.tiene_merma or p.origen or p.es_subproducto]
-        st.dataframe(_filas_inventario(productos), width="stretch", hide_index=True)
-        st.caption("Cada compra es un lote con su precio, proveedor y caducidad: los verás en la pestaña 'Lotes'.")
     else:
         st.info("El inventario está vacío todavía.")
 
@@ -445,7 +476,7 @@ def pagina_inventario() -> None:
 
     col1, col2 = st.columns(2)
     with col1:
-        bajo_minimo = inv.productos_bajo_minimo()
+        bajo_minimo = [p for p in inv.productos_bajo_minimo() if p.tipo == tipo]
         if bajo_minimo:
             st.warning("⚠️ Bajo mínimo: " + ", ".join(p.nombre for p in bajo_minimo))
     with col2:
@@ -462,24 +493,30 @@ def pagina_inventario() -> None:
         "🔪 Limpiar producto", "📜 Limpiezas",
     ])
 
+    nombres_tipo = [p.nombre for p in productos_tipo]
     with tab_add:
-        _pestana_anadir(inv)
+        _pestana_anadir(inv, tipo)
     with tab_edit:
-        _pestana_editar(inv)
+        _pestana_editar(inv, nombres_tipo)
     with tab_stock:
-        _pestana_stock(inv)
+        _pestana_stock(inv, nombres_tipo)
     with tab_lotes:
-        _pestana_lotes(inv)
+        _pestana_lotes(inv, nombres_tipo)
     with tab_limpiar:
-        _pestana_limpiar(inv)
+        if tipo == "consumible":
+            st.info("Los consumibles no se limpian: esta pestaña es para alimentos con merma.")
+        else:
+            _pestana_limpiar(inv)
     with tab_limpiezas:
         _pestana_limpiezas(inv)
 
 
-def _pestana_anadir(inv: Inventario) -> None:
+def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
     # "Versión" del formulario: al añadir un producto se incrementa, las keys
     # cambian y los campos aparecen vacíos otra vez (lo que hacía clear_on_submit).
     v = st.session_state.setdefault("add_version", 0)
+    es_consumible = tipo == "consumible"
+    st.caption("Se añadirá a la lista de **consumibles**." if es_consumible else "Se añadirá a la lista de **alimentos**.")
 
     nombre = st.text_input("Nombre", key=f"add_nombre_{v}")
     categoria = st.text_input("Categoría", key=f"add_categoria_{v}")
@@ -489,7 +526,7 @@ def _pestana_anadir(inv: Inventario) -> None:
 
     tiene_merma = False
     peso_unitario = None
-    if unidad in UNIDADES_PESO + ("unidades",):
+    if unidad in UNIDADES_PESO + ("unidades",) and not es_consumible:
         tiene_merma = st.checkbox(
             "Producto con merma (se limpia o despieza antes de usarse)", key=f"add_merma_{v}",
             help="Por ejemplo una pata de cerdo o un pescado entero. Solo de estos productos se pueden obtener derivados.",
@@ -506,7 +543,9 @@ def _pestana_anadir(inv: Inventario) -> None:
     fecha_caducidad = None
     # La caducidad es de cada lote: sin stock inicial no hay lote al que ponérsela
     # (se indicará al registrar la primera compra).
-    if stock > 0:
+    if es_consumible:
+        pass  # los consumibles no caducan
+    elif stock > 0:
         if st.checkbox("¿Este primer lote tiene fecha de caducidad?", key=f"add_tiene_caducidad_{v}"):
             fecha_caducidad = st.date_input("Fecha de caducidad", key=f"add_fecha_{v}")
     else:
@@ -522,20 +561,20 @@ def _pestana_anadir(inv: Inventario) -> None:
             try:
                 inv.agregar_producto(Producto(
                     nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad,
-                    tiene_merma=tiene_merma, peso_unitario=peso_unitario,
+                    tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo,
                 ))
-                avisar("success", f"Producto '{nombre}' añadido.")
+                avisar("success", f"{'Consumible' if es_consumible else 'Producto'} '{nombre}' añadido.")
                 st.session_state.add_version += 1
                 st.rerun()
             except ValueError as e:
                 st.error(str(e))
 
 
-def _pestana_editar(inv: Inventario) -> None:
-    if not inv.productos:
-        st.info("No hay productos para editar.")
+def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
+    if not nombres:
+        st.info("No hay productos para editar en esta lista.")
         return
-    nombre_sel = st.selectbox("Producto a editar", list(inv.productos.keys()), key="editar_select")
+    nombre_sel = st.selectbox("Producto a editar", nombres, key="editar_select")
     producto = inv.buscar_producto(nombre_sel)
     # Las keys incluyen `nombre_sel`: si no, Streamlit reutilizaría el
     # valor que ya tuviera guardado bajo esa key (el del producto
@@ -549,9 +588,17 @@ def _pestana_editar(inv: Inventario) -> None:
     stock_minimo = c1.number_input("Stock mínimo", value=float(producto.stock_minimo), min_value=0.0, step=0.1, key=k("stock_minimo"))
     proveedor = c2.text_input("Proveedor habitual", value=producto.proveedor, key=k("proveedor"))
 
+    # El tipo se puede corregir (por si se dio de alta en la lista equivocada).
+    tipos_texto = {"Alimento": "alimento", "Consumible": "consumible"}
+    nuevo_tipo = tipos_texto[st.radio(
+        "Tipo", list(tipos_texto), index=1 if producto.es_consumible() else 0, horizontal=True, key=k("tipo"),
+        help="Si lo cambias, el producto pasa a la otra lista del inventario.",
+    )]
+    es_consumible = nuevo_tipo == "consumible"
+
     tiene_merma = producto.tiene_merma
     peso_unitario = None
-    if producto.unidad in UNIDADES_PESO + ("unidades",):
+    if producto.unidad in UNIDADES_PESO + ("unidades",) and not es_consumible:
         tiene_merma = st.checkbox("Producto con merma (se limpia o despieza)", value=producto.tiene_merma, key=k("merma"))
         if tiene_merma and producto.unidad == "unidades":
             peso_unitario = _campo_peso(
@@ -586,13 +633,16 @@ def _pestana_editar(inv: Inventario) -> None:
         datos_lote["peso"] = None
         if producto.unidad == "unidades":
             datos_lote["peso"] = _campo_peso("Peso en bruto de cada unidad", kl("peso"), lote.peso_unitario or 0.0)
-        datos_lote["tiene_fecha"] = st.checkbox(
-            "¿Tiene fecha de caducidad?", value=lote.fecha_caducidad is not None, key=kl("tiene_fecha"),
-        )
-        datos_lote["fecha"] = st.date_input(
-            "Fecha de caducidad", value=lote.fecha_caducidad or date.today(), key=kl("fecha"),
-            disabled=not datos_lote["tiene_fecha"],
-        )
+        datos_lote["tiene_fecha"] = False
+        datos_lote["fecha"] = None
+        if not es_consumible:
+            datos_lote["tiene_fecha"] = st.checkbox(
+                "¿Tiene fecha de caducidad?", value=lote.fecha_caducidad is not None, key=kl("tiene_fecha"),
+            )
+            datos_lote["fecha"] = st.date_input(
+                "Fecha de caducidad", value=lote.fecha_caducidad or date.today(), key=kl("fecha"),
+                disabled=not datos_lote["tiene_fecha"],
+            )
         st.caption(
             "Corregir no es un movimiento de stock: no queda en el historial. Si algo se ha gastado o tirado, "
             "regístralo como salida en 'Actualizar stock'. Poner la cantidad a 0 elimina este lote."
@@ -605,19 +655,13 @@ def _pestana_editar(inv: Inventario) -> None:
             if not texto or _parece_numero(texto):
                 st.error("El proveedor de la compra debe ser texto, no puede estar vacío ni ser un número.")
                 return
-        recetas_afectadas = []
-        if nuevo_nombre != producto.nombre:
-            recetas_afectadas = [
-                r for r in st.session_state.recetario.recetas.values()
-                if producto.nombre in r.ingredientes_por_comensal
-            ]
         nombre_original = producto.nombre
         try:
             exito = inv.editar_producto(
                 nombre_sel,
                 nuevo_nombre=nuevo_nombre if nuevo_nombre != producto.nombre else None,
                 categoria=categoria, proveedor=proveedor, stock_minimo=stock_minimo,
-                tiene_merma=tiene_merma, peso_unitario=peso_unitario,
+                tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=nuevo_tipo,
             )
             if exito and lote is not None:
                 inv.editar_lote(
@@ -628,12 +672,10 @@ def _pestana_editar(inv: Inventario) -> None:
                     peso_unitario=datos_lote["peso"],
                 )
             if exito:
-                if recetas_afectadas:
-                    for receta in recetas_afectadas:
-                        cantidad = receta.ingredientes_por_comensal.pop(nombre_original)
-                        receta.ingredientes_por_comensal[nuevo_nombre] = cantidad
-                    nombres = ", ".join(r.nombre for r in recetas_afectadas)
-                    avisar("info", f"🔄 Recetas actualizadas: {nombres}")
+                if producto.nombre != nombre_original:
+                    actualizados = st.session_state.recetario.renombrar_producto(nombre_original, producto.nombre)
+                    if actualizados:
+                        avisar("info", f"🔄 Recetas y menús actualizados: {', '.join(actualizados)}")
                 avisar("success", "Producto actualizado.")
                 st.rerun()
             else:
@@ -642,11 +684,11 @@ def _pestana_editar(inv: Inventario) -> None:
             st.error(str(e))
 
 
-def _pestana_stock(inv: Inventario) -> None:
-    if not inv.productos:
-        st.info("No hay productos.")
+def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
+    if not nombres:
+        st.info("No hay productos en esta lista.")
         return
-    nombre_sel = st.selectbox("Producto", list(inv.productos.keys()), key="stock_select")
+    nombre_sel = st.selectbox("Producto", nombres, key="stock_select")
     producto = inv.buscar_producto(nombre_sel)
     k = lambda campo: f"stock_{campo}_{nombre_sel}"
 
@@ -656,7 +698,7 @@ def _pestana_stock(inv: Inventario) -> None:
     cantidad = st.number_input(f"Cantidad ({producto.unidad})", min_value=0.0, step=0.1, key=k("cantidad"))
 
     if es_entrada:
-        st.caption("Cada compra se guarda como un lote nuevo, con su precio, proveedor y caducidad.")
+        st.caption("Cada compra se guarda como un lote nuevo, con su precio y proveedor.")
         datos = _campos_entrada(producto, k)
         if st.button("Registrar compra", type="primary", key=k("boton")):
             if cantidad <= 0:
@@ -701,11 +743,10 @@ def _pestana_stock(inv: Inventario) -> None:
             st.error("No se ha podido registrar la salida.")
 
 
-def _pestana_lotes(inv: Inventario) -> None:
-    if not inv.productos:
-        st.info("No hay productos.")
+def _pestana_lotes(inv: Inventario, nombres: list[str]) -> None:
+    if not nombres:
+        st.info("No hay productos en esta lista.")
         return
-    nombres = list(inv.productos.keys())
     # Se abre con el primer producto que tenga lotes (no con uno vacío).
     inicial = next((i for i, n in enumerate(nombres) if inv.productos[n].lotes), 0)
     nombre_sel = st.selectbox("Producto", nombres, index=inicial, key="lotes_select")
@@ -985,9 +1026,9 @@ def pagina_servicios() -> None:
                     "no se descontará nada del inventario."
                 )
             else:
-                st.caption(f"Se descontará para {servicio.comensales} comensales (motivo: consumo):")
+                st.caption(f"Se descontará para {servicio.comensales} comensales (motivo: consumo). 🧻 = consumible:")
                 st.dataframe([{
-                    "Ingrediente": f["ingrediente"],
+                    "Ingrediente": ("🧻 " if f["tipo"] == "consumible" else "") + f["ingrediente"],
                     "Necesario": f"{_num(f['necesario'])} {f['unidad']}",
                     "En stock": f"{_num(f['en_stock'])} {f['unidad']}" if f["existe"] else "no existe",
                     "Se descontará": f"{_num(f['a_descontar'])} {f['unidad']}",
@@ -1026,6 +1067,85 @@ def pagina_servicios() -> None:
 
 # ---------- Página: Recetario ----------
 
+def _texto_cantidades(cantidades: dict[str, float], inv: Inventario) -> str:
+    partes = []
+    for nombre, cantidad in cantidades.items():
+        producto = inv.buscar_producto(nombre)
+        partes.append(f"{nombre} {_num(cantidad)} {producto.unidad if producto else ''}".strip())
+    return ", ".join(partes) or "—"
+
+
+def _editor_consumibles(inv: Inventario, clave: str, actuales: dict[str, float]) -> dict[str, float]:
+    """
+    Elegir los consumibles de un menú y cuántos se gastan por comensal.
+    Devuelve {consumible: cantidad por comensal} (sin los que estén a 0).
+    """
+    disponibles = [p.nombre for p in inv.consumibles()]
+    if not disponibles:
+        st.caption("🧻 No hay consumibles en el inventario (servilletas, vasos desechables...). Puedes añadirlos en Inventario > Consumibles.")
+        return {}
+    elegidos = st.multiselect(
+        "🧻 Consumibles por comensal (opcional)", disponibles,
+        default=[n for n in actuales if n in disponibles], key=f"{clave}_consumibles",
+        help="Lo que se gasta por cada comensal y no es comida: servilletas, vasos desechables...",
+    )
+    resultado = {}
+    for nombre in elegidos:
+        unidad = inv.buscar_producto(nombre).unidad
+        cantidad = st.number_input(
+            f"{nombre}: cantidad por comensal ({unidad})", min_value=0.0, step=0.5,
+            value=float(actuales.get(nombre, 1.0)), key=f"{clave}_cons_{nombre}",
+        )
+        if cantidad > 0:
+            resultado[nombre] = cantidad
+    return resultado
+
+
+def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
+    """Un menú: a simple vista, su comida; al entrar, el detalle de cada receta y sus consumibles."""
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 1])
+        c1.markdown(f"**{menu.nombre}**")
+        c1.caption("Recetas: " + (", ".join(r.nombre for r in menu.recetas) or "—"))
+        c2.metric("Comida por comensal", f"{menu.costo_por_comensal(inv)} €")
+        st.write("Ingredientes por comensal: " + _texto_cantidades(menu.ingredientes_por_comensal(), inv))
+
+        with st.expander("🔎 Ver detalle del menú"):
+            for receta in menu.recetas:
+                st.markdown(f"**{receta.nombre}** · {receta.categoria} · {receta.costo_por_comensal(inv)} €/comensal")
+                filas = []
+                for nombre, cantidad in receta.ingredientes_por_comensal.items():
+                    producto = inv.buscar_producto(nombre)
+                    filas.append({
+                        "Ingrediente": nombre,
+                        "Por comensal": f"{_num(cantidad)} {producto.unidad if producto else ''}",
+                        "Coste (€)": _num(cantidad * producto.precio_unitario) if producto else "—",
+                    })
+                st.dataframe(filas, width="stretch", hide_index=True)
+
+            st.markdown("**🧻 Consumibles**")
+            if menu.consumibles_por_comensal:
+                st.dataframe([{
+                    "Consumible": nombre,
+                    "Por comensal": f"{_num(cantidad)} {inv.buscar_producto(nombre).unidad if inv.buscar_producto(nombre) else ''}",
+                    "Coste (€)": _num(cantidad * inv.buscar_producto(nombre).precio_unitario) if inv.buscar_producto(nombre) else "—",
+                } for nombre, cantidad in menu.consumibles_por_comensal.items()], width="stretch", hide_index=True)
+            else:
+                st.caption("Este menú no tiene consumibles.")
+            total = round(menu.costo_por_comensal(inv) + menu.costo_consumibles_por_comensal(inv), 2)
+            st.caption(
+                f"Coste por comensal: comida {menu.costo_por_comensal(inv)} € + consumibles "
+                f"{menu.costo_consumibles_por_comensal(inv)} € = **{total} €**"
+            )
+
+            st.markdown("**Cambiar los consumibles del menú**")
+            nuevos = _editor_consumibles(inv, f"menu_{menu.nombre}", menu.consumibles_por_comensal)
+            if inv.consumibles() and st.button("Guardar consumibles", key=f"menu_{menu.nombre}_guardar"):
+                menu.consumibles_por_comensal = nuevos
+                avisar("success", f"Consumibles del menú '{menu.nombre}' guardados.")
+                st.rerun()
+
+
 def pagina_recetario() -> None:
     st.header("👩‍🍳 Recetario")
     inv = st.session_state.inventario
@@ -1045,13 +1165,14 @@ def pagina_recetario() -> None:
         if not rec.menus:
             st.info("No hay menús todavía.")
         for m in rec.menus.values():
-            st.write(f"{m}  💶 {m.costo_por_comensal(inv)}€/comensal")
+            _tarjeta_menu(m, inv, rec)
 
     with tab_crear_receta:
-        if not inv.productos:
-            st.warning("El inventario está vacío. Añade productos primero.")
+        if not inv.alimentos():
+            st.warning("No hay alimentos en el inventario. Añade productos primero.")
         else:
-            nombre_ing = st.selectbox("Ingrediente", list(inv.productos.keys()), key="ing_select")
+            # Las recetas solo llevan alimentos: los consumibles van en el menú.
+            nombre_ing = st.selectbox("Ingrediente", [p.nombre for p in inv.alimentos()], key="ing_select")
             producto_ing = inv.buscar_producto(nombre_ing)
 
             # Misma razón que en "Editar producto": la key incluye
@@ -1110,12 +1231,13 @@ def pagina_recetario() -> None:
         else:
             nombre_menu = st.text_input("Nombre del menú", key="nombre_menu_input")
             recetas_elegidas = st.multiselect("Recetas a incluir", list(rec.recetas.keys()), key="recetas_multiselect")
+            consumibles = _editor_consumibles(inv, "nuevo_menu", {})
             if st.button("Crear menú", type="primary"):
                 if not nombre_menu or not recetas_elegidas:
                     st.error("Indica un nombre y al menos una receta.")
                 else:
                     recetas_obj = [rec.recetas[n] for n in recetas_elegidas]
-                    rec.agregar_menu(Menu(nombre_menu, recetas_obj))
+                    rec.agregar_menu(Menu(nombre_menu, recetas_obj, consumibles))
                     avisar("success", f"Menú '{nombre_menu}' creado.")
                     st.rerun()
 
@@ -1280,9 +1402,12 @@ def pagina_metricas() -> None:
     inv = st.session_state.inventario
     metricas = Metricas(inv)
 
-    periodo = st.selectbox("Periodo", PERIODOS_VALIDOS, index=1, key="periodo_metricas")
+    c1, c2 = st.columns(2)
+    periodo = c1.selectbox("Periodo", PERIODOS_VALIDOS, index=1, key="periodo_metricas")
+    tipo = VISTAS_INVENTARIO[c2.radio("Productos", list(VISTAS_INVENTARIO), horizontal=True, key="metricas_tipo")]
     desde, hasta = rango_desde_periodo(periodo)
     st.caption(f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}")
+    nombres_tipo = [p.nombre for p in (inv.consumibles() if tipo == "consumible" else inv.alimentos())]
 
     if not inv.historial:
         st.info(
@@ -1299,7 +1424,9 @@ def pagina_metricas() -> None:
         # La merma va aparte del desperdicio: el hueso es inevitable, lo que
         # caduca en la cámara no.
         resumen = metricas.resumen_limpiezas(desde, hasta)
-        if not resumen:
+        if tipo == "consumible":
+            st.info("Los consumibles no tienen merma.")
+        elif not resumen:
             st.info("No hay limpiezas registradas en este periodo.")
         else:
             st.metric("Merma total del periodo", f"{metricas.merma_total_kg(desde, hasta)} kg")
@@ -1319,19 +1446,23 @@ def pagina_metricas() -> None:
             st.bar_chart(df_merma)
 
     with tab_consumo:
-        nombre = st.selectbox("Producto", list(inv.productos.keys()), key="metricas_consumo_producto")
-        cantidad = metricas.cantidad_consumida(nombre, desde, hasta)
-        st.metric(f"Consumido de {nombre}", f"{cantidad} {inv.buscar_producto(nombre).unidad}")
+        if not nombres_tipo:
+            st.info("No hay productos en esta lista.")
+        else:
+            nombre = st.selectbox("Producto", nombres_tipo, key="metricas_consumo_producto")
+            cantidad = metricas.cantidad_consumida(nombre, desde, hasta)
+            st.metric(f"Consumido de {nombre}", f"{cantidad} {inv.buscar_producto(nombre).unidad}")
 
     with tab_desperdicio:
-        nombre2 = st.selectbox("Producto", list(inv.productos.keys()), key="metricas_desperdicio_producto")
-        cantidad2 = metricas.cantidad_desperdiciada(nombre2, desde, hasta)
-        st.metric(f"Desperdiciado de {nombre2}", f"{cantidad2} {inv.buscar_producto(nombre2).unidad}")
-        valor_total = metricas.valor_desperdiciado_total(desde, hasta)
-        st.metric("Valor total desperdiciado (todos los productos)", f"{valor_total} €")
+        if nombres_tipo:
+            nombre2 = st.selectbox("Producto", nombres_tipo, key="metricas_desperdicio_producto")
+            cantidad2 = metricas.cantidad_desperdiciada(nombre2, desde, hasta)
+            st.metric(f"Desperdiciado de {nombre2}", f"{cantidad2} {inv.buscar_producto(nombre2).unidad}")
+        valor_total = metricas.valor_desperdiciado_total(desde, hasta, tipo)
+        st.metric("Valor total desperdiciado (toda esta lista)", f"{valor_total} €")
 
     with tab_ranking:
-        ranking = metricas.productos_mas_consumidos(desde, hasta, top=10)
+        ranking = metricas.productos_mas_consumidos(desde, hasta, top=10, tipo=tipo)
         if not ranking:
             st.info("No hay datos de consumo en este periodo.")
         else:
@@ -1340,7 +1471,11 @@ def pagina_metricas() -> None:
             st.dataframe(df_ranking.reset_index(), width="stretch", hide_index=True)
 
     with tab_gasto:
-        gasto = metricas.gasto_por_categoria(desde, hasta)
+        gasto = metricas.gasto_por_categoria(desde, hasta, tipo)
+        por_tipo = metricas.gasto_por_tipo(desde, hasta)
+        st.caption(
+            f"Gasto en compras del periodo: alimentos {por_tipo['alimento']} € · consumibles {por_tipo['consumible']} €"
+        )
         if not gasto:
             st.info("No hay compras registradas en este periodo.")
         else:

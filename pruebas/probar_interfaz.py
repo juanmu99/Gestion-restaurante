@@ -342,6 +342,48 @@ def prueba_lotes(at: AppTest) -> None:
     comprobar([l.id for l in secreto.lotes] == [2, 3], "Quedan los lotes 2 y 3")
 
 
+@prueba("Consumibles")
+def prueba_consumibles(at: AppTest) -> None:
+    ir_a(at, "Inventario")
+    inv = at.session_state["inventario"]
+    at.radio(key="inv_tipo").set_value("🧻 Consumibles").run()
+    comprobar(sin_excepciones(at, "lista de consumibles"), "La lista de consumibles se muestra sin errores")
+    comprobar(at.selectbox(key="editar_select").options == ["Servilletas de papel", "Vasos desechables"],
+              "En la lista de consumibles solo aparecen consumibles")
+
+    v = at.session_state["add_version"]
+    at.text_input(key=f"add_nombre_{v}").input("Film transparente")
+    at.text_input(key=f"add_categoria_{v}").input("Cocina")
+    at.number_input(key=f"add_stock_{v}").set_value(2.0)
+    at.selectbox(key=f"add_unidad_{v}").select("unidades")
+    at.number_input(key=f"add_precio_{v}").set_value(3.5)
+    at.text_input(key=f"add_proveedor_{v}").input("Hostelería Total").run()
+    claves = {w.key for w in at.checkbox}
+    comprobar(f"add_tiene_caducidad_{v}" not in claves and f"add_merma_{v}" not in claves,
+              "Al añadir un consumible no se pide caducidad ni merma")
+    at.button(key=f"add_boton_{v}").click().run()
+    film = inv.buscar_producto("Film transparente")
+    comprobar(film is not None and film.es_consumible() and film.stock == 2, "Se añade como consumible")
+    at.radio(key="inv_tipo").set_value("🍅 Alimentos").run()
+    comprobar("Film transparente" not in at.selectbox(key="editar_select").options,
+              "Y no aparece en la lista de alimentos")
+
+    ir_a(at, "Recetario")
+    comprobar("Servilletas de papel" not in at.selectbox(key="ing_select").options,
+              "Las recetas solo ofrecen alimentos como ingredientes")
+    rec = at.session_state["recetario"]
+    menu = rec.menus["Menú del día"]
+    clave = "menu_Menú del día"
+    at.number_input(key=f"{clave}_cons_Servilletas de papel").set_value(3.0)
+    at.button(key=f"{clave}_guardar").click().run()
+    comprobar(sin_excepciones(at, "editar consumibles del menú") and menu.consumibles_por_comensal.get("Servilletas de papel") == 3,
+              "En el detalle del menú se cambian sus consumibles (3 servilletas por comensal)")
+
+    ir_a(at, "Métricas")
+    at.radio(key="metricas_tipo").set_value("🧻 Consumibles").run()
+    comprobar(sin_excepciones(at, "métricas de consumibles") and not at.error, "Métricas de consumibles sin errores")
+
+
 @prueba("Completar servicio")
 def prueba_completar(at: AppTest) -> None:
     ir_a(at, "Servicios")
@@ -351,8 +393,11 @@ def prueba_completar(at: AppTest) -> None:
         f"#{pendiente.id} - {pendiente.fecha.strftime('%d/%m/%Y')} - {pendiente.menu}"
     ).run()
     boton(at.button, "Completar servicio").click().run()
+    servilletas = at.session_state["inventario"].buscar_producto("Servilletas de papel")
     comprobar(sin_excepciones(at, "completar servicio") and pendiente.estado == "completado",
               "Servicio completado desde la interfaz")
+    comprobar(servilletas.stock == 500 - 3 * pendiente.comensales,
+              f"También descuenta los consumibles del menú (quedan {servilletas.stock} servilletas)")
 
 
 @prueba("Completar servicio eligiendo lotes")
@@ -458,6 +503,7 @@ def main() -> int:
     prueba_limpiar(at)
     prueba_editar(at)
     prueba_lotes(at)
+    prueba_consumibles(at)
     prueba_completar(at)
     prueba_completar_lotes(at)
     prueba_compras(at)

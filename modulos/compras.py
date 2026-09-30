@@ -105,7 +105,8 @@ class GestorCompras:
             if menu is None:
                 print(f"⚠️  Menú '{servicio.menu}' no encontrado, se omite el servicio #{servicio.id}")
                 continue
-            necesidades = menu.calcular_ingredientes_totales(servicio.comensales)
+            # Ingredientes Y consumibles: los dos se compran.
+            necesidades = menu.calcular_necesidades_totales(servicio.comensales)
             for ingrediente, cantidad in necesidades.items():
                 necesidades_acumuladas[ingrediente] = round(
                     necesidades_acumuladas.get(ingrediente, 0) + cantidad, 3

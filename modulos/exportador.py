@@ -45,7 +45,7 @@ def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
     hoja = wb.create_sheet("Inventario")
     columnas = ["Nombre", "Categoría", "Stock", "Unidad", "Precio medio (€)",
                 "Valor total (€)", "Proveedor habitual", "Stock mínimo", "Próxima caducidad",
-                "Tipo", "Peso medio por unidad en bruto (kg)", "Lotes"]
+                "Tipo", "Peso medio por unidad en bruto (kg)", "Lotes", "Clase"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -64,6 +64,8 @@ def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
         hoja.cell(row=fila, column=10, value=producto.tipo_descripcion() or "—").font = Font(name=FUENTE)
         hoja.cell(row=fila, column=11, value=producto.peso_unitario or "—").font = Font(name=FUENTE)
         hoja.cell(row=fila, column=12, value=len(producto.lotes)).font = Font(name=FUENTE)
+        clase = "Consumible" if producto.es_consumible() else "Alimento"
+        hoja.cell(row=fila, column=13, value=clase).font = Font(name=FUENTE)
         fila += 1
 
     if fila > 2:

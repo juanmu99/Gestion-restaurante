@@ -80,6 +80,28 @@ def main() -> int:
                     except Exception as e:  # noqa: BLE001
                         errores.append(f"Inventario > {pestana}: {e}")
                     numero += 1
+                try:
+                    page.get_by_text("🧻 Consumibles", exact=True).first.click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario consumibles")), full_page=True)
+                    print("📸 Inventario > Consumibles")
+                    page.get_by_text("🍅 Alimentos", exact=True).first.click()
+                    esperar(page)
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Inventario > Consumibles: {e}")
+                numero += 1
+
+            if pagina == "Recetario":
+                try:
+                    page.get_by_role("tab", name="Menús").click()
+                    esperar(page)
+                    page.get_by_text("🔎 Ver detalle del menú").first.click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "recetario detalle menu")), full_page=True)
+                    print("📸 Recetario > Detalle de menú")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Recetario > Detalle de menú: {e}")
+                numero += 1
 
         navegador.close()
 

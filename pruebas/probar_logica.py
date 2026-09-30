@@ -1,13 +1,14 @@
 """
-pruebas/probar_lotes.py
--------------------------
-Prueba la LÓGICA de los lotes (sin interfaz): entradas, salidas de un lote
-elegido, desechar lotes caducados, limpiezas por lote, completar servicios
-eligiendo lotes, guardar/cargar y la conversión de sesiones antiguas.
+pruebas/probar_logica.py
+--------------------------
+Prueba la LÓGICA del programa (sin interfaz): lotes (entradas, salidas de
+un lote elegido, desechar caducados, limpiezas por lote, completar
+servicios eligiendo lotes, guardar/cargar, sesiones antiguas) y
+consumibles.
 
 Es un script normal de Python (sin pytest). Se ejecuta en GitHub Actions
 junto a las pruebas de la interfaz, y también a mano:
-    python pruebas/probar_lotes.py
+    python pruebas/probar_logica.py
 """
 
 import io
@@ -192,6 +193,68 @@ with tempfile.TemporaryDirectory() as carpeta:
     libro = load_workbook(ruta)
     comprobar("Lotes" in libro.sheetnames and libro["Lotes"].max_row == 4,
               "El Excel tiene una hoja 'Lotes' con un renglón por lote (+ cabecera y total)")
+
+print("\n--- Consumibles ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Pan", "Panadería", 5, "unidades", 0.5, "Horno"))
+silencio(inv.agregar_producto, Producto(
+    "Servilletas", "Desechables", 100, "unidades", 0.02, "Hostelería", stock_minimo=50,
+    fecha_caducidad=HOY + timedelta(days=3), tipo="consumible",
+))
+serv_prod = inv.buscar_producto("Servilletas")
+comprobar(serv_prod.es_consumible() and serv_prod.fecha_caducidad is None, "Un consumible no guarda caducidad")
+try:
+    Producto("Film", "Desechables", 1, "kg", 5, "Hostelería", tiene_merma=True, tipo="consumible")
+    comprobar(False, "Un consumible no puede tener merma")
+except ValueError:
+    comprobar(True, "Un consumible no puede tener merma")
+silencio(inv.entrada_stock, "Servilletas", 200, precio_unitario=0.01, fecha_caducidad=HOY + timedelta(days=3))
+comprobar(serv_prod.lotes[-1].fecha_caducidad is None, "Sus compras tampoco guardan caducidad")
+comprobar([p.nombre for p in inv.alimentos()] == ["Pan"] and [p.nombre for p in inv.consumibles()] == ["Servilletas"],
+          "Alimentos y consumibles se listan por separado")
+
+recetario = Recetario()
+silencio(recetario.agregar_receta, Receta("Bocadillo", "Principal", {"Pan": 1}))
+menu = Menu("Picnic", [recetario.recetas["Bocadillo"]], {"Servilletas": 2})
+silencio(recetario.agregar_menu, menu)
+comprobar(menu.ingredientes_por_comensal() == {"Pan": 1}, "A simple vista, el menú solo muestra sus ingredientes")
+comprobar(menu.calcular_necesidades_totales(4) == {"Pan": 4, "Servilletas": 8}, "Las necesidades suman comida y consumibles")
+comprobar(menu.costo_consumibles_por_comensal(inv) > 0 and menu.costo_por_comensal(inv) == 0.5,
+          "El coste de la comida y el de los consumibles se calculan por separado")
+servicio = Servicio(HOY, time(14, 0), 4, "Picnic")
+silencio(recetario.completar_servicio, servicio, inv, {"Servilletas": [1]})
+comprobar(serv_prod.stock == 292 and inv.buscar_producto("Pan").stock == 1,
+          "Completar el servicio descuenta también los consumibles (8 servilletas)")
+comprobar(inv.historial[-1].tipo_producto in ("alimento", "consumible")
+          and any(m.tipo_producto == "consumible" and m.motivo == "consumo" for m in inv.historial),
+          "El historial sabe qué movimientos son de consumibles")
+gasto = Metricas(inv).gasto_por_tipo(HOY, HOY)
+comprobar(gasto == {"alimento": 0, "consumible": 2.0}, f"El gasto se separa en alimentos y consumibles ({gasto})")
+
+gestor = GestorCompras()
+grande = Servicio(HOY + timedelta(days=1), time(14, 0), 200, "Picnic")
+silencio(gestor.generar_lista_desde_servicios, [grande], recetario, inv)
+comprobar(any(i.ingrediente == "Servilletas" and i.cantidad == 108 for i in gestor.items),
+          "La lista de la compra incluye los consumibles que faltan (400 - 292 = 108)")
+
+actualizados = recetario.renombrar_producto("Servilletas", "Servilletas blancas")
+comprobar("Servilletas blancas" in menu.consumibles_por_comensal and actualizados == ["menú Picnic"],
+          "Renombrar un consumible lo actualiza en los menús")
+
+copia = Recetario.from_dict(recetario.to_dict())
+comprobar(copia.menus["Picnic"].consumibles_por_comensal == {"Servilletas blancas": 2},
+          "Los consumibles del menú se guardan y se cargan")
+comprobar(Inventario.from_dict(inv.to_dict()).buscar_producto("Servilletas").tipo == "consumible",
+          "El tipo del producto se guarda y se carga")
+
+silencio(inv.agregar_producto, Producto("Guantes", "Limpieza", 10, "unidades", 0.1, "Hostelería",
+                                        fecha_caducidad=HOY + timedelta(days=90)))
+silencio(inv.salida_stock, "Guantes", 2, "consumo", 1)
+silencio(inv.editar_producto, "Guantes", tipo="consumible")
+guantes = inv.buscar_producto("Guantes")
+comprobar(guantes.es_consumible() and guantes.fecha_caducidad is None
+          and all(m.tipo_producto == "consumible" for m in inv.historial if m.producto_nombre == "Guantes"),
+          "Corregir el tipo a consumible quita la caducidad y pasa su historial a consumibles")
 
 print()
 if fallos:

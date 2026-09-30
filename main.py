@@ -274,6 +274,17 @@ def pedir_lote(producto, mensaje: str, lotes: Optional[list] = None, sugerir: bo
         print(f"⚠️  Escribe uno de estos números de lote: {', '.join(numeros)}")
 
 
+def listar_inventario() -> None:
+    """Lista el inventario en dos bloques separados: alimentos y consumibles."""
+    for titulo, productos in (("🍅 ALIMENTOS", inventario.alimentos()), ("🧻 CONSUMIBLES", inventario.consumibles())):
+        print(f"\n{titulo}")
+        if not productos:
+            print("   (ninguno)")
+        for producto in productos:
+            print(producto)
+            mostrar_lotes(producto)
+
+
 def mostrar_lotes(producto, lotes: Optional[list] = None) -> None:
     for lote in producto.lotes_ordenados() if lotes is None else lotes:
         aviso = "  ⚠️ CADUCADO" if lote.esta_caducado() else ""
@@ -284,7 +295,9 @@ def pedir_datos_entrada(producto) -> dict:
     """Pide los datos de un lote NUEVO (compra): precio, proveedor, caducidad y, si hace falta, peso por unidad."""
     precio = pedir_numero_opcional(f"Precio de este lote [{producto.precio_referencia} €]: ")
     proveedor = pedir_texto_no_numerico_opcional(f"Proveedor de este lote [{producto.proveedor}]: ")
-    fecha = pedir_fecha("Fecha de caducidad de este lote") if pedir_si_no("¿Este lote tiene fecha de caducidad?") else None
+    fecha = None
+    if not producto.es_consumible() and pedir_si_no("¿Este lote tiene fecha de caducidad?"):
+        fecha = pedir_fecha("Fecha de caducidad de este lote")
     return {"precio_unitario": precio, "proveedor": proveedor, "fecha_caducidad": fecha,
             "peso_unitario": pedir_peso_lote(producto)}
 
@@ -311,27 +324,29 @@ def menu_inventario():
         opcion = pedir_texto("Elige una opción: ")
 
         if opcion == "1":
-            inventario.listar_todos()
+            listar_inventario()
         elif opcion == "2":
+            tipo = pedir_opcion("¿Qué es?", Producto.TIPOS)
             nombre = pedir_texto("Nombre: ")
             categoria = pedir_texto_no_numerico("Categoría: ")
             stock = pedir_numero("Stock inicial (será su primer lote): ")
             unidad = pedir_opcion("Unidad", Producto.UNIDADES_VALIDAS)
             tiene_merma = False
             peso_unitario = None
-            if unidad in UNIDADES_PESO + ("unidades",):
+            if unidad in UNIDADES_PESO + ("unidades",) and tipo == "alimento":
                 tiene_merma = pedir_si_no("¿Es un producto con merma (se limpia o despieza antes de usarse)?")
                 if tiene_merma and unidad == "unidades":
                     peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
             precio = pedir_numero(f"Precio (€ por {'unidad' if unidad == 'unidades' else unidad}): ")
             proveedor = pedir_texto_no_numerico("Proveedor habitual: ")
             stock_minimo = pedir_numero("Stock mínimo: ")
-            tiene_caducidad = pedir_si_no("¿Tiene fecha de caducidad?")
-            fecha_caducidad = pedir_fecha("Fecha de caducidad") if tiene_caducidad else None
+            fecha_caducidad = None
+            if tipo == "alimento" and stock > 0 and pedir_si_no("¿Este primer lote tiene fecha de caducidad?"):
+                fecha_caducidad = pedir_fecha("Fecha de caducidad")
             try:
                 inventario.agregar_producto(Producto(
                     nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad,
-                    tiene_merma=tiene_merma, peso_unitario=peso_unitario,
+                    tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo,
                 ))
             except ValueError as e:
                 print(f"❌ {e}")
@@ -384,20 +399,18 @@ def menu_inventario():
                 # de verdad más abajo, pero solo si el renombrado en el
                 # inventario tiene éxito (podría abortarse, por ejemplo,
                 # si el nombre nuevo ya lo usa otro producto).
-                recetas_afectadas = []
-                if nuevo_nombre and nuevo_nombre != producto.nombre:
-                    recetas_afectadas = [
-                        r for r in recetario.recetas.values()
-                        if producto.nombre in r.ingredientes_por_comensal
-                    ]
-
+                tipo = pedir_texto(f"Tipo (alimento/consumible) [{producto.tipo}]: ").lower() or None
+                if tipo is not None and tipo not in Producto.TIPOS:
+                    print("⚠️  Tipo no válido, se mantiene el actual.")
+                    tipo = None
+                es_consumible = (tipo or producto.tipo) == "consumible"
                 categoria = pedir_texto_no_numerico_opcional(f"Nueva categoría [{producto.categoria}]: ")
                 proveedor = pedir_texto_no_numerico_opcional(f"Nuevo proveedor habitual [{producto.proveedor}]: ")
                 stock_minimo = pedir_numero_opcional(f"Nuevo stock mínimo [{producto.stock_minimo}]: ")
 
                 tiene_merma = None
                 peso_unitario = None
-                if producto.unidad in UNIDADES_PESO + ("unidades",):
+                if producto.unidad in UNIDADES_PESO + ("unidades",) and not es_consumible:
                     actual = "sí" if producto.tiene_merma else "no"
                     tiene_merma = pedir_si_no_opcional(f"¿Producto con merma? [actual: {actual}]")
                     merma_final = producto.tiene_merma if tiene_merma is None else tiene_merma
@@ -421,7 +434,7 @@ def menu_inventario():
                     else:
                         print(f"Este producto tiene {len(producto.lotes)} lotes:")
                         lote = pedir_lote(producto, "¿Cuál corriges?")
-                    correccion = pedir_correccion_lote(lote)
+                    correccion = pedir_correccion_lote(lote, pedir_caducidad=not es_consumible)
 
                 nombre_original = producto.nombre
                 try:
@@ -433,6 +446,7 @@ def menu_inventario():
                         stock_minimo=stock_minimo,
                         tiene_merma=tiene_merma,
                         peso_unitario=peso_unitario,
+                        tipo=tipo,
                     )
                     if exito and lote is not None:
                         inventario.editar_lote(producto.nombre, lote.id, **correccion)
@@ -440,17 +454,12 @@ def menu_inventario():
                     print(f"❌ {e}")
                     exito = False
 
-                if exito and recetas_afectadas:
-                    # Renombramos la CLAVE del ingrediente en cada receta
-                    # afectada, conservando su cantidad. Los Menu que usan
-                    # estas recetas NO necesitan tocarse: solo guardan una
-                    # REFERENCIA al objeto Receta, no una copia, así que
-                    # ven el cambio automáticamente.
-                    for receta in recetas_afectadas:
-                        cantidad = receta.ingredientes_por_comensal.pop(nombre_original)
-                        receta.ingredientes_por_comensal[nuevo_nombre] = cantidad
-                    nombres = ", ".join(r.nombre for r in recetas_afectadas)
-                    print(f"🔄 Recetas actualizadas automáticamente: {nombres}")
+                if exito and producto.nombre != nombre_original:
+                    # El nombre también se usa en recetas (ingredientes) y
+                    # menús (consumibles): se actualizan conservando las cantidades.
+                    actualizados = recetario.renombrar_producto(nombre_original, producto.nombre)
+                    if actualizados:
+                        print(f"🔄 Recetas y menús actualizados automáticamente: {', '.join(actualizados)}")
         elif opcion == "7":
             accion_limpiar_producto()
         elif opcion == "8":
@@ -464,16 +473,18 @@ def menu_inventario():
         pausa()
 
 
-def pedir_correccion_lote(lote) -> dict:
+def pedir_correccion_lote(lote, pedir_caducidad: bool = True) -> dict:
     """Pide las correcciones de un lote (vacío = no cambiar). Devuelve los argumentos para editar_lote()."""
     print("Corregir no es un movimiento de stock (no queda en el historial). Deja vacío lo que no cambie.")
     print("Si algo se ha gastado o tirado, regístralo como salida (opción 3). Cantidad 0 = eliminar el lote.")
     cantidad = pedir_numero_opcional(f"Cantidad [{lote.cantidad}]: ")
     precio = pedir_numero_opcional(f"Precio [{lote.precio_unitario}]: ")
     proveedor = pedir_texto_no_numerico_opcional(f"Proveedor de esta compra [{lote.proveedor}]: ")
-    fecha_actual = lote.fecha_caducidad.strftime("%d/%m/%Y") if lote.fecha_caducidad else "sin fecha"
-    accion_fecha = pedir_opcion(f"Caducidad (ahora: {fecha_actual})", ("mantener", "cambiar", "borrar"))
-    fecha = pedir_fecha("Nueva fecha de caducidad") if accion_fecha == "cambiar" else None
+    accion_fecha, fecha = "mantener", None
+    if pedir_caducidad:
+        fecha_actual = lote.fecha_caducidad.strftime("%d/%m/%Y") if lote.fecha_caducidad else "sin fecha"
+        accion_fecha = pedir_opcion(f"Caducidad (ahora: {fecha_actual})", ("mantener", "cambiar", "borrar"))
+        fecha = pedir_fecha("Nueva fecha de caducidad") if accion_fecha == "cambiar" else None
     return {"cantidad": cantidad, "precio_unitario": precio, "proveedor": proveedor,
             "fecha_caducidad": fecha, "borrar_fecha_caducidad": accion_fecha == "borrar"}
 
@@ -697,6 +708,49 @@ def pedir_lotes_servicio(servicio: Servicio, filas: list[dict]) -> dict[str, lis
 
 # ---------- Menú: Recetario ----------
 
+def pedir_consumibles_menu(actuales: Optional[dict] = None) -> dict:
+    """Pide los consumibles por comensal de un menú (nombre vacío para terminar)."""
+    consumibles = dict(actuales or {})
+    if not inventario.consumibles():
+        return consumibles
+    print("Consumibles por comensal (servilletas, vasos desechables...). Nombre vacío para terminar.")
+    print(f"Disponibles: {', '.join(p.nombre for p in inventario.consumibles())}")
+    while True:
+        nombre = pedir_texto("  Consumible: ")
+        if not nombre:
+            return consumibles
+        producto = inventario.buscar_producto(nombre)
+        if producto is None or not producto.es_consumible():
+            print(f"⚠️  '{nombre}' no es un consumible del inventario.")
+            continue
+        cantidad = pedir_numero(f"  Cantidad por comensal ({producto.unidad}, 0 para quitarlo): ")
+        if cantidad > 0:
+            consumibles[producto.nombre] = cantidad
+        else:
+            consumibles.pop(producto.nombre, None)
+
+
+def mostrar_detalle_menu(nombre_menu: str) -> None:
+    menu = recetario.buscar_menu(nombre_menu)
+    print(f"\n=== {menu.nombre} ===")
+    for receta in menu.recetas:
+        print(f"🍽️  {receta.nombre} ({receta.categoria}) - {receta.costo_por_comensal(inventario)}€/comensal")
+        for nombre, cantidad in receta.ingredientes_por_comensal.items():
+            producto = inventario.buscar_producto(nombre)
+            print(f"     · {nombre}: {cantidad} {producto.unidad if producto else ''} por comensal")
+    print("🧻 Consumibles:")
+    if not menu.consumibles_por_comensal:
+        print("     (ninguno)")
+    for nombre, cantidad in menu.consumibles_por_comensal.items():
+        producto = inventario.buscar_producto(nombre)
+        print(f"     · {nombre}: {cantidad} {producto.unidad if producto else ''} por comensal")
+    comida = menu.costo_por_comensal(inventario)
+    consumibles = menu.costo_consumibles_por_comensal(inventario)
+    print(f"Coste por comensal: comida {comida}€ + consumibles {consumibles}€ = {round(comida + consumibles, 2)}€")
+    if inventario.consumibles() and pedir_si_no("¿Cambiar los consumibles de este menú?"):
+        menu.consumibles_por_comensal = pedir_consumibles_menu(menu.consumibles_por_comensal)
+
+
 def menu_recetario():
     while True:
         print("\n--- RECETARIO ---")
@@ -718,13 +772,16 @@ def menu_recetario():
             if not recetario.menus:
                 print("No hay menús todavía.")
             for m in recetario.menus.values():
-                print(f"{m} | Coste/comensal: {m.costo_por_comensal(inventario)}€")
+                ingredientes = ", ".join(f"{n} {round(c, 3)}" for n, c in m.ingredientes_por_comensal().items())
+                print(f"{m.nombre} | Comida: {m.costo_por_comensal(inventario)}€/comensal | Ingredientes por comensal: {ingredientes}")
+            if recetario.menus and pedir_si_no("¿Ver el detalle de algún menú?"):
+                mostrar_detalle_menu(pedir_opcion("Menú", tuple(recetario.menus)))
         elif opcion == "3":
             nombre = pedir_texto("Nombre de la receta: ")
             categoria = pedir_texto("Categoría: ")
             ingredientes = {}
-            if not inventario.productos:
-                print("⚠️  El inventario está vacío. Añade productos primero (menú Inventario).")
+            if not inventario.alimentos():
+                print("⚠️  No hay alimentos en el inventario. Añade productos primero (menú Inventario).")
             print("Añade ingredientes uno a uno (nombre vacío para terminar).")
             print("Deben ser productos que YA existan en el inventario (nombre exacto).")
             while True:
@@ -734,6 +791,9 @@ def menu_recetario():
                 producto = inventario.buscar_producto(ing)
                 if producto is None:
                     print(f"⚠️  '{ing}' no existe en el inventario. Revisa el nombre exacto o añádelo primero.")
+                    continue
+                if producto.es_consumible():
+                    print(f"⚠️  '{ing}' es un consumible: los consumibles se añaden al menú, no a la receta.")
                     continue
                 ingredientes[producto.nombre] = pedir_cantidad_ingrediente(producto)
             recetario.agregar_receta(Receta(nombre, categoria, ingredientes))
@@ -752,7 +812,7 @@ def menu_recetario():
                     else:
                         recetas_menu.append(receta)
                 if recetas_menu:
-                    recetario.agregar_menu(Menu(nombre_menu, recetas_menu))
+                    recetario.agregar_menu(Menu(nombre_menu, recetas_menu, pedir_consumibles_menu()))
         elif opcion == "5":
             pan_casero = Receta("Pan casero", "Panadería", {"Harina de trigo": 0.15, "Aceite de oliva": 0.01})
             ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
@@ -911,6 +971,15 @@ def accion_cargar_datos_ejemplo():
     )
     secreto.nuevo_lote(0.8, 15, "Ibéricos Sierra", hoy + timedelta(days=9), procedencia="inicial")
     inventario.agregar_producto(secreto)
+    # Consumibles: se gastan pero no se comen (lista aparte, sin caducidad).
+    inventario.agregar_producto(Producto(
+        "Servilletas de papel", "Desechables", 500, "unidades", 0.02, "Hostelería Total", stock_minimo=200,
+        tipo="consumible",
+    ))
+    inventario.agregar_producto(Producto(
+        "Vasos desechables", "Desechables", 150, "unidades", 0.05, "Hostelería Total", stock_minimo=100,
+        tipo="consumible",
+    ))
 
     registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=3), time(21, 0), 8, "Menú del día"))
     registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=16), time(21, 0), 12, "Menú de bodas"))
@@ -919,7 +988,7 @@ def accion_cargar_datos_ejemplo():
     ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
     recetario.agregar_receta(pan_casero)
     recetario.agregar_receta(ensalada)
-    recetario.agregar_menu(Menu("Menú del día", [pan_casero, ensalada]))
+    recetario.agregar_menu(Menu("Menú del día", [pan_casero, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1}))
 
     print("✅ Datos de ejemplo cargados en los 4 módulos.")
 

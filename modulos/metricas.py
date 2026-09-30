@@ -77,8 +77,15 @@ class Metricas:
     def __init__(self, inventario: Inventario):
         self.inventario = inventario
 
-    def _en_rango(self, fecha_inicio: date, fecha_fin: date) -> list[MovimientoStock]:
-        return [m for m in self.inventario.historial if fecha_inicio <= m.fecha <= fecha_fin]
+    def _en_rango(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> list[MovimientoStock]:
+        """
+        Movimientos entre dos fechas. `tipo` ("alimento" o "consumible")
+        deja solo los de ese tipo de producto; None = todos.
+        """
+        return [
+            m for m in self.inventario.historial
+            if fecha_inicio <= m.fecha <= fecha_fin and (tipo is None or m.tipo_producto == tipo)
+        ]
 
     def cantidad_consumida(self, producto_nombre: str, fecha_inicio: date, fecha_fin: date) -> float:
         """Cuánto se ha CONSUMIDO (no desperdiciado) de un producto en el rango dado."""
@@ -94,15 +101,17 @@ class Metricas:
             if m.producto_nombre == producto_nombre and m.tipo == "salida" and m.motivo == "desperdicio"
         ), 3)
 
-    def productos_mas_consumidos(self, fecha_inicio: date, fecha_fin: date, top: int = 5) -> list[tuple[str, float]]:
+    def productos_mas_consumidos(
+        self, fecha_inicio: date, fecha_fin: date, top: int = 5, tipo: Optional[str] = None
+    ) -> list[tuple[str, float]]:
         """Ranking de productos por cantidad CONSUMIDA (no desperdiciada), de mayor a menor."""
         acumulado: dict[str, float] = {}
-        for m in self._en_rango(fecha_inicio, fecha_fin):
+        for m in self._en_rango(fecha_inicio, fecha_fin, tipo):
             if m.tipo == "salida" and m.motivo == "consumo":
                 acumulado[m.producto_nombre] = round(acumulado.get(m.producto_nombre, 0) + m.cantidad, 3)
         return sorted(acumulado.items(), key=lambda par: par[1], reverse=True)[:top]
 
-    def gasto_por_categoria(self, fecha_inicio: date, fecha_fin: date) -> dict[str, float]:
+    def gasto_por_categoria(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> dict[str, float]:
         """
         Dinero gastado (COMPRAS) agrupado por categoría, en el rango dado.
 
@@ -110,7 +119,7 @@ class Metricas:
         se pagó al comprar la pata, y contarla otra vez duplicaría el gasto.
         """
         gasto: dict[str, float] = {}
-        for m in self._en_rango(fecha_inicio, fecha_fin):
+        for m in self._en_rango(fecha_inicio, fecha_fin, tipo):
             if m.es_compra():
                 gasto[m.categoria] = round(gasto.get(m.categoria, 0) + m.valor(), 2)
         return gasto
@@ -143,10 +152,17 @@ class Metricas:
     def merma_total_kg(self, fecha_inicio: date, fecha_fin: date) -> float:
         return round(sum(f["merma_kg"] for f in self.resumen_limpiezas(fecha_inicio, fecha_fin).values()), 3)
 
-    def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date) -> float:
+    def gasto_por_tipo(self, fecha_inicio: date, fecha_fin: date) -> dict[str, float]:
+        """Dinero gastado en compras, separado en alimentos y consumibles."""
+        return {
+            tipo: round(sum(self.gasto_por_categoria(fecha_inicio, fecha_fin, tipo).values()), 2)
+            for tipo in ("alimento", "consumible")
+        }
+
+    def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> float:
         """Valor económico estimado de TODO lo desperdiciado (todas las categorías) en el rango dado."""
         return round(sum(
-            m.valor() for m in self._en_rango(fecha_inicio, fecha_fin)
+            m.valor() for m in self._en_rango(fecha_inicio, fecha_fin, tipo)
             if m.tipo == "salida" and m.motivo == "desperdicio"
         ), 2)
 
