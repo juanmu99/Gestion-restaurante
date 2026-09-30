@@ -405,7 +405,7 @@ class Recetario:
 
         for fila in filas:
             if fila["reparto"]:
-                inventario.salida_repartida(fila["ingrediente"], fila["reparto"], "consumo")
+                inventario.salida_repartida(fila["ingrediente"], fila["reparto"], "consumo", servicio.id)
         servicio.completar()
         return filas
 

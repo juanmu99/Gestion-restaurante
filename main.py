@@ -31,6 +31,7 @@ from compras import GestorCompras, ItemCompra
 from dashboard import Dashboard
 from exportador import exportar_todo
 from persistencia import guardar_sesion, cargar_sesion
+from gastos import Gasto, RegistroGastos, resumen_servicio
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -60,6 +61,7 @@ recetario = Recetario()
 gestor_compras = GestorCompras()
 dashboard = Dashboard(inventario, registro_servicios, gestor_compras)
 archivo_informes = ArchivoInformes()
+registro_gastos = RegistroGastos()
 
 ultima_exportacion: str | None = None  # ruta del último Excel generado
 
@@ -621,9 +623,10 @@ def menu_servicios():
             comensales = pedir_entero("Número de comensales: ")
             menu_nombre = pedir_texto("Nombre del menú: ")
             notas = pedir_texto("Notas (opcional): ")
+            precio_cobrado = pedir_precio_cobro(comensales)
             try:
                 registro_servicios.agregar_servicio(
-                    Servicio(fecha, hora, comensales, menu_nombre, notas)
+                    Servicio(fecha, hora, comensales, menu_nombre, notas, precio_cobrado=precio_cobrado)
                 )
             except ValueError as e:
                 print(f"❌ {e}")
@@ -909,13 +912,17 @@ def menu_compras():
 def accion_exportar_excel():
     global ultima_exportacion
     carpeta_datos = str(_carpeta_base() / "datos")
-    ruta = exportar_todo(inventario, registro_servicios, gestor_compras, carpeta_datos)
+    ruta = exportar_todo(
+        inventario, registro_servicios, gestor_compras, carpeta_datos, registro_gastos, recetario,
+    )
     ultima_exportacion = ruta
     print(f"✅ Exportado a: {ruta}")
 
 
 def accion_guardar_sesion():
-    guardar_sesion(inventario, registro_servicios, recetario, gestor_compras, archivo_informes, RUTA_SESION)
+    guardar_sesion(
+        inventario, registro_servicios, recetario, gestor_compras, archivo_informes, RUTA_SESION, registro_gastos,
+    )
 
 
 def accion_cargar_sesion():
@@ -924,13 +931,14 @@ def accion_cargar_sesion():
     # o modificar algo dentro de ellas. Sin `global`, Python entendería que
     # estamos creando variables LOCALES nuevas dentro de esta función, y
     # las de fuera (las que usa el resto del programa) no cambiarían.
-    global inventario, registro_servicios, recetario, gestor_compras, dashboard, archivo_informes
+    global inventario, registro_servicios, recetario, gestor_compras, dashboard, archivo_informes, registro_gastos
 
-    resultado = cargar_sesion(RUTA_SESION)
-    if resultado is None:
+    sesion = cargar_sesion(RUTA_SESION)
+    if sesion is None:
         return
 
-    inventario, registro_servicios, recetario, gestor_compras, archivo_informes = resultado
+    inventario, registro_servicios, recetario = sesion.inventario, sesion.registro_servicios, sesion.recetario
+    gestor_compras, archivo_informes, registro_gastos = sesion.gestor_compras, sesion.archivo_informes, sesion.registro_gastos
     # El Dashboard guarda referencias a los objetos antiguos, así que hay
     # que reconstruirlo con los nuevos o seguiría mostrando datos viejos.
     dashboard = Dashboard(inventario, registro_servicios, gestor_compras)
@@ -1088,6 +1096,99 @@ def menu_metricas():
         pausa()
 
 
+def pedir_precio_cobro(comensales: int) -> Optional[float]:
+    """Precio de cobro de un servicio: opcional. Devuelve el total del servicio, o None si no se indica."""
+    precio = pedir_numero_opcional("Precio de cobro en € (opcional, vacío para no indicarlo): ")
+    if not precio:
+        return None
+    forma = pedir_opcion("¿Ese precio es el total o por comensal?", ("total", "comensal"))
+    return round(precio * comensales, 2) if forma == "comensal" else precio
+
+
+def pedir_servicio_opcional() -> Optional[int]:
+    """Número de servicio al que asociar algo, o None para 'general'."""
+    for s in sorted(registro_servicios.servicios, key=lambda s: (s.fecha, s.hora)):
+        if s.estado != "cancelado":
+            print(f"   {s}")
+    while True:
+        valor = input("Nº de servicio (vacío = gasto general del negocio): ").strip().lstrip("#")
+        if valor == "":
+            return None
+        if valor.isdigit() and registro_servicios.buscar_por_id(int(valor)):
+            return int(valor)
+        print("⚠️  Escribe el número de uno de los servicios de la lista, o déjalo vacío.")
+
+
+def texto_euros(valor) -> str:
+    return "—" if valor is None else f"{valor:.2f}€"
+
+
+def menu_gastos():
+    while True:
+        print("\n--- GASTOS Y RENTABILIDAD ---")
+        print("1. Registrar gasto (gasolina, personal, alquiler...)")
+        print("2. Ver gastos")
+        print("3. Eliminar un gasto")
+        print("4. Rentabilidad de los servicios")
+        print("5. Poner o cambiar el precio de cobro de un servicio")
+        print("0. Volver")
+        opcion = pedir_texto("Elige una opción: ")
+
+        if opcion == "1":
+            concepto = pedir_texto("Concepto (ej: Gasolina boda García): ")
+            categoria = pedir_opcion("Categoría", Gasto.CATEGORIAS)
+            importe = pedir_numero("Importe (€): ")
+            fecha = pedir_fecha("Fecha") if pedir_si_no("¿Es de otro día (no de hoy)?") else None
+            servicio_id = pedir_servicio_opcional()
+            notas = pedir_texto("Notas (opcional): ")
+            try:
+                registro_gastos.agregar_gasto(Gasto(concepto, categoria, importe, fecha, servicio_id, notas))
+            except ValueError as e:
+                print(f"❌ {e}")
+        elif opcion == "2":
+            periodo = pedir_opcion("Periodo", PERIODOS_VALIDOS)
+            desde, hasta = rango_desde_periodo(periodo)
+            lista = registro_gastos.gastos_en_rango(desde, hasta)
+            if not lista:
+                print("No hay gastos en ese periodo.")
+            for g in lista:
+                print(g)
+            for categoria, total in registro_gastos.total_por_categoria(desde, hasta).items():
+                print(f"   {categoria}: {total:.2f}€")
+        elif opcion == "3":
+            for g in registro_gastos.gastos:
+                print(g)
+            if registro_gastos.gastos:
+                registro_gastos.eliminar_gasto(pedir_entero("Nº del gasto a eliminar: "))
+        elif opcion == "4":
+            servicios = [s for s in registro_servicios.servicios if s.estado != "cancelado"]
+            if not servicios:
+                print("No hay servicios.")
+            for s in sorted(servicios, key=lambda s: (s.fecha, s.hora)):
+                r = resumen_servicio(s, inventario, recetario, registro_gastos)
+                estimado = " (estimado)" if r["estimado"] else ""
+                porcentaje = f" ({r['margen_porcentaje']:.0%})" if r["margen_porcentaje"] is not None else ""
+                print(
+                    f"#{s.id} {s.fecha.strftime('%d/%m/%Y')} {s.menu}: coste {texto_euros(r['coste_total'])}{estimado} "
+                    f"[comida {r['comida']:.2f} + consumibles {r['consumibles']:.2f} + gastos {r['gastos']:.2f}] | "
+                    f"cobro {texto_euros(r['cobrado'])} | margen {texto_euros(r['margen'])}{porcentaje}"
+                )
+        elif opcion == "5":
+            id_servicio = pedir_entero("Nº del servicio: ")
+            servicio = registro_servicios.buscar_por_id(id_servicio)
+            if servicio is None:
+                print(f"❌ No existe el servicio #{id_servicio}")
+            else:
+                print(f"Precio actual: {texto_euros(servicio.precio_cobrado)}")
+                servicio.precio_cobrado = pedir_precio_cobro(servicio.comensales)
+                print(f"✅ Precio de cobro: {texto_euros(servicio.precio_cobrado)}")
+        elif opcion == "0":
+            return
+        else:
+            print("⚠️  Opción no válida.")
+        pausa()
+
+
 def menu_principal():
     while True:
         print("\n" + "=" * 40)
@@ -1104,6 +1205,7 @@ def menu_principal():
         print("9. Métricas")
         print("10. Guardar sesión")
         print("11. Cargar sesión")
+        print("12. Gastos y rentabilidad")
         print("0. Salir")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1135,6 +1237,8 @@ def menu_principal():
         elif opcion == "11":
             accion_cargar_sesion()
             pausa()
+        elif opcion == "12":
+            menu_gastos()
         elif opcion == "0":
             respuesta = pedir_texto("¿Guardar sesión antes de salir? (s/n): ").strip().lower()
             if respuesta == "s":

@@ -92,6 +92,7 @@ class MovimientoStock:
         lote_id: Optional[int] = None,
         lote: Optional[str] = None,
         tipo_producto: str = "alimento",
+        servicio_id: Optional[int] = None,
     ):
         if tipo not in ("entrada", "salida"):
             raise ValueError("tipo debe ser 'entrada' o 'salida'")
@@ -118,6 +119,9 @@ class MovimientoStock:
         # Foto del tipo de producto ("alimento"/"consumible"), para poder
         # separarlos en Métricas.
         self.tipo_producto = tipo_producto
+        # Si salió para un servicio (al completarlo), su número: así se sabe
+        # lo que costó de verdad cada servicio.
+        self.servicio_id = servicio_id
 
     def es_compra(self) -> bool:
         """True solo para entradas que son dinero gastado (no para lo que sale de una limpieza)."""
@@ -149,6 +153,7 @@ class MovimientoStock:
             "lote_id": self.lote_id,
             "lote": self.lote,
             "tipo_producto": self.tipo_producto,
+            "servicio_id": self.servicio_id,
         }
 
     @classmethod
@@ -165,6 +170,7 @@ class MovimientoStock:
             lote_id=datos.get("lote_id"),
             lote=datos.get("lote"),
             tipo_producto=datos.get("tipo_producto", "alimento"),
+            servicio_id=datos.get("servicio_id"),
         )
 
 
@@ -712,7 +718,10 @@ class Inventario:
         else:
             print(f"❌ No existe el producto '{nombre}'.")
 
-    def _registrar(self, producto: Producto, lote: Lote, tipo: str, cantidad: float, motivo: str) -> None:
+    def _registrar(
+        self, producto: Producto, lote: Lote, tipo: str, cantidad: float, motivo: str,
+        servicio_id: Optional[int] = None,
+    ) -> None:
         # Se registra SIEMPRE, tanto entradas como salidas -- por eso el
         # historial nunca puede desincronizarse: es imposible cambiar el
         # stock sin dejar constancia de por qué (ni de qué lote).
@@ -727,6 +736,7 @@ class Inventario:
             lote_id=lote.id,
             lote=lote.etiqueta(),
             tipo_producto=producto.tipo,
+            servicio_id=servicio_id,
         ))
 
     # ---------- Entradas: cada una es un lote nuevo ----------
@@ -803,11 +813,14 @@ class Inventario:
         """
         return self.salida_repartida(nombre, [(lote_id, cantidad)], motivo)
 
-    def salida_repartida(self, nombre: str, reparto: list[tuple[int, float]], motivo: str) -> bool:
+    def salida_repartida(
+        self, nombre: str, reparto: list[tuple[int, float]], motivo: str, servicio_id: Optional[int] = None,
+    ) -> bool:
         """
         Saca stock de VARIOS lotes a la vez: `reparto` es una lista de
         (lote_id, cantidad). Se comprueba TODO antes de tocar nada: o se
-        aplica entero o no se aplica nada.
+        aplica entero o no se aplica nada. `servicio_id`: el servicio para
+        el que sale (queda apuntado en el historial).
         """
         producto = self.productos.get(nombre)
         if producto is None:
@@ -842,7 +855,7 @@ class Inventario:
             lote = producto.buscar_lote(lote_id)
             cantidad = min(cantidad, lote.cantidad)
             lote.cantidad = round(lote.cantidad - cantidad, 6)
-            self._registrar(producto, lote, "salida", cantidad, motivo)
+            self._registrar(producto, lote, "salida", cantidad, motivo, servicio_id)
             print(f"📦 Salida ({motivo}): {_numero(cantidad)} {producto.unidad} de {nombre} [{lote.etiqueta()}]")
         producto.quitar_lotes_vacios()
         return True

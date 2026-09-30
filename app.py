@@ -36,7 +36,8 @@ from servicios import RegistroServicios, Servicio
 from recetario import Recetario, Receta, Menu
 from compras import GestorCompras
 from exportador import exportar_todo
-from persistencia import guardar_sesion, cargar_sesion
+from persistencia import guardar_sesion, cargar_sesion, Sesion
+from gastos import Gasto, RegistroGastos, resumen_servicio
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, rango_mes_calendario, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -184,18 +185,16 @@ def inicializar_estado() -> None:
     if "inventario" in st.session_state:
         return
 
-    resultado = cargar_sesion(RUTA_SESION) if Path(RUTA_SESION).exists() else None
-    if resultado:
-        inv, serv, rec, comp, informes = resultado
-    else:
-        inv, serv, rec, comp = Inventario(), RegistroServicios(), Recetario(), GestorCompras()
-        informes = ArchivoInformes()
+    sesion = cargar_sesion(RUTA_SESION) if Path(RUTA_SESION).exists() else None
+    if sesion is None:
+        sesion = Sesion(Inventario(), RegistroServicios(), Recetario(), GestorCompras(), ArchivoInformes())
 
-    st.session_state.inventario = inv
-    st.session_state.registro_servicios = serv
-    st.session_state.recetario = rec
-    st.session_state.gestor_compras = comp
-    st.session_state.archivo_informes = informes
+    st.session_state.inventario = sesion.inventario
+    st.session_state.registro_servicios = sesion.registro_servicios
+    st.session_state.recetario = sesion.recetario
+    st.session_state.gestor_compras = sesion.gestor_compras
+    st.session_state.archivo_informes = sesion.archivo_informes
+    st.session_state.registro_gastos = sesion.registro_gastos
     st.session_state.ultima_exportacion = None
     st.session_state.receta_ingredientes = {}  # ingredientes acumulados al crear una receta
 
@@ -961,6 +960,66 @@ def _texto_reparto(fila: dict) -> str:
     return " + ".join(partes)
 
 
+def _texto_euros(valor: Optional[float]) -> str:
+    return "—" if valor is None else f"{valor:.2f} €"
+
+
+def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetario) -> None:
+    gastos = st.session_state.registro_gastos
+    servicios = sorted((s for s in serv.servicios if s.estado != "cancelado"), key=lambda s: (s.fecha, s.hora))
+    if not servicios:
+        st.info("No hay servicios.")
+        return
+
+    st.caption(
+        "Coste = comida + consumibles + gastos del servicio (gasolina, personal...). En los servicios completados es "
+        "lo que salió de verdad del inventario; en los pendientes, una estimación (*) con los precios actuales."
+    )
+    filas = []
+    for s in servicios:
+        r = resumen_servicio(s, inv, rec, gastos)
+        filas.append({
+            "Servicio": f"#{s.id} · {s.fecha.strftime('%d/%m/%Y')} · {s.menu}", "Comensales": s.comensales,
+            "Estado": s.estado, "Cobro (€)": _texto_euros(r["cobrado"]),
+            "Coste (€)": _texto_euros(r["coste_total"]) + (" *" if r["estimado"] else ""),
+            "Margen (€)": _texto_euros(r["margen"]),
+            "Margen (%)": f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else "—",
+        })
+    st.dataframe(filas, width="stretch", hide_index=True)
+
+    st.subheader("Detalle de un servicio")
+    opciones = {f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}": s for s in servicios}
+    servicio = opciones[st.selectbox("Servicio", list(opciones), key="rentabilidad_select")]
+    r = resumen_servicio(servicio, inv, rec, gastos)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Cobro", _texto_euros(r["cobrado"]))
+    m2.metric("Coste" + (" (estimado)" if r["estimado"] else ""), _texto_euros(r["coste_total"]))
+    m3.metric("Margen", _texto_euros(r["margen"]),
+              delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
+    desglose = [
+        {"Concepto": "🍅 Comida", "Importe (€)": f"{r['comida']:.2f}"},
+        {"Concepto": "🧻 Consumibles", "Importe (€)": f"{r['consumibles']:.2f}"},
+    ] + [{"Concepto": f"💶 {cat}", "Importe (€)": f"{imp:.2f}"} for cat, imp in r["gastos_por_categoria"].items()]
+    st.dataframe(desglose, width="stretch", hide_index=True)
+    gastos_servicio = gastos.gastos_de_servicio(servicio.id)
+    if gastos_servicio:
+        st.caption("Gastos de este servicio: " + "; ".join(f"{g.concepto} ({g.importe:.2f} €)" for g in gastos_servicio))
+    else:
+        st.caption("Este servicio no tiene gastos apuntados. Se añaden en la página 'Gastos'.")
+
+    k = lambda campo: f"cobro_{campo}_{servicio.id}"
+    c1, c2 = st.columns([2, 1])
+    nuevo_precio = c1.number_input(
+        "Precio de cobro del servicio entero (€)", min_value=0.0, step=10.0,
+        value=float(servicio.precio_cobrado or 0.0), key=k("precio"),
+    )
+    if c2.button("Guardar precio", key=k("guardar")):
+        servicio.precio_cobrado = nuevo_precio if nuevo_precio > 0 else None
+        avisar("success", f"Precio de cobro del servicio #{servicio.id} guardado.")
+        st.rerun()
+    st.caption("Pon 0 para quitar el precio de cobro.")
+
+
 def pagina_servicios() -> None:
     st.header("📅 Servicios")
     serv = st.session_state.registro_servicios
@@ -970,14 +1029,20 @@ def pagina_servicios() -> None:
     if serv.servicios:
         filas = [{
             "ID": s.id, "Fecha": s.fecha.strftime("%d/%m/%Y"), "Hora": s.hora.strftime("%H:%M"),
-            "Comensales": s.comensales, "Menú": s.menu, "Estado": s.estado, "Notas": s.notas,
+            "Comensales": s.comensales, "Menú": s.menu, "Estado": s.estado,
+            "Cobro (€)": _num(s.precio_cobrado) if s.precio_cobrado is not None else "—", "Notas": s.notas,
         } for s in sorted(serv.servicios, key=lambda s: (s.fecha, s.hora))]
         st.dataframe(filas, width="stretch", hide_index=True)
     else:
         st.info("No hay servicios registrados.")
 
     st.divider()
-    tab_add, tab_cancel, tab_completar = st.tabs(["➕ Añadir servicio", "🚫 Cancelar servicio", "✅ Completar servicio"])
+    tab_add, tab_cancel, tab_completar, tab_rentabilidad = st.tabs(
+        ["➕ Añadir servicio", "🚫 Cancelar servicio", "✅ Completar servicio", "💶 Rentabilidad"]
+    )
+
+    with tab_rentabilidad:
+        _pestana_rentabilidad(serv, inv, rec)
 
     with tab_add:
         with st.form("form_add_servicio", clear_on_submit=True):
@@ -987,10 +1052,21 @@ def pagina_servicios() -> None:
             comensales = st.number_input("Comensales", min_value=1, step=1)
             menu_nombre = st.text_input("Nombre del menú")
             notas = st.text_area("Notas (opcional)")
+            c3, c4 = st.columns(2)
+            precio = c3.number_input(
+                "Precio de cobro (€, opcional)", min_value=0.0, step=10.0,
+                help="Déjalo en 0 si no quieres indicarlo. Solo sirve para calcular el margen del servicio.",
+            )
+            forma_precio = c4.radio("El precio es", ["Total del servicio", "Por comensal"], horizontal=True)
             enviado = st.form_submit_button("Añadir servicio", type="primary")
             if enviado:
+                precio_cobrado = None
+                if precio > 0:
+                    precio_cobrado = round(precio * comensales, 2) if forma_precio == "Por comensal" else precio
                 try:
-                    serv.agregar_servicio(Servicio(fecha, hora, int(comensales), menu_nombre, notas))
+                    serv.agregar_servicio(Servicio(
+                        fecha, hora, int(comensales), menu_nombre, notas, precio_cobrado=precio_cobrado,
+                    ))
                     st.success("Servicio añadido.")
                 except ValueError as e:
                     st.error(str(e))
@@ -1357,6 +1433,69 @@ def pagina_compras() -> None:
                         st.rerun()
 
 
+# ---------- Página: Gastos ----------
+
+def pagina_gastos() -> None:
+    st.header("💶 Gastos")
+    st.caption(
+        "Lo que se paga y no es inventario: gasolina, peajes, personal extra, alquileres, lavandería, seguros... "
+        "Si un gasto es de un servicio concreto, asócialo: así cuenta en su coste y en su margen."
+    )
+    gastos = st.session_state.registro_gastos
+    serv = st.session_state.registro_servicios
+
+    tab_nuevo, tab_lista = st.tabs(["➕ Registrar gasto", "📋 Gastos registrados"])
+
+    with tab_nuevo:
+        v = st.session_state.setdefault("gasto_version", 0)
+        k = lambda campo: f"gasto_{campo}_{v}"
+        c1, c2 = st.columns(2)
+        concepto = c1.text_input("Concepto", key=k("concepto"), placeholder="Ej: Gasolina boda García")
+        categoria = c2.selectbox("Categoría", Gasto.CATEGORIAS, key=k("categoria"))
+        c3, c4 = st.columns(2)
+        importe = c3.number_input("Importe (€)", min_value=0.0, step=1.0, key=k("importe"))
+        fecha = c4.date_input("Fecha", key=k("fecha"))
+        general = "Gasto general del negocio (no es de un servicio)"
+        opciones = {general: None}
+        for s in sorted(serv.servicios, key=lambda s: (s.fecha, s.hora), reverse=True):
+            if s.estado != "cancelado":
+                opciones[f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}"] = s.id
+        servicio_id = opciones[st.selectbox("¿De qué servicio es?", list(opciones), key=k("servicio"))]
+        notas = st.text_input("Notas (opcional)", key=k("notas"), placeholder="Ej: 120 km ida y vuelta")
+        if st.button("Registrar gasto", type="primary", key=k("boton")):
+            try:
+                gastos.agregar_gasto(Gasto(concepto, categoria, importe, fecha, servicio_id, notas))
+                avisar("success", f"Gasto registrado: {concepto} ({importe:.2f} €).")
+                st.session_state.gasto_version += 1
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+    with tab_lista:
+        periodo = st.selectbox("Periodo", PERIODOS_VALIDOS, index=1, key="gastos_periodo")
+        desde, hasta = rango_desde_periodo(periodo)
+        lista = gastos.gastos_en_rango(desde, hasta)
+        if not lista:
+            st.info("No hay gastos registrados en este periodo.")
+            return
+        st.dataframe([{
+            "Nº": g.id, "Fecha": g.fecha.strftime("%d/%m/%Y"), "Concepto": g.concepto, "Categoría": g.categoria,
+            "Importe (€)": f"{g.importe:.2f}", "Servicio": f"#{g.servicio_id}" if g.servicio_id else "General",
+            "Notas": g.notas,
+        } for g in reversed(lista)], width="stretch", hide_index=True)
+        por_categoria = gastos.total_por_categoria(desde, hasta)
+        st.metric("Total del periodo", f"{sum(por_categoria.values()):.2f} €")
+        st.bar_chart(pd.DataFrame(list(por_categoria.items()), columns=["Categoría", "Gasto (€)"]).set_index("Categoría"))
+
+        st.subheader("Eliminar un gasto")
+        textos_gasto = {f"#{g.id} - {g.fecha.strftime('%d/%m/%Y')} - {g.concepto} ({g.importe:.2f} €)": g.id for g in reversed(lista)}
+        elegido = st.selectbox("Gasto", list(textos_gasto), key="gasto_eliminar_select")
+        if st.button("🗑️ Eliminar este gasto", key="gasto_eliminar_boton"):
+            gastos.eliminar_gasto(textos_gasto[elegido])
+            avisar("success", "Gasto eliminado.")
+            st.rerun()
+
+
 # ---------- Página: Exportar / Backup ----------
 
 def pagina_exportar() -> None:
@@ -1368,6 +1507,7 @@ def pagina_exportar() -> None:
         ruta = exportar_todo(
             st.session_state.inventario, st.session_state.registro_servicios,
             st.session_state.gestor_compras, carpeta,
+            st.session_state.registro_gastos, st.session_state.recetario,
         )
         st.session_state.ultima_exportacion = ruta
         st.success(f"Exportado a {ruta}")
@@ -1583,7 +1723,7 @@ st.sidebar.markdown(
 )
 pagina = st.sidebar.radio(
     "Navegación",
-    ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Métricas", "Exportar / Backup"],
+    ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"],
 )
 
 st.sidebar.divider()
@@ -1591,7 +1731,7 @@ if st.sidebar.button("💾 Guardar sesión"):
     guardar_sesion(
         st.session_state.inventario, st.session_state.registro_servicios,
         st.session_state.recetario, st.session_state.gestor_compras,
-        st.session_state.archivo_informes, RUTA_SESION,
+        st.session_state.archivo_informes, RUTA_SESION, st.session_state.registro_gastos,
     )
     st.sidebar.success("Sesión guardada")
 
@@ -1612,6 +1752,8 @@ elif pagina == "Recetario":
     pagina_recetario()
 elif pagina == "Compras":
     pagina_compras()
+elif pagina == "Gastos":
+    pagina_gastos()
 elif pagina == "Métricas":
     pagina_metricas()
 elif pagina == "Exportar / Backup":

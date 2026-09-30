@@ -256,6 +256,73 @@ comprobar(guantes.es_consumible() and guantes.fecha_caducidad is None
           and all(m.tipo_producto == "consumible" for m in inv.historial if m.producto_nombre == "Guantes"),
           "Corregir el tipo a consumible quita la caducidad y pasa su historial a consumibles")
 
+print("\n--- Gastos, precio de cobro y margen ---")
+from gastos import Gasto, RegistroGastos, resumen_servicio  # noqa: E402
+from persistencia import guardar_sesion, cargar_sesion  # noqa: E402
+from metricas import ArchivoInformes  # noqa: E402
+
+for mal, motivo in (
+    (lambda: Gasto("Gasolina", "Transporte", 0), "importe 0"),
+    (lambda: Gasto("Gasolina", "Gasolinera", 30), "categoría inventada"),
+    (lambda: Gasto("  ", "Transporte", 30), "concepto vacío"),
+):
+    try:
+        mal()
+        comprobar(False, f"Un gasto con {motivo} se rechaza")
+    except ValueError:
+        comprobar(True, f"Un gasto con {motivo} se rechaza")
+
+inv = inventario_secreto()
+recetario = Recetario()
+silencio(recetario.agregar_receta, Receta("Secreto a la brasa", "Principal", {"Secreto": 0.2}))
+silencio(recetario.agregar_menu, Menu("Menú brasa", [recetario.recetas["Secreto a la brasa"]]))
+registro = RegistroServicios()
+con_precio = Servicio(HOY, time(21, 0), 4, "Menú brasa", precio_cobrado=100)
+sin_precio = Servicio(HOY, time(14, 0), 2, "Menú brasa")
+silencio(registro.agregar_servicio, con_precio)
+silencio(registro.agregar_servicio, sin_precio)
+gastos = RegistroGastos()
+silencio(gastos.agregar_gasto, Gasto("Gasolina", "Transporte", 20, servicio_id=con_precio.id))
+silencio(gastos.agregar_gasto, Gasto("Seguro furgoneta", "Seguros e impuestos", 60))
+
+r = resumen_servicio(con_precio, inv, recetario, gastos)
+comprobar(r["estimado"] and abs(r["comida"] - 0.8 * inv.buscar_producto("Secreto").precio_unitario) < 0.02
+          and r["gastos"] == 20,
+          "Servicio pendiente: coste estimado de la comida + sus gastos (no los generales)")
+comprobar(r["margen"] == round(100 - r["coste_total"], 2), "Margen = cobro - coste")
+r2 = resumen_servicio(sin_precio, inv, recetario, gastos)
+comprobar(r2["cobrado"] is None and r2["margen"] is None, "Sin precio de cobro no hay margen (y no falla nada)")
+
+silencio(recetario.completar_servicio, con_precio, inv, {"Secreto": [2]})
+r = resumen_servicio(con_precio, inv, recetario, gastos)
+comprobar(not r["estimado"] and abs(r["comida"] - (0.8 * 15)) < 1e-9,
+          "Servicio completado: coste REAL de lo que salió (0,8 kg del lote a 15 €/kg = 12 €)")
+comprobar(all(m.servicio_id == con_precio.id for m in inv.historial if m.motivo == "consumo"),
+          "Las salidas de un servicio quedan apuntadas con su número")
+
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = str(Path(carpeta) / "sesion.json")
+    silencio(guardar_sesion, inv, registro, recetario, GestorCompras(), ArchivoInformes(), ruta, gastos)
+    sesion = silencio(cargar_sesion, ruta)
+    comprobar(len(sesion.registro_gastos.gastos) == 2 and sesion.registro_servicios.servicios[0].precio_cobrado == 100
+              and sesion.registro_servicios.servicios[1].precio_cobrado is None,
+              "Los gastos y los precios de cobro se guardan y se cargan")
+    comprobar(resumen_servicio(sesion.registro_servicios.servicios[0], sesion.inventario, sesion.recetario,
+                               sesion.registro_gastos)["comida"] == r["comida"],
+              "Tras guardar y cargar, el coste real del servicio sigue igual")
+    import json
+    with open(ruta, encoding="utf-8") as f:
+        datos = json.load(f)
+    del datos["gastos"]
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(datos, f)
+    comprobar(silencio(cargar_sesion, ruta).registro_gastos.gastos == [],
+              "Una sesión de antes de los gastos se carga sin gastos")
+    ruta_excel = silencio(exportar_todo, inv, registro, GestorCompras(), carpeta, gastos, recetario)
+    libro = load_workbook(ruta_excel)
+    comprobar("Gastos" in libro.sheetnames and "Rentabilidad" in libro.sheetnames,
+              "El Excel tiene las hojas 'Gastos' y 'Rentabilidad'")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

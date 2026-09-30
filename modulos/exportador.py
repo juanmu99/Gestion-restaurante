@@ -24,6 +24,8 @@ from openpyxl.styles import Font, Alignment, PatternFill
 from inventario import Inventario
 from servicios import RegistroServicios
 from compras import GestorCompras
+from gastos import RegistroGastos, resumen_servicio
+from recetario import Recetario
 
 FUENTE = "Arial"
 
@@ -130,7 +132,7 @@ def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
 
 def _hoja_servicios(wb: Workbook, registro: RegistroServicios) -> None:
     hoja = wb.create_sheet("Servicios")
-    columnas = ["ID", "Fecha", "Hora", "Comensales", "Menú", "Estado", "Notas"]
+    columnas = ["ID", "Fecha", "Hora", "Comensales", "Menú", "Estado", "Notas", "Precio de cobro (€)"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -142,8 +144,48 @@ def _hoja_servicios(wb: Workbook, registro: RegistroServicios) -> None:
         hoja.cell(row=fila, column=5, value=s.menu).font = Font(name=FUENTE)
         hoja.cell(row=fila, column=6, value=s.estado).font = Font(name=FUENTE)
         hoja.cell(row=fila, column=7, value=s.notas).font = Font(name=FUENTE)
+        cobro = s.precio_cobrado if s.precio_cobrado is not None else "—"
+        hoja.cell(row=fila, column=8, value=cobro).font = Font(name=FUENTE)
         fila += 1
 
+    _ajustar_ancho_columnas(hoja)
+
+
+def _hoja_gastos(wb: Workbook, registro_gastos: RegistroGastos) -> None:
+    hoja = wb.create_sheet("Gastos")
+    _escribir_cabecera(hoja, ["Nº", "Fecha", "Concepto", "Categoría", "Importe (€)", "Servicio", "Notas"])
+    fila = 2
+    for g in sorted(registro_gastos.gastos, key=lambda g: g.fecha):
+        valores = [g.id, g.fecha.strftime("%d/%m/%Y"), g.concepto, g.categoria, g.importe,
+                   f"#{g.servicio_id}" if g.servicio_id else "General", g.notas]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+    if fila > 2:
+        hoja.cell(row=fila, column=4, value="TOTAL").font = Font(name=FUENTE, bold=True)
+        hoja.cell(row=fila, column=5, value=f"=SUM(E2:E{fila - 1})").font = Font(name=FUENTE, bold=True)
+    _ajustar_ancho_columnas(hoja, ancho=20)
+
+
+def _hoja_rentabilidad(
+    wb: Workbook, inventario: Inventario, registro: RegistroServicios, recetario: Recetario,
+    registro_gastos: RegistroGastos,
+) -> None:
+    """Coste y margen de cada servicio (con fórmulas: coste total = suma, margen = cobro - coste)."""
+    hoja = wb.create_sheet("Rentabilidad")
+    _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", "Comida (€)", "Consumibles (€)", "Gastos (€)",
+                              "Coste total (€)", "Cobro (€)", "Margen (€)", "Coste estimado"])
+    fila = 2
+    for s in sorted(registro.servicios, key=lambda s: (s.fecha, s.hora)):
+        if s.estado == "cancelado":
+            continue
+        r = resumen_servicio(s, inventario, recetario, registro_gastos)
+        valores = [s.id, s.fecha.strftime("%d/%m/%Y"), s.menu, s.estado, r["comida"], r["consumibles"], r["gastos"],
+                   f"=E{fila}+F{fila}+G{fila}", r["cobrado"] if r["cobrado"] is not None else "—",
+                   f"=I{fila}-H{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No"]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
     _ajustar_ancho_columnas(hoja)
 
 
@@ -177,6 +219,8 @@ def exportar_todo(
     registro_servicios: RegistroServicios,
     gestor_compras: GestorCompras,
     carpeta_salida: str,
+    registro_gastos: RegistroGastos = None,
+    recetario: Recetario = None,
 ) -> str:
     """
     Genera un único archivo Excel con una hoja para cada cosa (Inventario,
@@ -191,6 +235,10 @@ def exportar_todo(
     _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)
+    if registro_gastos is not None:
+        _hoja_gastos(wb, registro_gastos)
+        if recetario is not None:
+            _hoja_rentabilidad(wb, inventario, registro_servicios, recetario, registro_gastos)
 
     Path(carpeta_salida).mkdir(parents=True, exist_ok=True)
     marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -78,6 +78,14 @@ def opcion(selectbox, prefijo: str) -> str:
     raise AssertionError(f"No encuentro la opción '{prefijo}...' en {selectbox.options}")
 
 
+def por_etiqueta(lista, etiqueta: str):
+    """El widget de una lista cuya etiqueta es `etiqueta` (para los que están dentro de un formulario, sin key)."""
+    for w in lista:
+        if w.label == etiqueta:
+            return w
+    raise AssertionError(f"No encuentro el campo '{etiqueta}'")
+
+
 def ir_a(at: AppTest, pagina: str) -> AppTest:
     at.sidebar.radio[0].set_value(pagina).run()
     return at
@@ -116,7 +124,7 @@ def prueba_arranque(at: AppTest) -> None:
 
 @prueba("Todas las páginas se muestran")
 def prueba_paginas(at: AppTest) -> None:
-    for pagina in ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Métricas", "Exportar / Backup"]:
+    for pagina in ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]:
         ir_a(at, pagina)
         comprobar(sin_excepciones(at, pagina) and not at.error, f"Página '{pagina}' sin errores")
 
@@ -437,6 +445,65 @@ def prueba_completar_lotes(at: AppTest) -> None:
               "Completa: 0,5 kg del lote 3 y los 0,3 que faltan del lote 2")
 
 
+@prueba("Precio de cobro, gastos y rentabilidad")
+def prueba_gastos(at: AppTest) -> None:
+    serv = at.session_state["registro_servicios"]
+    gastos = at.session_state["registro_gastos"]
+
+    # Añadir un servicio con precio POR COMENSAL (25 € x 10 = 250 €)
+    ir_a(at, "Servicios")
+    por_etiqueta(at.number_input, "Comensales").set_value(10)
+    por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
+    por_etiqueta(at.number_input, "Precio de cobro (€, opcional)").set_value(25.0)
+    por_etiqueta(at.radio, "El precio es").set_value("Por comensal")
+    boton(at.button, "Añadir servicio").click().run()
+    nuevo = serv.servicios[-1]
+    comprobar(sin_excepciones(at, "añadir servicio con precio") and nuevo.comensales == 10 and nuevo.precio_cobrado == 250,
+              f"Servicio con precio por comensal: se guarda el total (250 €, hay {nuevo.precio_cobrado})")
+
+    # Sin precio: es opcional
+    por_etiqueta(at.number_input, "Comensales").set_value(4)
+    por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
+    boton(at.button, "Añadir servicio").click().run()
+    comprobar(serv.servicios[-1].precio_cobrado is None, "El precio de cobro es opcional")
+
+    # Registrar dos gastos: uno del servicio y uno general
+    ir_a(at, "Gastos")
+    for concepto, categoria, importe, del_servicio in (
+        ("Gasolina", "Transporte", 30.0, True), ("Seguro furgoneta", "Seguros e impuestos", 60.0, False),
+    ):
+        v = at.session_state["gasto_version"]
+        at.text_input(key=f"gasto_concepto_{v}").input(concepto)
+        at.selectbox(key=f"gasto_categoria_{v}").select(categoria)
+        at.number_input(key=f"gasto_importe_{v}").set_value(importe)
+        if del_servicio:
+            sb = at.selectbox(key=f"gasto_servicio_{v}")
+            sb.select(opcion(sb, f"#{nuevo.id} -"))
+        at.button(key=f"gasto_boton_{v}").click().run()
+    comprobar(sin_excepciones(at, "registrar gastos") and len(gastos.gastos) == 2
+              and gastos.gastos[0].servicio_id == nuevo.id and gastos.gastos[1].servicio_id is None,
+              "Se registran un gasto del servicio y uno general")
+
+    # Un gasto mal puesto se puede eliminar
+    v = at.session_state["gasto_version"]
+    at.text_input(key=f"gasto_concepto_{v}").input("Error")
+    at.number_input(key=f"gasto_importe_{v}").set_value(5.0)
+    at.button(key=f"gasto_boton_{v}").click().run()
+    sb = at.selectbox(key="gasto_eliminar_select")
+    sb.select(opcion(sb, f"#{gastos.gastos[-1].id} -"))
+    at.button(key="gasto_eliminar_boton").click().run()
+    comprobar(len(gastos.gastos) == 2 and all(g.concepto != "Error" for g in gastos.gastos), "Eliminar un gasto")
+
+    # Rentabilidad: coste con el gasto del servicio y margen; cambiar el precio
+    ir_a(at, "Servicios")
+    sb = at.selectbox(key="rentabilidad_select")
+    sb.select(opcion(sb, f"#{nuevo.id} -")).run()
+    comprobar(sin_excepciones(at, "rentabilidad") and not at.error, "La pestaña de rentabilidad se muestra sin errores")
+    at.number_input(key=f"cobro_precio_{nuevo.id}").set_value(300.0)
+    at.button(key=f"cobro_guardar_{nuevo.id}").click().run()
+    comprobar(nuevo.precio_cobrado == 300, "Se puede cambiar el precio de cobro después")
+
+
 @prueba("Compras")
 def prueba_compras(at: AppTest) -> None:
     from recetario import Receta, Menu
@@ -486,6 +553,7 @@ def prueba_metricas_y_guardado(at: AppTest) -> None:
     comprobar(sin_excepciones(at2, "la carga de la sesión") and len(inv2.limpiezas) == 1
               and "Carne de cerdo limpia" in inv2.productos,
               "Al reabrir, se carga la sesión con la limpieza y el producto limpio")
+    comprobar(len(at2.session_state["registro_gastos"].gastos) == 2, "Al reabrir, se cargan también los gastos")
 
 
 # ---------------------------------------------------------------- ejecución
@@ -506,6 +574,7 @@ def main() -> int:
     prueba_consumibles(at)
     prueba_completar(at)
     prueba_completar_lotes(at)
+    prueba_gastos(at)
     prueba_compras(at)
     prueba_metricas_y_guardado(at)
 

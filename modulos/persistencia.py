@@ -2,8 +2,8 @@
 Módulo: persistencia.py
 --------------------------
 Guarda y carga el estado completo de la aplicación (inventario,
-servicios, recetario y compras) en un único archivo JSON, para que
-los datos no se pierdan al cerrar el programa.
+servicios, recetario, compras, informes y gastos) en un único archivo
+JSON, para que los datos no se pierdan al cerrar el programa.
 
 Se apoya en los métodos to_dict()/from_dict() que hemos añadido a cada
 clase en su propio módulo — este archivo solo los combina.
@@ -15,6 +15,7 @@ Conceptos de Python nuevos en este módulo:
 """
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,23 @@ from servicios import RegistroServicios
 from recetario import Recetario
 from compras import GestorCompras
 from metricas import ArchivoInformes
+from gastos import RegistroGastos
+
+
+@dataclass
+class Sesion:
+    """
+    Todo lo que se guarda en una sesión, junto. Un @dataclass es una clase
+    "de datos": Python le escribe solo el __init__ a partir de los campos
+    de abajo. Así, al añadir algo nuevo (como los gastos) basta con añadir
+    un campo, en vez de cambiar el orden de una tupla en todos los sitios.
+    """
+    inventario: Inventario
+    registro_servicios: RegistroServicios
+    recetario: Recetario
+    gestor_compras: GestorCompras
+    archivo_informes: ArchivoInformes
+    registro_gastos: RegistroGastos = field(default_factory=RegistroGastos)
 
 
 def guardar_sesion(
@@ -32,14 +50,16 @@ def guardar_sesion(
     gestor_compras: GestorCompras,
     archivo_informes: ArchivoInformes,
     ruta: str,
+    registro_gastos: Optional[RegistroGastos] = None,
 ) -> None:
-    """Guarda el estado completo de los 5 módulos en un archivo JSON."""
+    """Guarda el estado completo de todos los módulos en un archivo JSON."""
     datos = {
         "inventario": inventario.to_dict(),
         "servicios": registro_servicios.to_dict(),
         "recetario": recetario.to_dict(),
         "compras": gestor_compras.to_dict(),
         "informes": archivo_informes.to_dict(),
+        "gastos": (registro_gastos or RegistroGastos()).to_dict(),
     }
 
     Path(ruta).parent.mkdir(parents=True, exist_ok=True)
@@ -51,9 +71,7 @@ def guardar_sesion(
     print(f"💾 Sesión guardada en {ruta}")
 
 
-def cargar_sesion(
-    ruta: str,
-) -> Optional[tuple[Inventario, RegistroServicios, Recetario, GestorCompras, ArchivoInformes]]:
+def cargar_sesion(ruta: str) -> Optional[Sesion]:
     """
     Carga una sesión guardada previamente. Devuelve None si el archivo
     no existe todavía (por ejemplo, la primera vez que se usa la app).
@@ -73,8 +91,11 @@ def cargar_sesion(
     # ANTES de que existieran los informes mensuales.
     archivo_informes = ArchivoInformes.from_dict(datos.get("informes", {"informes": []}))
 
+    # Las sesiones guardadas antes de existir los gastos no los tienen.
+    registro_gastos = RegistroGastos.from_dict(datos.get("gastos", {"gastos": []}))
+
     print(f"📂 Sesión cargada desde {ruta}")
-    return inventario, registro_servicios, recetario, gestor_compras, archivo_informes
+    return Sesion(inventario, registro_servicios, recetario, gestor_compras, archivo_informes, registro_gastos)
 
 
 if __name__ == "__main__":
@@ -116,8 +137,9 @@ if __name__ == "__main__":
     guardar_sesion(inventario, registro, recetario, gestor, archivo_informes, ruta_prueba)
 
     print("\n--- Cargando esa misma sesión en objetos NUEVOS ---")
-    resultado = cargar_sesion(ruta_prueba)
-    inventario2, registro2, recetario2, gestor2, archivo_informes2 = resultado
+    sesion = cargar_sesion(ruta_prueba)
+    inventario2, registro2, recetario2 = sesion.inventario, sesion.registro_servicios, sesion.recetario
+    gestor2, archivo_informes2 = sesion.gestor_compras, sesion.archivo_informes
 
     print("\n--- Comprobación: ¿coincide todo con el original? ---")
     print("Inventario cargado:")

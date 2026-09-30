@@ -38,11 +38,19 @@ class Servicio:
         menu: str,
         notas: str = "",
         estado: str = "pendiente",
+        precio_cobrado: Optional[float] = None,
     ):
+        """
+        precio_cobrado: lo que se cobra por el servicio ENTERO (opcional).
+        Sirve para calcular el margen; si no se indica, el programa
+        funciona igual, solo que sin margen.
+        """
         if comensales <= 0:
             raise ValueError("El número de comensales debe ser mayor que 0")
         if estado not in self.ESTADOS_VALIDOS:
             raise ValueError(f"Estado no válido: {estado}")
+        if precio_cobrado is not None and precio_cobrado < 0:
+            raise ValueError("El precio cobrado no puede ser negativo")
 
         # self.id es un atributo de INSTANCIA: cada Servicio tiene el suyo.
         self.id = Servicio._siguiente_id
@@ -54,6 +62,7 @@ class Servicio:
         self.menu = menu
         self.notas = notas
         self.estado = estado
+        self.precio_cobrado = precio_cobrado
 
     def fecha_hora(self) -> datetime:
         """Combina fecha y hora en un único objeto datetime."""
@@ -69,9 +78,10 @@ class Servicio:
         self.estado = "completado"
 
     def __str__(self) -> str:
+        cobro = f" | Cobro: {self.precio_cobrado}€" if self.precio_cobrado is not None else ""
         return (
             f"[#{self.id}] {self.fecha.strftime('%d/%m/%Y')} {self.hora.strftime('%H:%M')} | "
-            f"{self.comensales} comensales | Menú: {self.menu} | Estado: {self.estado}"
+            f"{self.comensales} comensales | Menú: {self.menu} | Estado: {self.estado}{cobro}"
         )
 
     def to_dict(self) -> dict:
@@ -83,6 +93,7 @@ class Servicio:
             "menu": self.menu,
             "notas": self.notas,
             "estado": self.estado,
+            "precio_cobrado": self.precio_cobrado,
         }
 
     @classmethod
@@ -94,6 +105,7 @@ class Servicio:
             menu=datos["menu"],
             notas=datos["notas"],
             estado=datos["estado"],
+            precio_cobrado=datos.get("precio_cobrado"),  # no existe en sesiones antiguas
         )
         # El constructor le asigna un id NUEVO automáticamente (usando el
         # contador de clase); lo sobrescribimos con el id ORIGINAL guardado,
