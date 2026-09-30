@@ -240,31 +240,49 @@ class Recetario:
     def buscar_menu(self, nombre: str) -> Optional[Menu]:
         return self.menus.get(nombre)
 
-    def previsualizar_consumo(self, servicio: Servicio, inventario: Inventario) -> Optional[list[dict]]:
+    def previsualizar_consumo(
+        self, servicio: Servicio, inventario: Inventario, elecciones: Optional[dict[str, list[int]]] = None
+    ) -> Optional[list[dict]]:
         """
         Calcula, SIN tocar nada todavía, qué se descontaría del inventario
         al completar este servicio. Devuelve None si el menú del servicio
         no existe en el recetario.
 
-        Para cada ingrediente: cuánto hace falta, cuánto hay, cuánto se
-        descontará de verdad y cuánto faltaba. Si no hay stock suficiente,
-        se descuenta TODO lo que hay (se deja a 0) en vez de no descontar
-        nada: si el servicio se hizo, lo que había se gastó -- y lo que
-        faltaba tuvo que salir de algún sitio que no estaba registrado.
+        `elecciones` dice, para cada ingrediente, de qué lotes sale y en qué
+        orden: {"Secreto": [2, 1]} = "primero del lote 2 y, lo que no llegue,
+        del lote 1". Lo decide quien usa el programa. Si un ingrediente no
+        aparece, se propone su lote que caduca antes (solo como sugerencia).
+
+        Para cada ingrediente se devuelve un diccionario con:
+        - necesario, en_stock, a_descontar, faltante (lo que no había en
+          ningún lote), unidad, existe: como hasta ahora.
+        - lotes_elegidos: los lotes que se usarán, en orden.
+        - reparto: lista de (lote_id, cantidad) que se sacaría.
+        - sin_asignar: cantidad que SÍ hay en stock pero que los lotes
+          elegidos no cubren. Mientras sea > 0, hay que elegir otro lote
+          (de lotes_restantes) para completarla.
+        - lotes_restantes: lotes todavía no elegidos que tienen stock.
+
+        Si en TOTAL no hay stock suficiente, se descuenta todo lo que hay (se
+        dejan los lotes a 0) en vez de no descontar nada: si el servicio se
+        hizo, lo que había se gastó -- y lo que faltaba tuvo que salir de
+        algún sitio que no estaba registrado. En ese caso no hay nada que
+        elegir: se usan todos los lotes.
         """
         menu = self.buscar_menu(servicio.menu)
         if menu is None:
             return None
+        elecciones = elecciones or {}
 
         filas = []
         for ingrediente, necesario in menu.calcular_ingredientes_totales(servicio.comensales).items():
             producto = inventario.buscar_producto(ingrediente)
             en_stock = producto.stock if producto else 0
             # Sin round() a propósito: redondear podría dar un número
-            # ligeramente MAYOR que el stock real, y actualizar_stock()
-            # lo rechazaría por "stock insuficiente".
+            # ligeramente MAYOR que el stock real, y la salida se
+            # rechazaría por "stock insuficiente".
             a_descontar = min(necesario, en_stock)
-            filas.append({
+            fila = {
                 "ingrediente": ingrediente,
                 "unidad": producto.unidad if producto else "",
                 "necesario": necesario,
@@ -272,16 +290,39 @@ class Recetario:
                 "a_descontar": a_descontar,
                 "faltante": round(necesario - a_descontar, 3),
                 "existe": producto is not None,
-            })
+                "lotes_elegidos": [],
+                "reparto": [],
+                "sin_asignar": 0.0,
+                "lotes_restantes": [],
+            }
+            if producto is not None and a_descontar > 0:
+                ordenados = [l.id for l in producto.lotes_ordenados()]
+                if necesario >= en_stock - 1e-9:
+                    elegidos = ordenados  # no llega ni con todo: se usa todo
+                else:
+                    elegidos = [i for i in elecciones.get(ingrediente, []) if i in ordenados] or ordenados[:1]
+                reparto, sin_asignar = inventario.repartir(ingrediente, a_descontar, elegidos)
+                fila["lotes_elegidos"] = elegidos
+                fila["reparto"] = reparto
+                fila["sin_asignar"] = sin_asignar
+                fila["lotes_restantes"] = [i for i in ordenados if i not in elegidos]
+            filas.append(fila)
         return filas
 
-    def completar_servicio(self, servicio: Servicio, inventario: Inventario) -> Optional[list[dict]]:
+    def completar_servicio(
+        self, servicio: Servicio, inventario: Inventario, elecciones: Optional[dict[str, list[int]]] = None
+    ) -> Optional[list[dict]]:
         """
         Marca el servicio como completado y descuenta del inventario los
-        ingredientes de su menú (motivo "consumo", así cuenta en Métricas).
+        ingredientes de su menú (motivo "consumo", así cuenta en Métricas),
+        de los lotes indicados en `elecciones` (ver previsualizar_consumo).
         Devuelve el mismo detalle que previsualizar_consumo(), para poder
         informar de lo que faltaba. Devuelve None si el menú no existe (en
         ese caso NO toca ni el servicio ni el inventario: decide quien llama).
+
+        Lanza ValueError, sin tocar nada, si para algún ingrediente los
+        lotes elegidos no cubren lo que hace falta y hay otros lotes con
+        los que completarlo: hay que elegirlos primero.
 
         Vive aquí (y no en main.py ni en app.py) para que la consola y la
         interfaz gráfica usen EXACTAMENTE la misma lógica.
@@ -291,15 +332,20 @@ class Recetario:
             # el stock dos veces.
             raise ValueError(f"El servicio #{servicio.id} ya está {servicio.estado}.")
 
-        filas = self.previsualizar_consumo(servicio, inventario)
+        filas = self.previsualizar_consumo(servicio, inventario, elecciones)
         if filas is None:
             return None
 
+        pendientes = [f["ingrediente"] for f in filas if f["sin_asignar"] > 1e-9]
+        if pendientes:
+            raise ValueError(
+                "Los lotes elegidos no cubren lo que hace falta de: " + ", ".join(pendientes)
+                + ". Elige de qué otro lote sale lo que falta."
+            )
+
         for fila in filas:
-            if fila["existe"] and fila["a_descontar"] > 0:
-                inventario.actualizar_stock(
-                    fila["ingrediente"], fila["a_descontar"], sumar=False, motivo_salida="consumo"
-                )
+            if fila["reparto"]:
+                inventario.salida_repartida(fila["ingrediente"], fila["reparto"], "consumo")
         servicio.completar()
         return filas
 

@@ -246,10 +246,47 @@ def pedir_peso_lote(producto) -> Optional[float]:
     bruto de cada unidad del lote que entra (en kg). Si no, devuelve None.
     """
     if producto.tiene_merma and producto.unidad == "unidades":
-        actual = f" (media actual: {producto.peso_unitario} kg)" if producto.peso_unitario else ""
+        actual = f" (la última vez: {producto.peso_unitario_referencia} kg)" if producto.peso_unitario_referencia else ""
         print(f"'{producto.nombre}' tiene merma y se compra por unidades{actual}.")
         return pedir_peso_kg("Peso en bruto de cada unidad de este lote")
     return None
+
+
+def pedir_lote(producto, mensaje: str, lotes: Optional[list] = None, sugerir: bool = True, mostrar: bool = True):
+    """
+    Muestra los lotes de un producto (primero los que caducan antes) y pide
+    el número del lote. Con sugerir=True, Enter elige el primero de la lista.
+    Devuelve el Lote elegido, o None si no hay lotes.
+    """
+    lotes = producto.lotes_ordenados() if lotes is None else lotes
+    if not lotes:
+        return None
+    if mostrar:
+        mostrar_lotes(producto, lotes)
+    numeros = {str(l.id): l for l in lotes}
+    extra = f" [Enter = lote {lotes[0].id}]" if sugerir else ""
+    while True:
+        valor = input(f"{mensaje}{extra}: ").strip()
+        if valor == "" and sugerir:
+            return lotes[0]
+        if valor in numeros:
+            return numeros[valor]
+        print(f"⚠️  Escribe uno de estos números de lote: {', '.join(numeros)}")
+
+
+def mostrar_lotes(producto, lotes: Optional[list] = None) -> None:
+    for lote in producto.lotes_ordenados() if lotes is None else lotes:
+        aviso = "  ⚠️ CADUCADO" if lote.esta_caducado() else ""
+        print(f"   {lote.descripcion(producto.unidad)}{aviso}")
+
+
+def pedir_datos_entrada(producto) -> dict:
+    """Pide los datos de un lote NUEVO (compra): precio, proveedor, caducidad y, si hace falta, peso por unidad."""
+    precio = pedir_numero_opcional(f"Precio de este lote [{producto.precio_referencia} €]: ")
+    proveedor = pedir_texto_no_numerico_opcional(f"Proveedor de este lote [{producto.proveedor}]: ")
+    fecha = pedir_fecha("Fecha de caducidad de este lote") if pedir_si_no("¿Este lote tiene fecha de caducidad?") else None
+    return {"precio_unitario": precio, "proveedor": proveedor, "fecha_caducidad": fecha,
+            "peso_unitario": pedir_peso_lote(producto)}
 
 
 def pausa() -> None:
@@ -263,12 +300,13 @@ def menu_inventario():
         print("\n--- INVENTARIO ---")
         print("1. Listar productos")
         print("2. Añadir producto")
-        print("3. Actualizar stock")
+        print("3. Actualizar stock (compra = lote nuevo / salida de un lote)")
         print("4. Ver productos bajo mínimo")
-        print("5. Ver próximos a caducar")
+        print("5. Ver lotes caducados y próximos a caducar")
         print("6. Editar producto")
         print("7. Limpiar / despiezar un producto con merma")
         print("8. Historial de limpiezas y rendimiento medio")
+        print("9. Ver, corregir o desechar los lotes de un producto")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -277,7 +315,7 @@ def menu_inventario():
         elif opcion == "2":
             nombre = pedir_texto("Nombre: ")
             categoria = pedir_texto_no_numerico("Categoría: ")
-            stock = pedir_numero("Stock inicial: ")
+            stock = pedir_numero("Stock inicial (será su primer lote): ")
             unidad = pedir_opcion("Unidad", Producto.UNIDADES_VALIDAS)
             tiene_merma = False
             peso_unitario = None
@@ -286,7 +324,7 @@ def menu_inventario():
                 if tiene_merma and unidad == "unidades":
                     peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
             precio = pedir_numero(f"Precio (€ por {'unidad' if unidad == 'unidades' else unidad}): ")
-            proveedor = pedir_texto_no_numerico("Proveedor: ")
+            proveedor = pedir_texto_no_numerico("Proveedor habitual: ")
             stock_minimo = pedir_numero("Stock mínimo: ")
             tiene_caducidad = pedir_si_no("¿Tiene fecha de caducidad?")
             fecha_caducidad = pedir_fecha("Fecha de caducidad") if tiene_caducidad else None
@@ -302,35 +340,33 @@ def menu_inventario():
             producto = inventario.buscar_producto(nombre)
             if producto is None:
                 print(f"❌ No existe el producto '{nombre}'.")
-            else:
+            elif pedir_si_no("¿Es una entrada de mercancía (compra)?"):
                 cantidad = pedir_numero("Cantidad: ")
-                es_entrada = pedir_si_no("¿Es una entrada de mercancía (sumar stock)?")
-                nueva_fecha = None
-                motivo = None
-                peso_lote = None
-                if es_entrada:
-                    peso_lote = pedir_peso_lote(producto)
-                    renovar = pedir_si_no("¿Quieres renovar la fecha de caducidad con este lote nuevo?")
-                    if renovar:
-                        nueva_fecha = pedir_fecha("Nueva fecha de caducidad")
-                else:
-                    motivo = pedir_opcion("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA)
-                inventario.actualizar_stock(
-                    nombre, cantidad, sumar=es_entrada, nueva_fecha_caducidad=nueva_fecha, motivo_salida=motivo,
-                    peso_unitario_lote=peso_lote,
-                )
+                inventario.entrada_stock(nombre, cantidad, **pedir_datos_entrada(producto))
+            elif not producto.lotes:
+                print(f"❌ No queda stock de '{nombre}'.")
+            else:
+                print(f"Lotes de {nombre}:")
+                lote = pedir_lote(producto, "¿De qué lote sale?")
+                cantidad = pedir_numero(f"Cantidad (hay {lote.cantidad} {producto.unidad} en el lote {lote.id}): ")
+                motivo = pedir_opcion("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA)
+                inventario.salida_stock(nombre, cantidad, motivo, lote.id)
         elif opcion == "4":
             productos = inventario.productos_bajo_minimo()
             print("✅ Ningún producto bajo mínimo." if not productos else "")
             for p in productos:
                 print(p)
         elif opcion == "5":
-            productos = inventario.productos_proximos_a_caducar()
-            if not productos:
-                print("✅ Ningún producto próximo a caducar.")
-            for p in productos:
-                fecha_str = p.fecha_caducidad.strftime("%d/%m/%Y")
-                print(f"{p} | Caduca: {fecha_str} (en {p.dias_para_caducar()} día(s))")
+            caducados = inventario.lotes_caducados()
+            proximos = inventario.lotes_proximos_a_caducar()
+            if not caducados and not proximos:
+                print("✅ Ningún lote caducado ni próximo a caducar.")
+            for p, l in proximos:
+                print(f"⏳ {p.nombre}: {l.descripcion(p.unidad)} -> caduca en {l.dias_para_caducar()} día(s)")
+            for p, l in caducados:
+                print(f"🗑️  {p.nombre}: {l.descripcion(p.unidad)} -> CADUCADO")
+                if pedir_si_no(f"   ¿Desechar este lote entero ({l.cantidad} {p.unidad} a desperdicio)?"):
+                    inventario.desechar_lote(p.nombre, l.id)
         elif opcion == "6":
             nombre = pedir_texto("Nombre del producto a editar: ")
             producto = inventario.buscar_producto(nombre)
@@ -355,25 +391,10 @@ def menu_inventario():
                         if producto.nombre in r.ingredientes_por_comensal
                     ]
 
+                print("(La cantidad, el precio y la caducidad de cada compra se corrigen en sus lotes: opción 9.)")
                 categoria = pedir_texto_no_numerico_opcional(f"Nueva categoría [{producto.categoria}]: ")
-                stock = pedir_numero_opcional(f"Nuevo stock [{producto.stock}]: ")
-                precio = pedir_numero_opcional(f"Nuevo precio unitario [{producto.precio_unitario}]: ")
-                proveedor = pedir_texto_no_numerico_opcional(f"Nuevo proveedor [{producto.proveedor}]: ")
+                proveedor = pedir_texto_no_numerico_opcional(f"Nuevo proveedor habitual [{producto.proveedor}]: ")
                 stock_minimo = pedir_numero_opcional(f"Nuevo stock mínimo [{producto.stock_minimo}]: ")
-
-                fecha_actual_str = (
-                    producto.fecha_caducidad.strftime("%d/%m/%Y") if producto.fecha_caducidad else "sin fecha"
-                )
-                print(f"Fecha de caducidad actual: {fecha_actual_str}")
-                accion_fecha = pedir_opcion(
-                    "¿Qué quieres hacer con la fecha de caducidad?", ("mantener", "cambiar", "borrar")
-                )
-                nueva_fecha_caducidad = None
-                borrar_fecha = False
-                if accion_fecha == "cambiar":
-                    nueva_fecha_caducidad = pedir_fecha("Nueva fecha de caducidad")
-                elif accion_fecha == "borrar":
-                    borrar_fecha = True
 
                 tiene_merma = None
                 peso_unitario = None
@@ -382,9 +403,9 @@ def menu_inventario():
                     tiene_merma = pedir_si_no_opcional(f"¿Producto con merma? [actual: {actual}]")
                     merma_final = producto.tiene_merma if tiene_merma is None else tiene_merma
                     if merma_final and producto.unidad == "unidades":
-                        if producto.peso_unitario:
+                        if producto.peso_unitario_referencia:
                             peso_unitario = pedir_numero_opcional(
-                                f"Peso en bruto por unidad, en kg [{producto.peso_unitario}]: "
+                                f"Peso por unidad de referencia para compras nuevas, en kg [{producto.peso_unitario_referencia}]: "
                             )
                         else:
                             peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
@@ -395,12 +416,8 @@ def menu_inventario():
                         nombre,
                         nuevo_nombre=nuevo_nombre,
                         categoria=categoria,
-                        stock=stock,
-                        precio_unitario=precio,
                         proveedor=proveedor,
                         stock_minimo=stock_minimo,
-                        fecha_caducidad=nueva_fecha_caducidad,
-                        borrar_fecha_caducidad=borrar_fecha,
                         tiene_merma=tiene_merma,
                         peso_unitario=peso_unitario,
                     )
@@ -423,11 +440,48 @@ def menu_inventario():
             accion_limpiar_producto()
         elif opcion == "8":
             mostrar_historial_limpiezas()
+        elif opcion == "9":
+            accion_lotes()
         elif opcion == "0":
             return
         else:
             print("⚠️  Opción no válida.")
         pausa()
+
+
+def accion_lotes() -> None:
+    """Muestra los lotes de un producto y permite corregir uno o desecharlo entero."""
+    nombre = pedir_texto("Producto: ")
+    producto = inventario.buscar_producto(nombre)
+    if producto is None:
+        print(f"❌ No existe el producto '{nombre}'.")
+        return
+    if not producto.lotes:
+        print(f"No queda ningún lote de '{nombre}'.")
+        return
+    print(f"Lotes de {nombre} (total {producto.stock} {producto.unidad}, valor {producto.valor_total()} €):")
+    mostrar_lotes(producto)
+    if not pedir_si_no("¿Quieres corregir o desechar alguno?"):
+        return
+    lote = pedir_lote(producto, "Número de lote", sugerir=False, mostrar=False)
+    accion = pedir_opcion("¿Qué quieres hacer?", ("corregir", "desechar"))
+    if accion == "desechar":
+        inventario.desechar_lote(nombre, lote.id)
+        return
+    print("Corregir no es un movimiento de stock (no queda en el historial). Deja vacío lo que no cambie.")
+    cantidad = pedir_numero_opcional(f"Cantidad [{lote.cantidad}]: ")
+    precio = pedir_numero_opcional(f"Precio [{lote.precio_unitario}]: ")
+    proveedor = pedir_texto_no_numerico_opcional(f"Proveedor [{lote.proveedor}]: ")
+    fecha_actual = lote.fecha_caducidad.strftime("%d/%m/%Y") if lote.fecha_caducidad else "sin fecha"
+    accion_fecha = pedir_opcion(f"Caducidad (ahora: {fecha_actual})", ("mantener", "cambiar", "borrar"))
+    fecha = pedir_fecha("Nueva fecha de caducidad") if accion_fecha == "cambiar" else None
+    try:
+        inventario.editar_lote(
+            nombre, lote.id, cantidad=cantidad, precio_unitario=precio, proveedor=proveedor,
+            fecha_caducidad=fecha, borrar_fecha_caducidad=accion_fecha == "borrar",
+        )
+    except ValueError as e:
+        print(f"❌ {e}")
 
 
 def accion_limpiar_producto() -> None:
@@ -444,12 +498,17 @@ def accion_limpiar_producto() -> None:
         print(f"❌ '{nombre}' no existe o no es un producto con merma.")
         return
 
-    cantidad = pedir_numero(f"¿Cuánto vas a limpiar? (en {origen.unidad}; hay {origen.stock}): ")
-    if cantidad <= 0 or cantidad > origen.stock:
-        print(f"❌ La cantidad debe ser mayor que 0 y como mucho {origen.stock} {origen.unidad}.")
+    if not origen.lotes:
+        print(f"❌ No queda stock de '{nombre}'.")
+        return
+    print(f"Lotes de {nombre}:")
+    lote = pedir_lote(origen, "¿Qué lote vas a limpiar?")
+    cantidad = pedir_numero(f"¿Cuánto vas a limpiar? (en {origen.unidad}; hay {lote.cantidad} en el lote {lote.id}): ")
+    if cantidad <= 0 or cantidad > lote.cantidad:
+        print(f"❌ La cantidad debe ser mayor que 0 y como mucho {lote.cantidad} {origen.unidad}.")
         return
     try:
-        peso_bruto = origen.peso_kg(cantidad)
+        peso_bruto = origen.peso_kg(cantidad, lote)
     except ValueError as e:
         print(f"❌ {e}")
         return
@@ -493,7 +552,7 @@ def accion_limpiar_producto() -> None:
         try:
             inventario.limpiar_producto(
                 nombre, cantidad, producto_limpio, peso_limpio, derivados,
-                unidad_peso=unidad_peso, caducidades=caducidades,
+                unidad_peso=unidad_peso, caducidades=caducidades, lote_id=lote.id,
             )
             print("✅ Limpieza registrada.")
         except ValueError as e:
@@ -569,6 +628,8 @@ def menu_servicios():
                         servicio.completar()
                         print(f"✅ Servicio #{id_servicio} completado (sin descuento de stock).")
                 else:
+                    elecciones = pedir_lotes_servicio(servicio, filas)
+                    filas = recetario.previsualizar_consumo(servicio, inventario, elecciones)
                     # Primero enseñamos qué va a pasar, y solo después se aplica.
                     print(f"\nSe descontará para {servicio.comensales} comensales de '{servicio.menu}':")
                     for f in filas:
@@ -580,15 +641,46 @@ def menu_servicios():
                                 f"solo hay {f['en_stock']} -> se descuenta todo (faltaban {f['faltante']})"
                             )
                         else:
-                            print(f"  ✅ {f['ingrediente']}: -{f['a_descontar']} {f['unidad']}")
+                            print(f"  ✅ {f['ingrediente']}: -{round(f['a_descontar'], 3)} {f['unidad']}")
+                        for lote_id, cantidad in f["reparto"]:
+                            print(f"       · {round(cantidad, 3)} {f['unidad']} del lote {lote_id}")
                     if pedir_si_no("¿Confirmar y completar el servicio?"):
-                        recetario.completar_servicio(servicio, inventario)
-                        print(f"✅ Servicio #{id_servicio} completado.")
+                        try:
+                            recetario.completar_servicio(servicio, inventario, elecciones)
+                            print(f"✅ Servicio #{id_servicio} completado.")
+                        except ValueError as e:
+                            print(f"❌ {e}")
         elif opcion == "0":
             return
         else:
             print("⚠️  Opción no válida.")
         pausa()
+
+
+def pedir_lotes_servicio(servicio: Servicio, filas: list[dict]) -> dict[str, list[int]]:
+    """
+    Para cada ingrediente con varios lotes, pregunta de qué lote sale. Si
+    ese lote no llega, pregunta con qué otro lote se completa lo que falta
+    (y así hasta cubrirlo). Devuelve {ingrediente: [lotes en orden]}.
+    """
+    elecciones: dict[str, list[int]] = {}
+    for fila in filas:
+        producto = inventario.buscar_producto(fila["ingrediente"])
+        if (producto is None or fila["a_descontar"] <= 0 or len(producto.lotes) <= 1
+                or fila["necesario"] >= fila["en_stock"] - 1e-9):
+            continue
+        ingrediente = fila["ingrediente"]
+        print(f"\n{ingrediente}: hacen falta {round(fila['necesario'], 3)} {producto.unidad}. Lotes:")
+        elegidos = [pedir_lote(producto, "¿De qué lote sale?").id]
+        while True:
+            _, pendiente = inventario.repartir(ingrediente, fila["necesario"], elegidos)
+            restantes = [l for l in producto.lotes_ordenados() if l.id not in elegidos]
+            if pendiente <= 1e-9 or not restantes:
+                break
+            print(f"Ese lote no llega: faltan {round(pendiente, 3)} {producto.unidad}. Lotes que quedan:")
+            elegidos.append(pedir_lote(producto, "¿Con qué lote lo completas?", restantes, sugerir=False).id)
+        elecciones[ingrediente] = elegidos
+    return elecciones
 
 
 # ---------- Menú: Recetario ----------
@@ -720,15 +812,17 @@ def menu_compras():
                 cantidad_real = pedir_numero(f"¿Cuánta cantidad has comprado de verdad (en {item.unidad})?: ")
                 unidad = item.unidad
                 producto = inventario.buscar_producto(nombre)
-                peso_lote = pedir_peso_lote(producto) if producto else None
-                gestor_compras.marcar_comprado(nombre, cantidad_comprada=cantidad_real)
-                # Comprarlo implica que ahora está físicamente en el almacén
-                # -- lo reponemos en el inventario en el mismo paso, para no
-                # tener que acordarte de hacerlo tú a mano por separado.
-                # actualizar_stock() ya registra esto en el historial (y por
-                # tanto en las métricas de gasto) automáticamente.
-                inventario.actualizar_stock(nombre, cantidad_real, sumar=True, peso_unitario_lote=peso_lote)
-                print(f"📦 Stock repuesto: +{cantidad_real} {unidad} de {nombre}")
+                if producto is None:
+                    print(f"❌ '{nombre}' no existe en el inventario: créalo antes.")
+                else:
+                    # Comprarlo implica que ahora está físicamente en el almacén
+                    # -- entra en el inventario en el mismo paso, como un lote
+                    # nuevo. entrada_stock() ya lo registra en el historial (y
+                    # por tanto en las métricas de gasto) automáticamente.
+                    lote = inventario.entrada_stock(nombre, cantidad_real, **pedir_datos_entrada(producto))
+                    if lote is not None:
+                        gestor_compras.marcar_comprado(nombre, cantidad_comprada=cantidad_real)
+                        print(f"📦 Stock repuesto: +{cantidad_real} {unidad} de {nombre} ({lote.etiqueta()})")
         elif opcion == "4":
             print(f"💰 Coste total pendiente: {gestor_compras.costo_total_pendiente()} €")
         elif opcion == "0":
@@ -798,6 +892,13 @@ def accion_cargar_datos_ejemplo():
     inventario.agregar_producto(Producto(
         "Pata de cerdo", "Carnes", 2, "unidades", 45, "Carnicería Pepe", tiene_merma=True, peso_unitario=7
     ))
+    # Producto con DOS lotes: dos compras con distinta caducidad, proveedor y precio.
+    secreto = Producto(
+        "Secreto ibérico", "Carnes", 1, "kg", 14, "Carnicería Pepe", stock_minimo=0.5,
+        fecha_caducidad=hoy + timedelta(days=3),
+    )
+    secreto.nuevo_lote(0.8, 15, "Ibéricos Sierra", hoy + timedelta(days=9), procedencia="inicial")
+    inventario.agregar_producto(secreto)
 
     registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=3), time(21, 0), 8, "Menú del día"))
     registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=16), time(21, 0), 12, "Menú de bodas"))

@@ -41,6 +41,14 @@ jobs:
           echo "# Última PyInstaller disponible:" >> resultados/versiones.txt
           pip index versions pyinstaller 2>/dev/null | head -1 >> resultados/versiones.txt
 
+      - name: Probar la lógica de los lotes (sin interfaz)
+        id: lotes
+        continue-on-error: true
+        run: |
+          mkdir -p resultados
+          set -o pipefail
+          python pruebas/probar_lotes.py | tee resultados/resultado_lotes.txt
+
       - name: Probar la interfaz (Streamlit real, sin navegador)
         id: pruebas
         continue-on-error: true
@@ -68,6 +76,7 @@ jobs:
           cd /tmp/publicar
           {
             echo "Resultados de las pruebas del cambio ${GITHUB_SHA}"
+            echo "Pruebas de la lógica de lotes: ${{ steps.lotes.outcome }}"
             echo "Pruebas de la interfaz: ${{ steps.pruebas.outcome }}"
             echo "Capturas de pantalla: ${{ steps.capturas.outcome }}"
           } > LEEME.txt
@@ -79,7 +88,7 @@ jobs:
           git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:resultados-pruebas
 
       - name: Marcar la ejecución como fallida si alguna prueba falló
-        if: steps.pruebas.outcome == 'failure' || steps.capturas.outcome == 'failure'
+        if: steps.lotes.outcome == 'failure' || steps.pruebas.outcome == 'failure' || steps.capturas.outcome == 'failure'
         run: |
           echo "Alguna prueba ha fallado: revisa resultado.txt en la rama resultados-pruebas."
           exit 1

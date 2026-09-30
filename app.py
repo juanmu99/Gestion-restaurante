@@ -215,6 +215,13 @@ def cargar_datos_ejemplo() -> None:
     inv.agregar_producto(Producto(
         "Pata de cerdo", "Carnes", 2, "unidades", 45, "Carnicería Pepe", tiene_merma=True, peso_unitario=7
     ))
+    # Producto con DOS lotes: dos compras con distinta caducidad, proveedor y precio.
+    secreto = Producto(
+        "Secreto ibérico", "Carnes", 1, "kg", 14, "Carnicería Pepe", stock_minimo=0.5,
+        fecha_caducidad=date.today() + timedelta(days=3),
+    )
+    secreto.nuevo_lote(0.8, 15, "Ibéricos Sierra", date.today() + timedelta(days=9), procedencia="inicial")
+    inv.agregar_producto(secreto)
 
     serv.agregar_servicio(Servicio(date.today() + timedelta(days=3), time(21, 0), 8, "Menú del día"))
 
@@ -223,6 +230,86 @@ def cargar_datos_ejemplo() -> None:
     rec.agregar_receta(pan)
     rec.agregar_receta(ensalada)
     rec.agregar_menu(Menu("Menú del día", [pan, ensalada]))
+
+
+# ---------- Lotes: piezas de interfaz compartidas ----------
+
+def _num(valor: float) -> str:
+    """Número sin decimales sobrantes para mostrar: 2.0 -> '2', 0.30000001 -> '0.3'."""
+    return f"{round(valor, 3):g}"
+
+
+def _texto_lote(producto: Producto, lote) -> str:
+    """Texto de un lote en los desplegables. Empieza siempre por 'Lote N ·'."""
+    aviso = " · ⚠️ CADUCADO" if lote.esta_caducado() else ""
+    return lote.descripcion(producto.unidad) + aviso
+
+
+def _elegir_lote(producto: Producto, etiqueta: str, clave: str, lotes: Optional[list] = None,
+                 obligatorio_elegir: bool = False) -> Optional[int]:
+    """
+    Desplegable para elegir un lote (por defecto, los del producto, primero
+    los que caducan antes). Devuelve el número del lote, o None si no hay
+    lotes o todavía no se ha elegido ninguno.
+
+    obligatorio_elegir=True: empieza vacío, para que el usuario lo elija a
+    conciencia en vez de aceptar una sugerencia sin darse cuenta.
+    """
+    lotes = producto.lotes_ordenados() if lotes is None else lotes
+    if not lotes:
+        return None
+    # Opciones como TEXTO (y un diccionario para volver al número de lote):
+    # así el desplegable muestra exactamente lo que se ve aquí.
+    opciones = {_texto_lote(producto, l): l.id for l in lotes}
+    elegido = st.selectbox(
+        etiqueta, list(opciones.keys()), key=clave,
+        index=None if obligatorio_elegir else 0,
+        placeholder="Elige un lote...",
+    )
+    return opciones.get(elegido)
+
+
+def _campos_entrada(producto: Producto, k) -> dict:
+    """
+    Campos de un lote NUEVO (compra): precio, proveedor, caducidad y, si hace
+    falta, peso por unidad. `k` construye las keys de los widgets.
+    """
+    unidad_txt = "unidad" if producto.unidad == "unidades" else producto.unidad
+    c1, c2 = st.columns(2)
+    precio = c1.number_input(
+        f"Precio de este lote (€ por {unidad_txt})", min_value=0.0,
+        value=float(producto.precio_referencia), step=0.1, key=k("precio"),
+    )
+    proveedor = c2.text_input("Proveedor de este lote", value=producto.proveedor, key=k("proveedor"))
+    necesita_peso = producto.tiene_merma and producto.unidad == "unidades"
+    peso = None
+    if necesita_peso:
+        peso = _campo_peso("Peso en bruto de cada unidad de este lote", k("peso"), producto.peso_unitario or 0.0)
+    fecha = None
+    if st.checkbox("¿Este lote tiene fecha de caducidad?", key=k("tiene_fecha")):
+        fecha = st.date_input("Fecha de caducidad de este lote", key=k("fecha"))
+    return {"precio": precio, "proveedor": proveedor, "peso": peso, "fecha": fecha, "necesita_peso": necesita_peso}
+
+
+def _filas_lotes(producto: Producto) -> list[dict]:
+    filas = []
+    for l in producto.lotes_ordenados():
+        dias = l.dias_para_caducar()
+        if dias is None:
+            estado = "—"
+        elif dias < 0:
+            estado = "⚠️ Caducado"
+        else:
+            estado = f"Caduca en {dias} día(s)"
+        fila = {
+            "Lote": l.id, "Cantidad": f"{_num(l.cantidad)} {producto.unidad}", "Precio (€)": _num(l.precio_unitario),
+            "Valor (€)": _num(l.valor()), "Proveedor": l.proveedor, "Entrada": l.fecha_entrada.strftime("%d/%m/%Y"),
+            "Caducidad": l.fecha_caducidad.strftime("%d/%m/%Y") if l.fecha_caducidad else "—", "Estado": estado,
+        }
+        if producto.unidad == "unidades":
+            fila["Peso/unidad (kg)"] = _num(l.peso_unitario) if l.peso_unitario else "—"
+        filas.append(fila)
+    return filas
 
 
 # ---------- Página: Dashboard ----------
@@ -235,7 +322,8 @@ def pagina_dashboard() -> None:
 
     proximos_servicios = serv.servicios_proximos()
     bajo_minimo = inv.productos_bajo_minimo()
-    proximos_caducar = inv.productos_proximos_a_caducar()
+    caducados = inv.lotes_caducados()
+    proximos_caducar = inv.lotes_proximos_a_caducar()
     pendientes_compra = comp.items_pendientes()
 
     col1, col2, col3, col4 = st.columns(4)
@@ -260,12 +348,14 @@ def pagina_dashboard() -> None:
 
     with col3:
         with st.container(border=True):
-            st.metric("⏳ Próximos a caducar", len(proximos_caducar))
+            st.metric("⏳ Lotes caducados o por caducar", len(caducados) + len(proximos_caducar))
             with st.expander("Ver detalles"):
-                if not proximos_caducar:
-                    st.caption("Ningún producto próximo a caducar.")
-                for p in proximos_caducar:
-                    st.write(f"{p.nombre}: caduca en {p.dias_para_caducar()} día(s)")
+                if not caducados and not proximos_caducar:
+                    st.caption("Ningún lote caducado ni próximo a caducar.")
+                for p, l in caducados:
+                    st.write(f"🗑️ **{p.nombre}** — {_num(l.cantidad)} {p.unidad}, caducado ({l.etiqueta()})")
+                for p, l in proximos_caducar:
+                    st.write(f"{p.nombre} — {_num(l.cantidad)} {p.unidad}, caduca en {l.dias_para_caducar()} día(s) ({l.etiqueta()})")
 
     with col4:
         with st.container(border=True):
@@ -301,8 +391,9 @@ def pagina_dashboard() -> None:
 def _filas_inventario(productos: list) -> list[dict]:
     return [{
         "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
-        "Mínimo": p.stock_minimo, "Precio (€)": p.precio_unitario, "Proveedor": p.proveedor,
-        "Caducidad": p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—",
+        "Mínimo": p.stock_minimo, "Precio medio (€)": round(p.precio_unitario, 2), "Proveedor habitual": p.proveedor,
+        "Próxima caducidad": p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—",
+        "Lotes": len(p.lotes),
         "Tipo": p.tipo_descripcion() or "—",
         # Siempre texto: si la columna mezcla números y "—", Streamlit
         # tiene que corregir los tipos por su cuenta (y avisa en la consola).
@@ -331,8 +422,18 @@ def pagina_inventario() -> None:
         if vista != "Todos":
             productos = [p for p in productos if p.tiene_merma or p.origen or p.es_subproducto]
         st.dataframe(_filas_inventario(productos), width="stretch", hide_index=True)
+        st.caption("Cada compra es un lote con su precio, proveedor y caducidad: los verás en la pestaña 'Lotes'.")
     else:
         st.info("El inventario está vacío todavía.")
+
+    # Lotes caducados: se pueden desechar desde aquí mismo, en un clic.
+    for p, l in inv.lotes_caducados():
+        c1, c2 = st.columns([4, 1])
+        c1.error(f"🗑️ Caducado: **{p.nombre}** — {_num(l.cantidad)} {p.unidad} ({l.etiqueta()})")
+        if c2.button("Desechar lote", key=f"desechar_{p.nombre}_{l.id}"):
+            if inv.desechar_lote(p.nombre, l.id):
+                avisar("success", f"Lote {l.id} de '{p.nombre}' desechado ({_num(l.cantidad)} {p.unidad} a desperdicio).")
+                st.rerun()
 
     col1, col2 = st.columns(2)
     with col1:
@@ -340,14 +441,17 @@ def pagina_inventario() -> None:
         if bajo_minimo:
             st.warning("⚠️ Bajo mínimo: " + ", ".join(p.nombre for p in bajo_minimo))
     with col2:
-        proximos = inv.productos_proximos_a_caducar()
+        proximos = inv.lotes_proximos_a_caducar()
         if proximos:
-            detalle = ", ".join(f"{p.nombre} ({p.dias_para_caducar()}d)" for p in proximos)
+            detalle = ", ".join(
+                f"{p.nombre} lote {l.id} ({_num(l.cantidad)} {p.unidad}, {l.dias_para_caducar()}d)" for p, l in proximos
+            )
             st.warning(f"⏳ Próximos a caducar: {detalle}")
 
     st.divider()
-    tab_add, tab_edit, tab_stock, tab_limpiar, tab_limpiezas = st.tabs([
-        "➕ Añadir producto", "✏️ Editar producto", "📦 Actualizar stock", "🔪 Limpiar producto", "📜 Limpiezas",
+    tab_add, tab_edit, tab_stock, tab_lotes, tab_limpiar, tab_limpiezas = st.tabs([
+        "➕ Añadir producto", "✏️ Editar producto", "📦 Actualizar stock", "🏷️ Lotes",
+        "🔪 Limpiar producto", "📜 Limpiezas",
     ])
 
     with tab_add:
@@ -356,6 +460,8 @@ def pagina_inventario() -> None:
         _pestana_editar(inv)
     with tab_stock:
         _pestana_stock(inv)
+    with tab_lotes:
+        _pestana_lotes(inv)
     with tab_limpiar:
         _pestana_limpiar(inv)
     with tab_limpiezas:
@@ -370,7 +476,7 @@ def _pestana_anadir(inv: Inventario) -> None:
     nombre = st.text_input("Nombre", key=f"add_nombre_{v}")
     categoria = st.text_input("Categoría", key=f"add_categoria_{v}")
     c1, c2 = st.columns(2)
-    stock = c1.number_input("Stock inicial", min_value=0.0, step=0.1, key=f"add_stock_{v}")
+    stock = c1.number_input("Stock inicial (será su primer lote)", min_value=0.0, step=0.1, key=f"add_stock_{v}")
     unidad = c2.selectbox("Unidad", Producto.UNIDADES_VALIDAS, key=f"add_unidad_{v}")
 
     tiene_merma = False
@@ -388,7 +494,7 @@ def _pestana_anadir(inv: Inventario) -> None:
         f"Precio (€ por {'unidad' if unidad == 'unidades' else unidad})", min_value=0.0, step=0.1, key=f"add_precio_{v}"
     )
     stock_minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.1, key=f"add_stock_minimo_{v}")
-    proveedor = st.text_input("Proveedor", key=f"add_proveedor_{v}")
+    proveedor = st.text_input("Proveedor habitual", key=f"add_proveedor_{v}")
     tiene_caducidad = st.checkbox("¿Tiene fecha de caducidad?", key=f"add_tiene_caducidad_{v}")
     fecha_caducidad = st.date_input("Fecha de caducidad", key=f"add_fecha_{v}") if tiene_caducidad else None
 
@@ -397,7 +503,7 @@ def _pestana_anadir(inv: Inventario) -> None:
         if not nombre:
             st.error("Ponle un nombre al producto.")
         elif nombre in inv.productos:
-            st.error(f"Ya existe un producto llamado '{nombre}'. Para cambiar su stock usa 'Actualizar stock'.")
+            st.error(f"Ya existe un producto llamado '{nombre}'. Para añadir otra compra usa 'Actualizar stock'.")
         else:
             try:
                 inv.agregar_producto(Producto(
@@ -421,32 +527,28 @@ def _pestana_editar(inv: Inventario) -> None:
     # valor que ya tuviera guardado bajo esa key (el del producto
     # anterior) en vez de tomar el `value` nuevo que le pasamos aquí.
     k = lambda campo: f"edit_{campo}_{nombre_sel}"
+    st.caption(
+        "Aquí se corrigen los datos generales del producto. La cantidad, el precio, el proveedor "
+        "y la caducidad de cada compra se corrigen en la pestaña 'Lotes'."
+    )
 
     nuevo_nombre = st.text_input("Nombre", value=producto.nombre, key=k("nombre"))
     categoria = st.text_input("Categoría", value=producto.categoria, key=k("categoria"))
     c1, c2 = st.columns(2)
-    stock = c1.number_input("Stock", value=float(producto.stock), min_value=0.0, step=0.1, key=k("stock"))
-    stock_minimo = c2.number_input("Stock mínimo", value=float(producto.stock_minimo), min_value=0.0, step=0.1, key=k("stock_minimo"))
-    precio = st.number_input("Precio unitario (€)", value=float(producto.precio_unitario), min_value=0.0, step=0.1, key=k("precio"))
-    proveedor = st.text_input("Proveedor", value=producto.proveedor, key=k("proveedor"))
+    stock_minimo = c1.number_input("Stock mínimo", value=float(producto.stock_minimo), min_value=0.0, step=0.1, key=k("stock_minimo"))
+    proveedor = c2.text_input("Proveedor habitual", value=producto.proveedor, key=k("proveedor"))
 
     tiene_merma = producto.tiene_merma
     peso_unitario = None
     if producto.unidad in UNIDADES_PESO + ("unidades",):
         tiene_merma = st.checkbox("Producto con merma (se limpia o despieza)", value=producto.tiene_merma, key=k("merma"))
         if tiene_merma and producto.unidad == "unidades":
-            peso_unitario = _campo_peso("Peso medio en bruto por unidad", k("peso"), producto.peso_unitario or 0.0)
+            peso_unitario = _campo_peso(
+                "Peso por unidad de referencia (se propone al registrar compras)", k("peso"),
+                producto.peso_unitario_referencia or producto.peso_unitario or 0.0,
+            )
     if producto.tipo_descripcion() in ("Subproducto",) or producto.origen:
         st.caption(f"Este producto sale de una limpieza ({producto.tipo_descripcion()}).")
-
-    tiene_fecha_actual = producto.fecha_caducidad is not None
-    tiene_fecha = st.checkbox("¿Tiene fecha de caducidad?", value=tiene_fecha_actual, key=k("tiene_fecha"))
-    nueva_fecha = st.date_input(
-        "Fecha de caducidad",
-        value=producto.fecha_caducidad if tiene_fecha_actual else date.today(),
-        key=k("fecha"),
-        disabled=not tiene_fecha,
-    )
 
     if st.button("Guardar cambios", type="primary", key=k("boton")):
         recetas_afectadas = []
@@ -460,15 +562,8 @@ def _pestana_editar(inv: Inventario) -> None:
             exito = inv.editar_producto(
                 nombre_sel,
                 nuevo_nombre=nuevo_nombre if nuevo_nombre != producto.nombre else None,
-                categoria=categoria, stock=stock, precio_unitario=precio,
-                proveedor=proveedor, stock_minimo=stock_minimo,
-                # Si se desmarca la casilla, se BORRA la fecha (no
-                # se ignora) -- misma idea que en main.py: None es
-                # ambiguo aquí, así que hay un parámetro aparte.
-                fecha_caducidad=nueva_fecha if tiene_fecha else None,
-                borrar_fecha_caducidad=not tiene_fecha,
-                tiene_merma=tiene_merma,
-                peso_unitario=peso_unitario,
+                categoria=categoria, proveedor=proveedor, stock_minimo=stock_minimo,
+                tiene_merma=tiene_merma, peso_unitario=peso_unitario,
             )
             if exito:
                 if recetas_afectadas:
@@ -493,45 +588,110 @@ def _pestana_stock(inv: Inventario) -> None:
     producto = inv.buscar_producto(nombre_sel)
     k = lambda campo: f"stock_{campo}_{nombre_sel}"
 
-    cantidad = st.number_input(f"Cantidad ({producto.unidad})", min_value=0.0, step=0.1, key=k("cantidad"))
     es_entrada = st.radio(
         "Tipo de movimiento", ["Entrada (compra)", "Salida"], horizontal=True, key=k("tipo")
     ) == "Entrada (compra)"
+    cantidad = st.number_input(f"Cantidad ({producto.unidad})", min_value=0.0, step=0.1, key=k("cantidad"))
 
-    nueva_fecha = None
-    motivo = None
-    peso_lote = None
     if es_entrada:
-        if producto.tiene_merma and producto.unidad == "unidades":
-            peso_lote = _campo_peso("Peso en bruto de cada unidad de este lote", k("peso"), producto.peso_unitario or 0.0)
-        if st.checkbox("Renovar fecha de caducidad con este lote", key=k("renovar")):
-            nueva_fecha = st.date_input("Nueva fecha de caducidad", key=k("fecha"))
-    else:
-        motivo = st.selectbox("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA, key=k("motivo"))
-        if producto.tiene_merma:
-            st.caption("Para limpiar o despiezar este producto usa la pestaña 'Limpiar producto': así queda registrado el rendimiento.")
+        st.caption("Cada compra se guarda como un lote nuevo, con su precio, proveedor y caducidad.")
+        datos = _campos_entrada(producto, k)
+        if st.button("Registrar compra", type="primary", key=k("boton")):
+            if cantidad <= 0:
+                st.error("La cantidad debe ser mayor que 0.")
+            elif datos["necesita_peso"] and datos["peso"] is None:
+                st.error("Indica el peso en bruto de cada unidad de este lote.")
+            elif not datos["proveedor"].strip():
+                st.error("Indica el proveedor de este lote.")
+            else:
+                lote = inv.entrada_stock(
+                    nombre_sel, cantidad, precio_unitario=datos["precio"], proveedor=datos["proveedor"],
+                    fecha_caducidad=datos["fecha"], peso_unitario=datos["peso"],
+                )
+                if lote is None:
+                    st.error("No se ha registrado la compra: revisa los datos (el proveedor debe ser texto).")
+                else:
+                    avisar("success", f"Compra registrada como {lote.etiqueta()} ({_num(cantidad)} {producto.unidad}).")
+                    st.rerun()
+        return
 
-    if st.button("Actualizar stock", type="primary", key=k("boton")):
-        if es_entrada and producto.tiene_merma and producto.unidad == "unidades" and peso_lote is None:
-            st.error("Indica el peso en bruto de cada unidad de este lote.")
-            return
-        stock_antes = producto.stock
-        exito = inv.actualizar_stock(
-            nombre_sel, cantidad, sumar=es_entrada,
-            nueva_fecha_caducidad=nueva_fecha, motivo_salida=motivo, peso_unitario_lote=peso_lote,
-        )
-        if exito:
-            avisar("success", "Stock actualizado.")
-            st.rerun()
-        # actualizar_stock() solo lo explica por consola, que en
-        # la interfaz no se ve -- lo repetimos aquí para el usuario.
-        elif cantidad <= 0:
+    if not producto.lotes:
+        st.warning(f"No queda stock de '{nombre_sel}'.")
+        return
+    lote_id = _elegir_lote(producto, "¿De qué lote sale?", k("lote"))
+    motivo = st.selectbox("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA, key=k("motivo"))
+    if producto.tiene_merma:
+        st.caption("Para limpiar o despiezar este producto usa la pestaña 'Limpiar producto': así queda registrado el rendimiento.")
+
+    if st.button("Registrar salida", type="primary", key=k("boton")):
+        lote = producto.buscar_lote(lote_id)
+        if cantidad <= 0:
             st.error("La cantidad debe ser mayor que 0.")
-        else:
+        elif cantidad > lote.cantidad + 1e-9:
             st.error(
-                f"No se ha actualizado: no puedes sacar {cantidad} si solo hay {stock_antes} "
-                f"de '{nombre_sel}'. El stock nunca puede quedar en negativo."
+                f"No se ha registrado: en el lote {lote.id} solo hay {_num(lote.cantidad)} {producto.unidad}. "
+                "Si necesitas más, haz otra salida desde otro lote."
             )
+        elif inv.salida_stock(nombre_sel, cantidad, motivo, lote_id):
+            avisar("success", f"Salida registrada: {_num(cantidad)} {producto.unidad} del lote {lote_id} ({motivo}).")
+            st.rerun()
+        else:
+            st.error("No se ha podido registrar la salida.")
+
+
+def _pestana_lotes(inv: Inventario) -> None:
+    if not inv.productos:
+        st.info("No hay productos.")
+        return
+    nombre_sel = st.selectbox("Producto", list(inv.productos.keys()), key="lotes_select")
+    producto = inv.buscar_producto(nombre_sel)
+    if not producto.lotes:
+        st.info(f"No queda ningún lote de '{nombre_sel}'.")
+        return
+
+    st.dataframe(_filas_lotes(producto), width="stretch", hide_index=True)
+    st.caption(
+        f"Total: {_num(producto.stock)} {producto.unidad} · valor {producto.valor_total()} € · "
+        f"precio medio {_num(producto.precio_unitario)} €/{producto.unidad}"
+    )
+
+    st.subheader("Corregir o desechar un lote")
+    lote_id = _elegir_lote(producto, "Lote", f"lotes_lote_{nombre_sel}")
+    lote = producto.buscar_lote(lote_id)
+    k = lambda campo: f"lotes_{campo}_{nombre_sel}_{lote.id}"
+    st.caption(
+        "Corregir sirve para arreglar un dato mal apuntado o un recuento, y no queda en el historial. "
+        "Para registrar algo que se ha gastado o tirado, usa una salida en 'Actualizar stock'."
+    )
+    c1, c2 = st.columns(2)
+    cantidad = c1.number_input(f"Cantidad ({producto.unidad})", min_value=0.0, value=float(lote.cantidad), step=0.1, key=k("cantidad"))
+    precio = c2.number_input("Precio (€)", min_value=0.0, value=float(lote.precio_unitario), step=0.1, key=k("precio"))
+    proveedor = st.text_input("Proveedor", value=lote.proveedor, key=k("proveedor"))
+    peso = None
+    if producto.unidad == "unidades":
+        peso = _campo_peso("Peso en bruto de cada unidad", k("peso"), lote.peso_unitario or 0.0)
+    tiene_fecha = st.checkbox("¿Tiene fecha de caducidad?", value=lote.fecha_caducidad is not None, key=k("tiene_fecha"))
+    fecha = st.date_input(
+        "Fecha de caducidad", value=lote.fecha_caducidad or date.today(), key=k("fecha"), disabled=not tiene_fecha
+    )
+
+    b1, b2 = st.columns(2)
+    if b1.button("Guardar corrección", type="primary", key=k("guardar")):
+        try:
+            inv.editar_lote(
+                nombre_sel, lote.id, cantidad=cantidad, precio_unitario=precio, proveedor=proveedor,
+                fecha_caducidad=fecha if tiene_fecha else None, borrar_fecha_caducidad=not tiene_fecha,
+                peso_unitario=peso,
+            )
+            avisar("success", f"Lote {lote.id} de '{nombre_sel}' corregido.")
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+    if b2.button("🗑️ Desechar este lote entero (desperdicio)", key=k("desechar")):
+        cantidad_tirada = lote.cantidad
+        if inv.desechar_lote(nombre_sel, lote.id):
+            avisar("success", f"Lote {lote.id} de '{nombre_sel}' desechado ({_num(cantidad_tirada)} {producto.unidad} a desperdicio).")
+            st.rerun()
 
 
 def _pestana_limpiar(inv: Inventario) -> None:
@@ -551,17 +711,20 @@ def _pestana_limpiar(inv: Inventario) -> None:
 
     # Versión: tras registrar una limpieza, los campos se vacían solos.
     v = st.session_state.setdefault("limpiar_version", 0)
-    k = lambda campo: f"limpiar_{campo}_{origen_nombre}_{v}"
+    lote_id = _elegir_lote(origen, "Lote a limpiar", f"limpiar_lote_{origen_nombre}_{v}")
+    lote = origen.buscar_lote(lote_id)
+    # La key lleva el lote: al cambiar de lote se reinician cantidad y límites.
+    k = lambda campo: f"limpiar_{campo}_{origen_nombre}_{v}_{lote.id}"
 
     c1, c2 = st.columns(2)
     por_unidades = origen.unidad == "unidades"
     cantidad = c1.number_input(
-        f"Cantidad a limpiar ({origen.unidad}, hay {origen.stock})",
-        min_value=0.0, max_value=float(origen.stock),
-        value=float(min(1.0, origen.stock)) if por_unidades else float(origen.stock),
+        f"Cantidad a limpiar ({origen.unidad}, hay {_num(lote.cantidad)} en este lote)",
+        min_value=0.0, max_value=float(lote.cantidad),
+        value=float(min(1.0, lote.cantidad)) if por_unidades else float(lote.cantidad),
         step=1.0 if por_unidades else 0.1, key=k("cantidad"),
     )
-    peso_bruto_kg = origen.peso_kg(cantidad) if cantidad > 0 else 0.0
+    peso_bruto_kg = origen.peso_kg(cantidad, lote) if cantidad > 0 else 0.0
     c2.metric("Peso en bruto", f"{peso_bruto_kg:.3f} kg")
     rendimiento = inv.rendimiento_medio(origen_nombre)
     if rendimiento:
@@ -619,6 +782,7 @@ def _pestana_limpiar(inv: Inventario) -> None:
                 origen_nombre, cantidad, producto_limpio, peso_limpio, derivados,
                 unidad_peso=unidad_peso,
                 caducidades={producto_limpio.strip(): fecha_caducidad} if fecha_caducidad else None,
+                lote_id=lote.id,
             )
             avisar(
                 "success",
@@ -655,6 +819,7 @@ def _pestana_limpiezas(inv: Inventario) -> None:
     st.dataframe([{
         "Fecha": l.fecha.strftime("%d/%m/%Y"),
         "Producto": l.producto_origen,
+        "Lote": l.lote_origen or "—",
         "Cantidad": f"{l.cantidad_origen:g} {l.unidad_origen}",
         "Bruto (kg)": round(l.peso_bruto_kg, 3),
         "Producto limpio": l.producto_limpio,
@@ -667,6 +832,56 @@ def _pestana_limpiezas(inv: Inventario) -> None:
 
 
 # ---------- Página: Servicios ----------
+
+def _elegir_lotes_servicio(servicio: Servicio, inv: Inventario, rec: Recetario) -> dict[str, list[int]]:
+    """
+    Para cada ingrediente con varios lotes, el usuario elige de qué lote
+    sale (se propone el que caduca antes). Si ese lote no llega, aparece
+    otro desplegable, VACÍO, para que elija con qué lote completar lo que
+    falta... y así hasta cubrirlo todo. Devuelve {ingrediente: [lotes en orden]}.
+    """
+    elecciones: dict[str, list[int]] = {}
+    filas = rec.previsualizar_consumo(servicio, inv) or []
+    for fila in filas:
+        producto = inv.buscar_producto(fila["ingrediente"])
+        # Sin nada que elegir: no existe, no hay stock, solo tiene un lote,
+        # o no llega ni con todos los lotes (entonces se usan todos).
+        if (producto is None or fila["a_descontar"] <= 0 or len(producto.lotes) <= 1
+                or fila["necesario"] >= fila["en_stock"] - 1e-9):
+            continue
+        ingrediente = fila["ingrediente"]
+        base = f"completar_lote_{servicio.id}_{ingrediente}"
+        elegidos: list[int] = []
+        primero = _elegir_lote(
+            producto, f"{ingrediente}: ¿de qué lote sale? (hacen falta {_num(fila['necesario'])} {producto.unidad})",
+            f"{base}_0",
+        )
+        elegidos.append(primero)
+        while True:
+            _, pendiente = inv.repartir(ingrediente, fila["necesario"], elegidos)
+            restantes = [l for l in producto.lotes_ordenados() if l.id not in elegidos]
+            if pendiente <= 1e-9 or not restantes:
+                break
+            siguiente = _elegir_lote(
+                producto,
+                f"Ese lote no llega: faltan {_num(pendiente)} {producto.unidad} de {ingrediente}. ¿Con qué lote lo completas?",
+                f"{base}_{len(elegidos)}", lotes=restantes, obligatorio_elegir=True,
+            )
+            if siguiente is None:
+                break  # todavía no lo ha elegido: no se podrá completar hasta hacerlo
+            elegidos.append(siguiente)
+        elecciones[ingrediente] = elegidos
+    return elecciones
+
+
+def _texto_reparto(fila: dict) -> str:
+    if not fila["reparto"]:
+        return "—"
+    partes = [f"{_num(cantidad)} {fila['unidad']} del lote {lote_id}" for lote_id, cantidad in fila["reparto"]]
+    if fila["sin_asignar"] > 1e-9:
+        partes.append(f"⚠️ {_num(fila['sin_asignar'])} {fila['unidad']} sin lote elegido")
+    return " + ".join(partes)
+
 
 def pagina_servicios() -> None:
     st.header("📅 Servicios")
@@ -722,9 +937,10 @@ def pagina_servicios() -> None:
             elegido2 = st.selectbox("Servicio a completar", list(opciones2.keys()), key="completar_select")
             servicio = serv.buscar_por_id(opciones2[elegido2])
 
-            # Vista previa: se muestra ANTES de pulsar el botón, para que
-            # sepas exactamente qué va a pasar con el inventario.
-            filas = rec.previsualizar_consumo(servicio, inv)
+            # Primero se eligen los lotes; después, la vista previa muestra
+            # exactamente qué saldrá de cada uno ANTES de pulsar el botón.
+            elecciones = _elegir_lotes_servicio(servicio, inv, rec)
+            filas = rec.previsualizar_consumo(servicio, inv, elecciones)
 
             if filas is None:
                 st.warning(
@@ -735,9 +951,10 @@ def pagina_servicios() -> None:
                 st.caption(f"Se descontará para {servicio.comensales} comensales (motivo: consumo):")
                 st.dataframe([{
                     "Ingrediente": f["ingrediente"],
-                    "Necesario": f"{f['necesario']} {f['unidad']}",
-                    "En stock": f"{f['en_stock']} {f['unidad']}" if f["existe"] else "no existe",
-                    "Se descontará": f"{round(f['a_descontar'], 3)} {f['unidad']}",
+                    "Necesario": f"{_num(f['necesario'])} {f['unidad']}",
+                    "En stock": f"{_num(f['en_stock'])} {f['unidad']}" if f["existe"] else "no existe",
+                    "Se descontará": f"{_num(f['a_descontar'])} {f['unidad']}",
+                    "De qué lotes": _texto_reparto(f),
                     "Faltaba": f"{f['faltante']} {f['unidad']}" if f["faltante"] > 0 else "—",
                 } for f in filas], width="stretch", hide_index=True)
 
@@ -745,15 +962,19 @@ def pagina_servicios() -> None:
                 if cortos:
                     st.warning(
                         "No hay stock suficiente de: " + ", ".join(f["ingrediente"] for f in cortos)
-                        + ". Se descontará todo lo disponible (quedará a 0)."
+                        + ". Se descontará todo lo disponible de todos sus lotes (quedará a 0)."
                     )
 
             if st.button("Completar servicio", type="primary"):
                 if filas is None:
                     servicio.completar()
                     avisar("warning", f"Servicio #{servicio.id} completado sin descontar stock (menú no encontrado).")
+                    st.rerun()
+                try:
+                    rec.completar_servicio(servicio, inv, elecciones)
+                except ValueError as e:
+                    st.error(str(e))
                 else:
-                    rec.completar_servicio(servicio, inv)
                     cortos = [f["ingrediente"] for f in filas if f["faltante"] > 0]
                     if cortos:
                         avisar(
@@ -763,7 +984,7 @@ def pagina_servicios() -> None:
                         )
                     else:
                         avisar("success", f"Servicio #{servicio.id} completado y stock descontado correctamente.")
-                st.rerun()
+                    st.rerun()
 
 
 # ---------- Página: Recetario ----------
@@ -947,25 +1168,34 @@ def pagina_compras() -> None:
                 key=f"cantidad_real_{nombre_marcar}",
             )
             producto_marcar = inv.buscar_producto(nombre_marcar)
-            peso_lote = None
-            necesita_peso = (
-                producto_marcar is not None and producto_marcar.tiene_merma and producto_marcar.unidad == "unidades"
-            )
-            if necesita_peso:
-                peso_lote = _campo_peso(
-                    "Peso en bruto de cada unidad de este lote", f"compra_peso_{nombre_marcar}",
-                    producto_marcar.peso_unitario or 0.0,
-                )
+            if producto_marcar is None:
+                st.warning(f"'{nombre_marcar}' no existe en el inventario: créalo antes en Inventario.")
+                return
+            st.caption("La compra entra en el inventario como un lote nuevo.")
+            k = lambda campo: f"compra_{campo}_{nombre_marcar}"
+            datos = _campos_entrada(producto_marcar, k)
             if st.button("Marcar como comprado y reponer inventario"):
-                if necesita_peso and peso_lote is None:
+                if datos["necesita_peso"] and datos["peso"] is None:
                     st.error("Indica el peso en bruto de cada unidad de este lote.")
                 elif cantidad_real <= 0:
                     st.error("La cantidad comprada debe ser mayor que 0.")
+                elif not datos["proveedor"].strip():
+                    st.error("Indica el proveedor de este lote.")
                 else:
-                    comp.marcar_comprado(nombre_marcar, cantidad_comprada=cantidad_real)
-                    inv.actualizar_stock(nombre_marcar, cantidad_real, sumar=True, peso_unitario_lote=peso_lote)
-                    avisar("success", f"'{nombre_marcar}' marcado como comprado y repuesto en inventario (+{cantidad_real} {item_marcar.unidad}).")
-                    st.rerun()
+                    lote = inv.entrada_stock(
+                        nombre_marcar, cantidad_real, precio_unitario=datos["precio"], proveedor=datos["proveedor"],
+                        fecha_caducidad=datos["fecha"], peso_unitario=datos["peso"],
+                    )
+                    if lote is None:
+                        st.error("No se ha registrado la compra: revisa los datos (el proveedor debe ser texto).")
+                    else:
+                        comp.marcar_comprado(nombre_marcar, cantidad_comprada=cantidad_real)
+                        avisar(
+                            "success",
+                            f"'{nombre_marcar}' marcado como comprado y repuesto en inventario "
+                            f"(+{cantidad_real} {item_marcar.unidad}, {lote.etiqueta()}).",
+                        )
+                        st.rerun()
 
 
 # ---------- Página: Exportar / Backup ----------

@@ -31,6 +31,8 @@ APP = str(RAIZ / "app.py")
 RESULTADOS = RAIZ / "resultados"
 sys.path.insert(0, str(RAIZ / "modulos"))
 
+from servicios import Servicio  # noqa: E402
+
 lineas: list[str] = []
 fallos: list[str] = []
 
@@ -66,6 +68,14 @@ def boton(lista, etiqueta: str):
         if b.label == etiqueta:
             return b
     raise AssertionError(f"No encuentro el botón '{etiqueta}'")
+
+
+def opcion(selectbox, prefijo: str) -> str:
+    """La opción de un desplegable que empieza por `prefijo` (ej: 'Lote 2 ·')."""
+    for texto in selectbox.options:
+        if texto.startswith(prefijo):
+            return texto
+    raise AssertionError(f"No encuentro la opción '{prefijo}...' en {selectbox.options}")
 
 
 def ir_a(at: AppTest, pagina: str) -> AppTest:
@@ -191,8 +201,44 @@ def prueba_stock(at: AppTest) -> None:
     at.number_input(key="stock_peso_Pata de cerdo_kg").set_value(6.0)
     at.button(key="stock_boton_Pata de cerdo").click().run()
     pata = inv.buscar_producto("Pata de cerdo")
-    comprobar(pata.stock == 4 and pata.peso_unitario == 6.5,
-              f"Compra con peso por unidad: 4 patas de media 6.5 kg (hay {pata.stock}, {pata.peso_unitario} kg)")
+    comprobar(pata.stock == 4 and pata.peso_unitario == 6.5 and len(pata.lotes) == 2,
+              f"Compra con peso por unidad: un lote nuevo, 4 patas de media 6.5 kg (hay {pata.stock}, {pata.peso_unitario} kg)")
+
+    # Salida de un lote ELEGIDO: el que caduca más tarde (no el sugerido)
+    secreto = inv.buscar_producto("Secreto ibérico")
+    at.selectbox(key="stock_select").select("Secreto ibérico").run()
+    at.radio(key="stock_tipo_Secreto ibérico").set_value("Salida").run()
+    at.number_input(key="stock_cantidad_Secreto ibérico").set_value(0.3)
+    lote_sb = at.selectbox(key="stock_lote_Secreto ibérico")
+    lote_sb.select(opcion(lote_sb, "Lote 2 ·"))
+    at.selectbox(key="stock_motivo_Secreto ibérico").select("consumo")
+    at.button(key="stock_boton_Secreto ibérico").click().run()
+    comprobar(sin_excepciones(at, "salida de un lote") and abs(secreto.buscar_lote(2).cantidad - 0.5) < 1e-9
+              and secreto.buscar_lote(1).cantidad == 1,
+              "Salida del lote elegido (lote 2): solo baja ese lote")
+    comprobar(inv.historial[-1].lote_id == 2, "El historial apunta de qué lote salió")
+
+    # Sacar de un lote más de lo que tiene: error y nada cambia
+    at.number_input(key="stock_cantidad_Secreto ibérico").set_value(0.9)
+    lote_sb = at.selectbox(key="stock_lote_Secreto ibérico")
+    lote_sb.select(opcion(lote_sb, "Lote 2 ·"))
+    at.button(key="stock_boton_Secreto ibérico").click().run()
+    comprobar(abs(secreto.buscar_lote(2).cantidad - 0.5) < 1e-9 and any("solo hay" in t for t in textos(at.error)),
+              "Más de lo que tiene el lote: error visible y no cambia nada")
+
+    # Compra: un lote nuevo con su precio, proveedor y caducidad
+    fecha = date.today() + timedelta(days=20)
+    at.radio(key="stock_tipo_Secreto ibérico").set_value("Entrada (compra)").run()
+    at.number_input(key="stock_cantidad_Secreto ibérico").set_value(0.5)
+    at.number_input(key="stock_precio_Secreto ibérico").set_value(16.0)
+    at.text_input(key="stock_proveedor_Secreto ibérico").input("Ibéricos Sierra")
+    at.checkbox(key="stock_tiene_fecha_Secreto ibérico").check().run()
+    at.date_input(key="stock_fecha_Secreto ibérico").set_value(fecha)
+    at.button(key="stock_boton_Secreto ibérico").click().run()
+    nuevo = secreto.buscar_lote(3)
+    comprobar(nuevo is not None and nuevo.cantidad == 0.5 and nuevo.precio_unitario == 16
+              and nuevo.proveedor == "Ibéricos Sierra" and nuevo.fecha_caducidad == fecha,
+              "Compra: lote 3 con su cantidad, precio, proveedor y caducidad")
 
 
 @prueba("Limpiar producto")
@@ -201,8 +247,11 @@ def prueba_limpiar(at: AppTest) -> None:
     inv = at.session_state["inventario"]
     at.selectbox(key="limpiar_origen").select("Pata de cerdo").run()
 
+    # Se limpia el lote 2 (las 2 patas de 6 kg), no el que se sugiere
     v = at.session_state["limpiar_version"]
-    k = lambda campo: f"limpiar_{campo}_Pata de cerdo_{v}"
+    lote_sb = at.selectbox(key=f"limpiar_lote_Pata de cerdo_{v}")
+    lote_sb.select(opcion(lote_sb, "Lote 2 ·")).run()
+    k = lambda campo: f"limpiar_{campo}_Pata de cerdo_{v}_2"
     at.number_input(key=k("cantidad")).set_value(2.0)
     at.radio(key=k("unidad")).set_value("kg")
     at.text_input(key=k("limpio")).input("Carne de cerdo limpia")
@@ -213,17 +262,18 @@ def prueba_limpiar(at: AppTest) -> None:
     comprobar(len(inv.limpiezas) == 1, "Limpieza registrada")
     if inv.limpiezas:
         l = inv.limpiezas[0]
-        comprobar(l.peso_bruto_kg == 13 and l.merma_kg == 5,
-                  f"2 patas de 6.5 kg = 13 kg bruto, 8 kg limpio, 5 kg de merma (bruto {l.peso_bruto_kg}, merma {l.merma_kg})")
+        comprobar(l.peso_bruto_kg == 12 and l.merma_kg == 4 and "Lote 2" in (l.lote_origen or ""),
+                  f"Lote 2: 2 patas de 6 kg = 12 kg bruto, 8 kg limpio, 4 kg de merma (bruto {l.peso_bruto_kg}, merma {l.merma_kg})")
     carne = inv.buscar_producto("Carne de cerdo limpia")
     comprobar(carne is not None and carne.stock == 8 and carne.origen == "Pata de cerdo",
               "Se crea 'Carne de cerdo limpia' con 8 kg y su origen")
-    comprobar(inv.buscar_producto("Pata de cerdo").stock == 2, "Quedan 2 patas en bruto")
+    pata = inv.buscar_producto("Pata de cerdo")
+    comprobar(pata.stock == 2 and pata.buscar_lote(2) is None, "Quedan las 2 patas del lote 1")
     comprobar(any("Limpieza registrada" in t for t in textos(at.success)), "Mensaje de limpieza visible tras recargar")
 
     # Limpieza imposible: más limpio que bruto
     v = at.session_state["limpiar_version"]
-    k = lambda campo: f"limpiar_{campo}_Pata de cerdo_{v}"
+    k = lambda campo: f"limpiar_{campo}_Pata de cerdo_{v}_1"
     at.number_input(key=k("cantidad")).set_value(1.0)
     at.number_input(key=k("peso_limpio")).set_value(20.0)
     at.button(key=k("boton")).click().run()
@@ -246,6 +296,31 @@ def prueba_editar(at: AppTest) -> None:
               "Al cambiar de producto se cargan sus datos")
 
 
+@prueba("Lotes: corregir y desechar")
+def prueba_lotes(at: AppTest) -> None:
+    ir_a(at, "Inventario")
+    inv = at.session_state["inventario"]
+    secreto = inv.buscar_producto("Secreto ibérico")
+
+    # Corregir la caducidad del lote 1 a ayer: pasa a estar caducado
+    at.selectbox(key="lotes_select").select("Secreto ibérico").run()
+    lote_sb = at.selectbox(key="lotes_lote_Secreto ibérico")
+    lote_sb.select(opcion(lote_sb, "Lote 1 ·")).run()
+    at.date_input(key="lotes_fecha_Secreto ibérico_1").set_value(date.today() - timedelta(days=1))
+    at.button(key="lotes_guardar_Secreto ibérico_1").click().run()
+    comprobar(sin_excepciones(at, "corregir lote") and secreto.buscar_lote(1).esta_caducado(),
+              "Corregir la caducidad de un lote")
+    comprobar(any("Caducado" in t and "Secreto ibérico" in t for t in textos(at.error)),
+              "El lote caducado se avisa en rojo arriba")
+
+    # Desecharlo con el botón del aviso: sale todo como desperdicio
+    at.button(key="desechar_Secreto ibérico_1").click().run()
+    ultimo = inv.historial[-1]
+    comprobar(secreto.buscar_lote(1) is None and ultimo.motivo == "desperdicio" and ultimo.lote_id == 1
+              and ultimo.cantidad == 1, "'Desechar lote' lo tira entero y lo apunta como desperdicio")
+    comprobar([l.id for l in secreto.lotes] == [2, 3], "Quedan los lotes 2 y 3")
+
+
 @prueba("Completar servicio")
 def prueba_completar(at: AppTest) -> None:
     ir_a(at, "Servicios")
@@ -259,10 +334,46 @@ def prueba_completar(at: AppTest) -> None:
               "Servicio completado desde la interfaz")
 
 
+@prueba("Completar servicio eligiendo lotes")
+def prueba_completar_lotes(at: AppTest) -> None:
+    from recetario import Receta, Menu
+
+    inv = at.session_state["inventario"]
+    rec = at.session_state["recetario"]
+    serv = at.session_state["registro_servicios"]
+    brasa = Receta("Secreto a la brasa", "Principales", {"Secreto ibérico": 0.2})
+    rec.agregar_receta(brasa)
+    rec.agregar_menu(Menu("Menú brasa", [brasa]))
+    servicio = Servicio(date.today(), time(21, 0), 4, "Menú brasa")  # 0,8 kg; hay 0,5 + 0,5
+    serv.agregar_servicio(servicio)
+
+    ir_a(at, "Servicios")
+    at.selectbox(key="completar_select").select(
+        f"#{servicio.id} - {servicio.fecha.strftime('%d/%m/%Y')} - {servicio.menu}"
+    ).run()
+    base = f"completar_lote_{servicio.id}_Secreto ibérico"
+    primero = at.selectbox(key=f"{base}_0")
+    primero.select(opcion(primero, "Lote 3 ·")).run()
+    complemento = at.selectbox(key=f"{base}_1")
+    comprobar(complemento.value is None and len(complemento.options) == 1 and complemento.options[0].startswith("Lote 2 ·"),
+              "Si el lote elegido no llega, pide elegir con qué lote completar (sin elegirlo por ti)")
+
+    boton(at.button, "Completar servicio").click().run()
+    secreto = inv.buscar_producto("Secreto ibérico")
+    comprobar(servicio.estado != "completado" and secreto.stock == 1 and len(at.error) > 0,
+              "Sin elegir el lote de complemento no se completa (error visible, nada cambia)")
+
+    complemento = at.selectbox(key=f"{base}_1")
+    complemento.select(opcion(complemento, "Lote 2 ·")).run()
+    boton(at.button, "Completar servicio").click().run()
+    comprobar(sin_excepciones(at, "completar con lotes") and servicio.estado == "completado"
+              and secreto.buscar_lote(3) is None and abs(secreto.buscar_lote(2).cantidad - 0.2) < 1e-9,
+              "Completa: 0,5 kg del lote 3 y los 0,3 que faltan del lote 2")
+
+
 @prueba("Compras")
 def prueba_compras(at: AppTest) -> None:
     from recetario import Receta, Menu
-    from servicios import Servicio
 
     inv = at.session_state["inventario"]
     rec = at.session_state["recetario"]
@@ -325,7 +436,9 @@ def main() -> int:
     prueba_stock(at)
     prueba_limpiar(at)
     prueba_editar(at)
+    prueba_lotes(at)
     prueba_completar(at)
+    prueba_completar_lotes(at)
     prueba_compras(at)
     prueba_metricas_y_guardado(at)
 

@@ -44,8 +44,13 @@ class Dashboard:
         for p in self.inventario.productos_bajo_minimo():
             alertas.append(f"⚠️  Stock bajo mínimo: {p.nombre} ({p.stock} {p.unidad}, mínimo {p.stock_minimo})")
 
-        for p in self.inventario.productos_proximos_a_caducar(dias_caducidad):
-            alertas.append(f"⏳ Caduca en {p.dias_para_caducar()} día(s): {p.nombre}")
+        for p, lote in self.inventario.lotes_caducados():
+            alertas.append(f"🗑️  Caducado: {p.nombre} ({lote.cantidad} {p.unidad}, {lote.etiqueta()})")
+
+        for p, lote in self.inventario.lotes_proximos_a_caducar(dias_caducidad):
+            alertas.append(
+                f"⏳ Caduca en {lote.dias_para_caducar()} día(s): {p.nombre} ({lote.cantidad} {p.unidad}, {lote.etiqueta()})"
+            )
 
         pendientes = self.gestor_compras.items_pendientes()
         if pendientes:

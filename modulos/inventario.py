@@ -2,7 +2,9 @@
 Módulo: inventario.py
 ----------------------
 Gestiona el inventario de un restaurante: productos, categorías, stock,
-proveedores, precios y fechas de caducidad.
+proveedores, precios y fechas de caducidad. El stock de cada producto se
+guarda por LOTES: cada compra es un lote con su cantidad, precio,
+proveedor y caducidad propios.
 
 Conceptos de Python nuevos que usamos aquí:
 - Clases y objetos (POO): __init__, self, métodos, __str__
@@ -63,6 +65,10 @@ class MovimientoStock:
     movimientos ya registrados no deben cambiar de significado con
     efecto retroactivo (igual que una factura antigua no cambia de
     precio porque hoy el proveedor suba tarifas).
+
+    Con los lotes, el precio es el del LOTE concreto que entró o salió, y
+    `lote` guarda una descripción de ese lote (número, caducidad y
+    proveedor) para que el historial diga exactamente de dónde salió cada cosa.
     """
 
     # Motivos que una persona puede elegir a mano al sacar stock.
@@ -83,6 +89,8 @@ class MovimientoStock:
         precio_unitario: float,
         fecha: Optional[date] = None,
         motivo: Optional[str] = None,
+        lote_id: Optional[int] = None,
+        lote: Optional[str] = None,
     ):
         if tipo not in ("entrada", "salida"):
             raise ValueError("tipo debe ser 'entrada' o 'salida'")
@@ -103,6 +111,9 @@ class MovimientoStock:
         self.precio_unitario = precio_unitario
         self.fecha = fecha or date.today()
         self.motivo = motivo
+        # Los movimientos anteriores a los lotes no tienen lote (None).
+        self.lote_id = lote_id
+        self.lote = lote
 
     def es_compra(self) -> bool:
         """True solo para entradas que son dinero gastado (no para lo que sale de una limpieza)."""
@@ -115,7 +126,11 @@ class MovimientoStock:
     def __str__(self) -> str:
         flecha = "➕" if self.tipo == "entrada" else "➖"
         extra = f" ({self.motivo})" if self.motivo else ""
-        return f"{self.fecha.strftime('%d/%m/%Y')} {flecha} {self.cantidad} {self.unidad} {self.producto_nombre}{extra}"
+        lote = f" [{self.lote}]" if self.lote else ""
+        return (
+            f"{self.fecha.strftime('%d/%m/%Y')} {flecha} {self.cantidad} {self.unidad} "
+            f"{self.producto_nombre}{extra}{lote}"
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -127,6 +142,8 @@ class MovimientoStock:
             "precio_unitario": self.precio_unitario,
             "fecha": self.fecha.isoformat(),
             "motivo": self.motivo,
+            "lote_id": self.lote_id,
+            "lote": self.lote,
         }
 
     @classmethod
@@ -140,7 +157,120 @@ class MovimientoStock:
             precio_unitario=datos["precio_unitario"],
             fecha=date.fromisoformat(datos["fecha"]),
             motivo=datos.get("motivo"),
+            lote_id=datos.get("lote_id"),
+            lote=datos.get("lote"),
         )
+
+
+class Lote:
+    """
+    UNA partida concreta de un producto: lo que entró en una compra (o salió
+    de una limpieza) en una fecha, de un proveedor, a un precio y con una
+    caducidad propios.
+
+    Ejemplo: tienes 1 kg de secreto que caduca el 10/10 y compras 0,8 kg más
+    que caducan el 15/10. Son el MISMO producto ("Secreto", 1,8 kg en total)
+    con DOS lotes. Así las recetas, la lista de la compra y las métricas
+    siguen hablando de "Secreto", pero sabes qué parte caduca antes, de qué
+    proveedor vino y cuánto te costó cada parte.
+
+    Cada lote tiene un número (id) que no se repite dentro de su producto,
+    aunque los lotes vacíos desaparezcan.
+    """
+
+    # De dónde vino el lote: una compra, una limpieza, o el stock con el
+    # que se dio de alta el producto (o que ya había antes de existir los lotes).
+    PROCEDENCIAS = ("compra", "limpieza", "inicial")
+
+    def __init__(
+        self,
+        id: int,
+        cantidad: float,
+        precio_unitario: float,
+        proveedor: str,
+        fecha_entrada: Optional[date] = None,
+        fecha_caducidad: Optional[date] = None,
+        peso_unitario: Optional[float] = None,
+        procedencia: str = "compra",
+    ):
+        if cantidad < 0:
+            raise ValueError("La cantidad de un lote no puede ser negativa.")
+        if precio_unitario < 0:
+            raise ValueError("El precio no puede ser negativo.")
+        if procedencia not in self.PROCEDENCIAS:
+            raise ValueError(f"Procedencia no válida: {procedencia}")
+        self.id = id
+        self.cantidad = cantidad
+        self.precio_unitario = precio_unitario
+        self.proveedor = proveedor
+        self.fecha_entrada = fecha_entrada or date.today()
+        self.fecha_caducidad = fecha_caducidad
+        # Solo para productos por unidades: peso en bruto (kg) de cada unidad
+        # de ESTE lote (dos compras de patas no pesan lo mismo).
+        self.peso_unitario = peso_unitario
+        self.procedencia = procedencia
+
+    def valor(self) -> float:
+        return round(self.cantidad * self.precio_unitario, 2)
+
+    def dias_para_caducar(self) -> Optional[int]:
+        if self.fecha_caducidad is None:
+            return None
+        return (self.fecha_caducidad - date.today()).days
+
+    def esta_caducado(self) -> bool:
+        dias = self.dias_para_caducar()
+        return dias is not None and dias < 0
+
+    def etiqueta(self) -> str:
+        """Descripción corta para el historial y los desplegables: 'Lote 2 · cad. 15/10/2026 · Carnicería Pepe'."""
+        caducidad = f"cad. {self.fecha_caducidad.strftime('%d/%m/%Y')}" if self.fecha_caducidad else "sin caducidad"
+        return f"Lote {self.id} · {caducidad} · {self.proveedor}"
+
+    def descripcion(self, unidad: str) -> str:
+        """Descripción completa, con la cantidad que queda y el precio."""
+        texto = f"{self.etiqueta()} · {_numero(self.cantidad)} {unidad} · {_numero(self.precio_unitario)} €/{unidad}"
+        if self.peso_unitario:
+            texto += f" · {_numero(self.peso_unitario)} kg/unidad"
+        return texto
+
+    def __str__(self) -> str:
+        return self.etiqueta()
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "cantidad": self.cantidad,
+            "precio_unitario": self.precio_unitario,
+            "proveedor": self.proveedor,
+            "fecha_entrada": self.fecha_entrada.isoformat(),
+            "fecha_caducidad": self.fecha_caducidad.isoformat() if self.fecha_caducidad else None,
+            "peso_unitario": self.peso_unitario,
+            "procedencia": self.procedencia,
+        }
+
+    @classmethod
+    def from_dict(cls, datos: dict) -> "Lote":
+        return cls(
+            id=datos["id"],
+            cantidad=datos["cantidad"],
+            precio_unitario=datos["precio_unitario"],
+            proveedor=datos["proveedor"],
+            fecha_entrada=date.fromisoformat(datos["fecha_entrada"]),
+            fecha_caducidad=date.fromisoformat(datos["fecha_caducidad"]) if datos.get("fecha_caducidad") else None,
+            peso_unitario=datos.get("peso_unitario"),
+            procedencia=datos.get("procedencia", "compra"),
+        )
+
+
+def _numero(valor: float) -> str:
+    """Número sin decimales sobrantes: 2.0 -> '2', 0.8000001 -> '0.8'."""
+    return f"{round(valor, 3):g}"
+
+
+def _clave_caducidad(lote: Lote) -> tuple:
+    """Orden 'lo que caduca antes, primero'; los lotes sin caducidad al final."""
+    return (lote.fecha_caducidad is None, lote.fecha_caducidad or date.max, lote.id)
 
 
 class Producto:
@@ -149,6 +279,12 @@ class Producto:
 
     Una CLASE es un molde. Cada vez que escribimos Producto(...) creamos
     un OBJETO nuevo (una instancia) con sus propios datos.
+
+    El stock ya no es un único número: el producto guarda una lista de
+    LOTES (ver la clase Lote). El stock, el precio y la caducidad del
+    producto se CALCULAN a partir de sus lotes (son @property, más abajo),
+    así que el resto del programa puede seguir preguntando
+    `producto.stock` o `producto.precio_unitario` como siempre.
     """
 
     # Igual que ESTADOS_VALIDOS en Servicio: un conjunto CERRADO de valores
@@ -170,8 +306,15 @@ class Producto:
         peso_unitario: Optional[float] = None,
         origen: Optional[str] = None,
         es_subproducto: bool = False,
+        lotes: Optional[list[Lote]] = None,
+        siguiente_lote: int = 1,
     ):
         """
+        `stock`, `precio_unitario`, `fecha_caducidad` y `peso_unitario` son
+        los datos del stock con el que se da de alta el producto: si stock > 0,
+        se crea con ellos su primer lote. `proveedor` es el proveedor
+        HABITUAL (el que se propone al comprar); cada lote guarda el suyo.
+
         Campos relacionados con la merma (todos opcionales):
 
         - tiene_merma: el producto se limpia o despieza antes de usarse
@@ -179,17 +322,16 @@ class Producto:
           se pueden obtener derivados.
         - peso_unitario: peso EN BRUTO de cada unidad, en kg. Solo hace falta
           si el producto con merma se compra por unidades ("3 patas"),
-          porque el rendimiento se calcula comparando pesos.
+          porque el rendimiento se calcula comparando pesos. Es el peso "de
+          referencia" que se propone al comprar; cada lote guarda el suyo.
         - origen: para el producto LIMPIO principal (ej: "Carne de cerdo
           limpia"), el nombre del producto en bruto del que se obtiene. Es
           lo que permite a la lista de la compra pedir el bruto.
         - es_subproducto: lo que se aprovecha de la merma (huesos para un
           fondo, grasa...). Su coste es 0: todo el coste lo carga el limpio.
-        """
-        # __init__ es el "constructor": se ejecuta automáticamente
-        # al crear un Producto nuevo. `self` es el propio objeto que
-        # se está creando: guardamos cada dato dentro de él.
 
+        `lotes` y `siguiente_lote` solo se usan al cargar una sesión guardada.
+        """
         # Igual que hicimos con `comensales` en Servicio: esta es una regla
         # de negocio real, no una comodidad de la consola, así que vive
         # aquí y se aplica sin importar de dónde vengan los datos.
@@ -199,29 +341,110 @@ class Producto:
             raise ValueError("El proveedor debe ser texto descriptivo, no puede estar vacío ni ser un número")
         if unidad not in Producto.UNIDADES_VALIDAS:
             raise ValueError(f"Unidad no válida: '{unidad}'. Debe ser una de: {', '.join(Producto.UNIDADES_VALIDAS)}")
+        if stock < 0:
+            raise ValueError("El stock no puede ser negativo.")
         _validar_merma(unidad, tiene_merma, peso_unitario)
         if (origen or es_subproducto) and unidad not in UNIDADES_PESO:
             raise ValueError("Un producto obtenido de una limpieza debe medirse en kg o g.")
 
         self.nombre = nombre
         self.categoria = categoria
-        self.stock = stock
         self.unidad = unidad  # kg, litros, unidades, etc.
-        self.precio_unitario = precio_unitario
-        self.proveedor = proveedor
+        self.proveedor = proveedor  # proveedor habitual
         self.stock_minimo = stock_minimo
-        self.fecha_caducidad = fecha_caducidad
         self.tiene_merma = tiene_merma
-        self.peso_unitario = peso_unitario if unidad == "unidades" else None
+        # Precio de la última entrada: sirve para estimar compras y costes
+        # de recetas cuando no queda ningún lote.
+        self.precio_referencia = precio_unitario
+        self.peso_unitario_referencia = peso_unitario if unidad == "unidades" else None
         self.origen = origen
         self.es_subproducto = es_subproducto
+        self.lotes: list[Lote] = lotes if lotes is not None else []
+        self.siguiente_lote = siguiente_lote
 
-    def peso_kg(self, cantidad: float) -> float:
+        if lotes is None and stock > 0:
+            self.nuevo_lote(stock, precio_unitario, proveedor, fecha_caducidad, peso_unitario, "inicial")
+
+    # ---------- Datos calculados a partir de los lotes ----------
+
+    @property
+    def stock(self) -> float:
+        """Stock total: la suma de todos sus lotes."""
+        return round(sum(l.cantidad for l in self.lotes), 6)
+
+    @property
+    def precio_unitario(self) -> float:
+        """
+        Precio medio de lo que hay ahora (media ponderada de los lotes). Sin
+        stock, el precio de la última entrada.
+        """
+        stock = self.stock
+        if stock <= 0:
+            return self.precio_referencia
+        return round(sum(l.cantidad * l.precio_unitario for l in self.lotes) / stock, 4)
+
+    @property
+    def fecha_caducidad(self) -> Optional[date]:
+        """La caducidad MÁS PRÓXIMA entre sus lotes (None si ninguno caduca)."""
+        fechas = [l.fecha_caducidad for l in self.lotes if l.fecha_caducidad]
+        return min(fechas) if fechas else None
+
+    @property
+    def peso_unitario(self) -> Optional[float]:
+        """Peso medio por unidad de los lotes que hay (o el de referencia, si no hay)."""
+        if self.unidad != "unidades":
+            return None
+        con_peso = [l for l in self.lotes if l.peso_unitario]
+        unidades = sum(l.cantidad for l in con_peso)
+        if unidades <= 0:
+            return self.peso_unitario_referencia
+        return round(sum(l.cantidad * l.peso_unitario for l in con_peso) / unidades, 4)
+
+    # ---------- Lotes ----------
+
+    def lotes_ordenados(self) -> list[Lote]:
+        """Sus lotes, primero los que caducan antes (los sin caducidad al final)."""
+        return sorted(self.lotes, key=_clave_caducidad)
+
+    def buscar_lote(self, lote_id: int) -> Optional[Lote]:
+        for lote in self.lotes:
+            if lote.id == lote_id:
+                return lote
+        return None
+
+    def nuevo_lote(
+        self,
+        cantidad: float,
+        precio_unitario: float,
+        proveedor: str,
+        fecha_caducidad: Optional[date] = None,
+        peso_unitario: Optional[float] = None,
+        procedencia: str = "compra",
+    ) -> Lote:
+        """Crea un lote nuevo con el siguiente número libre. No registra movimiento (eso lo hace Inventario)."""
+        lote = Lote(
+            self.siguiente_lote, cantidad, precio_unitario, proveedor,
+            fecha_caducidad=fecha_caducidad,
+            peso_unitario=(peso_unitario or self.peso_unitario_referencia) if self.unidad == "unidades" else None,
+            procedencia=procedencia,
+        )
+        self.siguiente_lote += 1
+        self.lotes.append(lote)
+        return lote
+
+    def quitar_lotes_vacios(self) -> None:
+        """Un lote que llega a 0 desaparece (su número no se vuelve a usar)."""
+        self.lotes = [l for l in self.lotes if l.cantidad > 1e-9]
+
+    # ---------- Consultas ----------
+
+    def peso_kg(self, cantidad: float, lote: Optional[Lote] = None) -> float:
         """Cuántos kg pesa `cantidad` de este producto (en su propia unidad)."""
         if self.unidad == "unidades":
-            if not self.peso_unitario:
+            peso = (lote.peso_unitario if lote else None) or self.peso_unitario
+            if not peso:
                 raise ValueError(f"'{self.nombre}' no tiene peso por unidad definido.")
-            return cantidad * self.peso_unitario
+            return cantidad * peso
         return convertir(cantidad, self.unidad, "kg")
 
     def tipo_descripcion(self) -> str:
@@ -235,34 +458,33 @@ class Producto:
         return ""
 
     def valor_total(self) -> float:
-        """Valor económico del stock actual de este producto."""
-        return round(self.stock * self.precio_unitario, 2)
+        """Valor económico del stock actual: cada lote a su propio precio."""
+        return round(sum(l.valor() for l in self.lotes), 2)
 
     def esta_bajo_minimo(self) -> bool:
         """True si el stock actual está por debajo del mínimo definido."""
         return self.stock < self.stock_minimo
 
     def dias_para_caducar(self) -> Optional[int]:
-        """Días que quedan para caducar. None si no tiene fecha de caducidad."""
+        """Días que quedan para que caduque su lote más próximo. None si ninguno tiene fecha."""
         if self.fecha_caducidad is None:
             return None
         return (self.fecha_caducidad - date.today()).days
 
     def esta_caducado(self) -> bool:
-        """True si la fecha de caducidad ya pasó. False si no tiene fecha o no ha caducado."""
-        dias = self.dias_para_caducar()
-        if dias is None:
-            return False  # sin fecha de caducidad no puede estar caducado
-        return dias < 0
+        """True si ALGUNO de sus lotes ya ha caducado."""
+        return any(l.esta_caducado() for l in self.lotes)
 
     def __str__(self) -> str:
         # __str__ define qué se muestra al hacer print(producto)
         texto = (
             f"{self.nombre} | {self.categoria} | "
             f"Stock: {self.stock} {self.unidad} (mínimo: {self.stock_minimo}) | "
-            f"Precio: {self.precio_unitario}€/{self.unidad} | "
-            f"Proveedor: {self.proveedor}"
+            f"Precio medio: {self.precio_unitario}€/{self.unidad} | "
+            f"Proveedor habitual: {self.proveedor}"
         )
+        if len(self.lotes) > 1:
+            texto += f" | {len(self.lotes)} lotes"
         if self.tiene_merma:
             texto += " | Con merma"
             if self.peso_unitario:
@@ -282,16 +504,16 @@ class Producto:
         return {
             "nombre": self.nombre,
             "categoria": self.categoria,
-            "stock": self.stock,
             "unidad": self.unidad,
-            "precio_unitario": self.precio_unitario,
+            "precio_referencia": self.precio_referencia,
             "proveedor": self.proveedor,
             "stock_minimo": self.stock_minimo,
-            "fecha_caducidad": self.fecha_caducidad.isoformat() if self.fecha_caducidad else None,
             "tiene_merma": self.tiene_merma,
-            "peso_unitario": self.peso_unitario,
+            "peso_unitario": self.peso_unitario_referencia,
             "origen": self.origen,
             "es_subproducto": self.es_subproducto,
+            "lotes": [l.to_dict() for l in self.lotes],
+            "siguiente_lote": self.siguiente_lote,
         }
 
     @classmethod
@@ -302,23 +524,38 @@ class Producto:
         creado (como los métodos normales, con `self`), CREA el objeto nuevo
         él mismo y lo devuelve — por eso recibe `cls` (la propia clase) en
         vez de `self`.
+
+        Las sesiones guardadas ANTES de existir los lotes no tienen la clave
+        "lotes": su stock, precio y caducidad se convierten en un único lote,
+        así que no se pierde nada al actualizar el programa.
         """
-        fecha = date.fromisoformat(datos["fecha_caducidad"]) if datos["fecha_caducidad"] else None
-        return cls(
+        comun = dict(
             nombre=datos["nombre"],
             categoria=datos["categoria"],
-            stock=datos["stock"],
             unidad=datos["unidad"],
-            precio_unitario=datos["precio_unitario"],
             proveedor=datos["proveedor"],
             stock_minimo=datos["stock_minimo"],
-            fecha_caducidad=fecha,
             # .get(): las sesiones guardadas antes de existir la merma no
             # tienen estos campos -- se cargan como productos normales.
             tiene_merma=datos.get("tiene_merma", False),
             peso_unitario=datos.get("peso_unitario"),
             origen=datos.get("origen"),
             es_subproducto=datos.get("es_subproducto", False),
+        )
+        if "lotes" in datos:
+            return cls(
+                stock=0,
+                precio_unitario=datos.get("precio_referencia", 0),
+                lotes=[Lote.from_dict(d) for d in datos["lotes"]],
+                siguiente_lote=datos.get("siguiente_lote", 1),
+                **comun,
+            )
+        fecha = datos.get("fecha_caducidad")
+        return cls(
+            stock=datos["stock"],
+            precio_unitario=datos["precio_unitario"],
+            fecha_caducidad=date.fromisoformat(fecha) if fecha else None,
+            **comun,
         )
 
 
@@ -334,9 +571,9 @@ def _validar_merma(unidad: str, tiene_merma: bool, peso_unitario: Optional[float
 
 class Limpieza:
     """
-    Registro de UNA limpieza o despiece: qué producto en bruto se limpió,
-    cuánto pesaba, cuánto producto limpio salió, qué derivados se
-    aprovecharon y cuánta merma quedó.
+    Registro de UNA limpieza o despiece: qué producto en bruto se limpió
+    (y de qué lote), cuánto pesaba, cuánto producto limpio salió, qué
+    derivados se aprovecharon y cuánta merma quedó.
 
     Es la base del rendimiento medio de cada producto y queda en el
     historial para siempre. Todos los pesos se guardan en kg, sea cual sea
@@ -354,6 +591,7 @@ class Limpieza:
         derivados_kg: dict[str, float],
         coste: float,
         fecha: Optional[date] = None,
+        lote_origen: Optional[str] = None,
     ):
         self.producto_origen = producto_origen
         self.cantidad_origen = cantidad_origen  # en la unidad del producto (ej: 2 unidades)
@@ -364,6 +602,7 @@ class Limpieza:
         self.derivados_kg = derivados_kg
         self.coste = coste  # todo el coste del bruto; lo carga el producto limpio
         self.fecha = fecha or date.today()
+        self.lote_origen = lote_origen  # descripción del lote en bruto usado (None en limpiezas antiguas)
 
     @property
     def merma_kg(self) -> float:
@@ -377,10 +616,12 @@ class Limpieza:
 
     def __str__(self) -> str:
         derivados = ", ".join(f"{n} {round(kg, 3)} kg" for n, kg in self.derivados_kg.items()) or "ninguno"
+        lote = f" [{self.lote_origen}]" if self.lote_origen else ""
         return (
-            f"{self.fecha.strftime('%d/%m/%Y')} | {self.cantidad_origen} {self.unidad_origen} de {self.producto_origen} "
-            f"({round(self.peso_bruto_kg, 3)} kg bruto) -> {round(self.peso_limpio_kg, 3)} kg de {self.producto_limpio} "
-            f"| Derivados: {derivados} | Merma: {self.merma_kg} kg | Rendimiento: {self.rendimiento:.0%}"
+            f"{self.fecha.strftime('%d/%m/%Y')} | {self.cantidad_origen} {self.unidad_origen} de {self.producto_origen}"
+            f"{lote} ({round(self.peso_bruto_kg, 3)} kg bruto) -> {round(self.peso_limpio_kg, 3)} kg de "
+            f"{self.producto_limpio} | Derivados: {derivados} | Merma: {self.merma_kg} kg | "
+            f"Rendimiento: {self.rendimiento:.0%}"
         )
 
     def to_dict(self) -> dict:
@@ -394,6 +635,7 @@ class Limpieza:
             "derivados_kg": self.derivados_kg,
             "coste": self.coste,
             "fecha": self.fecha.isoformat(),
+            "lote_origen": self.lote_origen,
         }
 
     @classmethod
@@ -408,6 +650,7 @@ class Limpieza:
             derivados_kg=datos["derivados_kg"],
             coste=datos["coste"],
             fecha=date.fromisoformat(datos["fecha"]),
+            lote_origen=datos.get("lote_origen"),
         )
 
 
@@ -426,7 +669,7 @@ class Inventario:
 
     def agregar_producto(self, producto: Producto) -> None:
         if producto.nombre in self.productos:
-            print(f"⚠️  Ya existe '{producto.nombre}'. Usa actualizar_stock() para modificarlo.")
+            print(f"⚠️  Ya existe '{producto.nombre}'. Registra una entrada para añadir un lote nuevo.")
             return
         self.productos[producto.nombre] = producto
         print(f"✅ Producto añadido: {producto.nombre}")
@@ -438,6 +681,168 @@ class Inventario:
         else:
             print(f"❌ No existe el producto '{nombre}'.")
 
+    def _registrar(self, producto: Producto, lote: Lote, tipo: str, cantidad: float, motivo: str) -> None:
+        # Se registra SIEMPRE, tanto entradas como salidas -- por eso el
+        # historial nunca puede desincronizarse: es imposible cambiar el
+        # stock sin dejar constancia de por qué (ni de qué lote).
+        self.historial.append(MovimientoStock(
+            producto_nombre=producto.nombre,
+            categoria=producto.categoria,
+            tipo=tipo,
+            cantidad=cantidad,
+            unidad=producto.unidad,
+            precio_unitario=lote.precio_unitario,
+            motivo=motivo,
+            lote_id=lote.id,
+            lote=lote.etiqueta(),
+        ))
+
+    # ---------- Entradas: cada una es un lote nuevo ----------
+
+    def entrada_stock(
+        self,
+        nombre: str,
+        cantidad: float,
+        precio_unitario: Optional[float] = None,
+        proveedor: Optional[str] = None,
+        fecha_caducidad: Optional[date] = None,
+        peso_unitario: Optional[float] = None,
+        motivo: str = "compra",
+    ) -> Optional[Lote]:
+        """
+        Registra una entrada de mercancía. CADA entrada crea un LOTE NUEVO
+        (aunque venga del mismo proveedor o tenga la misma caducidad que
+        otro): así se sabe siempre qué se compró, cuándo, a quién y a qué precio.
+
+        - precio_unitario: lo que costó esta vez (por defecto, el de la última entrada).
+        - proveedor: a quién se compró esta vez (por defecto, el habitual).
+        - fecha_caducidad: la de este lote (None si no caduca).
+        - peso_unitario: para productos por unidades, el peso en bruto (kg)
+          de cada unidad de este lote.
+        - motivo: "compra" (por defecto) o "limpieza". Solo las compras
+          cuentan como dinero gastado en Métricas.
+
+        Devuelve el lote creado, o None si se rechazó (el motivo se explica por consola).
+        """
+        producto = self.productos.get(nombre)
+        if producto is None:
+            print(f"❌ No existe el producto '{nombre}'.")
+            return None
+        if cantidad <= 0:
+            print("❌ La cantidad debe ser mayor que 0.")
+            return None
+        if motivo not in MovimientoStock.MOTIVOS_ENTRADA:
+            print(f"❌ Motivo de entrada no válido. Debe ser uno de: {', '.join(MovimientoStock.MOTIVOS_ENTRADA)}")
+            return None
+        precio = producto.precio_referencia if precio_unitario is None else precio_unitario
+        if precio < 0:
+            print("❌ El precio no puede ser negativo.")
+            return None
+        proveedor = (proveedor or "").strip() or producto.proveedor
+        if _es_numero(proveedor):
+            print("❌ El proveedor debe ser texto descriptivo.")
+            return None
+        if peso_unitario is not None and peso_unitario <= 0:
+            print("❌ El peso por unidad debe ser mayor que 0.")
+            return None
+
+        lote = producto.nuevo_lote(cantidad, precio, proveedor, fecha_caducidad, peso_unitario, motivo)
+        producto.precio_referencia = precio
+        if lote.peso_unitario:
+            producto.peso_unitario_referencia = lote.peso_unitario
+        print(f"📦 Entrada: {cantidad} {producto.unidad} de {nombre} -> {lote.etiqueta()}")
+        self._registrar(producto, lote, "entrada", cantidad, motivo)
+        return lote
+
+    # ---------- Salidas: siempre de un lote concreto ----------
+
+    def salida_stock(self, nombre: str, cantidad: float, motivo: str, lote_id: int) -> bool:
+        """
+        Saca `cantidad` del lote `lote_id` de un producto. Quien usa el
+        programa decide de qué lote sale (puede querer gastar antes uno que
+        caduca más tarde, por el motivo que sea).
+
+        motivo: "consumo", "desperdicio" u "otro" ("limpieza" solo lo usa
+        limpiar_producto()). Es lo que permite luego distinguir cuánto se ha
+        consumido de verdad frente a cuánto se ha tirado.
+
+        Devuelve True si se aplicó, False si se rechazó (producto o lote
+        inexistente, motivo no válido o no hay tanto en ese lote).
+        """
+        return self.salida_repartida(nombre, [(lote_id, cantidad)], motivo)
+
+    def salida_repartida(self, nombre: str, reparto: list[tuple[int, float]], motivo: str) -> bool:
+        """
+        Saca stock de VARIOS lotes a la vez: `reparto` es una lista de
+        (lote_id, cantidad). Se comprueba TODO antes de tocar nada: o se
+        aplica entero o no se aplica nada.
+        """
+        producto = self.productos.get(nombre)
+        if producto is None:
+            print(f"❌ No existe el producto '{nombre}'.")
+            return False
+        if motivo not in MovimientoStock.MOTIVOS_SALIDA_VALIDOS:
+            print(f"❌ Motivo no válido. Debe ser uno de: {', '.join(MovimientoStock.MOTIVOS_SALIDA)}")
+            return False
+        reparto = [(lote_id, cantidad) for lote_id, cantidad in reparto if cantidad > 0]
+        if not reparto:
+            print("❌ La cantidad debe ser mayor que 0.")
+            return False
+
+        por_lote: dict[int, float] = {}
+        for lote_id, cantidad in reparto:
+            por_lote[lote_id] = por_lote.get(lote_id, 0) + cantidad
+        for lote_id, cantidad in por_lote.items():
+            lote = producto.buscar_lote(lote_id)
+            if lote is None:
+                print(f"❌ '{nombre}' no tiene el lote {lote_id}.")
+                return False
+            # Pequeño margen (1e-9) para que los decimales de coma flotante no
+            # impidan sacar exactamente todo lo que hay (ej: 0.30000000000000004).
+            if cantidad > lote.cantidad + 1e-9:
+                print(
+                    f"❌ En el lote {lote_id} de '{nombre}' solo hay {_numero(lote.cantidad)} {producto.unidad}, "
+                    f"intentas sacar {_numero(cantidad)}. El stock nunca puede quedar en negativo."
+                )
+                return False
+
+        for lote_id, cantidad in reparto:
+            lote = producto.buscar_lote(lote_id)
+            cantidad = min(cantidad, lote.cantidad)
+            lote.cantidad = round(lote.cantidad - cantidad, 6)
+            self._registrar(producto, lote, "salida", cantidad, motivo)
+            print(f"📦 Salida ({motivo}): {_numero(cantidad)} {producto.unidad} de {nombre} [{lote.etiqueta()}]")
+        producto.quitar_lotes_vacios()
+        return True
+
+    def desechar_lote(self, nombre: str, lote_id: int) -> bool:
+        """Tira un lote ENTERO (normalmente uno caducado): sale todo como desperdicio."""
+        producto = self.productos.get(nombre)
+        lote = producto.buscar_lote(lote_id) if producto else None
+        if lote is None:
+            print(f"❌ No existe el lote {lote_id} de '{nombre}'.")
+            return False
+        return self.salida_stock(nombre, lote.cantidad, "desperdicio", lote_id)
+
+    def repartir(self, nombre: str, cantidad: float, lotes_en_orden: list[int]) -> tuple[list[tuple[int, float]], float]:
+        """
+        Calcula (SIN tocar nada) cómo sacar `cantidad` usando los lotes en el
+        orden indicado: primero todo lo posible del primero, luego del
+        segundo... Devuelve (reparto, lo_que_falta_por_asignar).
+        """
+        producto = self.productos.get(nombre)
+        reparto: list[tuple[int, float]] = []
+        pendiente = cantidad
+        for lote_id in lotes_en_orden:
+            lote = producto.buscar_lote(lote_id) if producto else None
+            if lote is None or pendiente <= 1e-9:
+                continue
+            sale = round(min(pendiente, lote.cantidad), 6)
+            if sale > 0:
+                reparto.append((lote_id, sale))
+                pendiente -= sale
+        return reparto, round(max(0.0, pendiente), 6)
+
     def actualizar_stock(
         self,
         nombre: str,
@@ -447,90 +852,86 @@ class Inventario:
         motivo_salida: Optional[str] = None,
         motivo_entrada: str = "compra",
         peso_unitario_lote: Optional[float] = None,
+        lote_id: Optional[int] = None,
     ) -> bool:
         """
-        Modifica el stock de un producto.
-        sumar=True  -> añade cantidad (ej: entra mercancía del proveedor)
-        sumar=False -> resta cantidad (ej: se consume en un servicio)
+        Atajo que se mantiene por compatibilidad con código antiguo (demos
+        y pruebas). Las pantallas usan entrada_stock() y salida_stock().
 
-        nueva_fecha_caducidad: si se indica (y sumar=True), reemplaza la
-        fecha de caducidad guardada por la del lote nuevo que acaba de
-        entrar. Se ignora si sumar=False.
-
-        motivo_salida: OBLIGATORIO si sumar=False. Debe ser uno de
-        MovimientoStock.MOTIVOS_SALIDA ("consumo", "desperdicio", "otro")
-        -- es lo que permite luego distinguir cuánto se ha consumido de
-        verdad frente a cuánto se ha tirado.
-
-        motivo_entrada: "compra" (por defecto) o "limpieza". Solo las
-        compras cuentan como dinero gastado en Métricas.
-
-        peso_unitario_lote: para productos con merma que se compran por
-        unidades, el peso en bruto (kg) de cada unidad del lote que entra.
-        Se mezcla con el peso de las unidades que ya había (media
-        ponderada), porque no todas las patas pesan lo mismo.
-
-        Devuelve True si el cambio se aplicó, False si se rechazó (producto
-        inexistente, motivo no válido, o stock insuficiente) -- así quien
-        llama a este método puede saberlo con certeza, sin tener que
-        deducirlo comparando el stock antes/después.
+        sumar=True  -> entrada_stock(): crea un lote nuevo.
+        sumar=False -> salida del lote `lote_id`. Si no se indica lote, se
+                       saca de los que caducan antes. (Las pantallas SIEMPRE
+                       indican el lote: lo decide quien usa el programa.)
         """
+        if sumar:
+            return self.entrada_stock(
+                nombre, cantidad, fecha_caducidad=nueva_fecha_caducidad,
+                peso_unitario=peso_unitario_lote, motivo=motivo_entrada,
+            ) is not None
         producto = self.productos.get(nombre)
         if producto is None:
             print(f"❌ No existe el producto '{nombre}'.")
             return False
-
-        if cantidad <= 0:
-            print("❌ La cantidad debe ser mayor que 0.")
-            return False
-
-        if not sumar and motivo_salida not in MovimientoStock.MOTIVOS_SALIDA_VALIDOS:
-            print(f"❌ Motivo no válido. Debe ser uno de: {', '.join(MovimientoStock.MOTIVOS_SALIDA)}")
-            return False
-
-        if sumar and motivo_entrada not in MovimientoStock.MOTIVOS_ENTRADA:
-            print(f"❌ Motivo de entrada no válido. Debe ser uno de: {', '.join(MovimientoStock.MOTIVOS_ENTRADA)}")
-            return False
-
-        # Pequeño margen (1e-9) para que los decimales de coma flotante no
-        # impidan sacar exactamente todo lo que hay (ej: 0.30000000000000004).
-        if not sumar and cantidad > producto.stock + 1e-9:
+        if lote_id is not None:
+            return self.salida_stock(nombre, cantidad, motivo_salida, lote_id)
+        if cantidad > producto.stock + 1e-9:
             print(
                 f"❌ Stock insuficiente de '{nombre}': hay {producto.stock} {producto.unidad}, "
                 f"intentas restar {cantidad}. El stock nunca puede quedar en negativo."
             )
             return False
+        reparto, _ = self.repartir(nombre, cantidad, [l.id for l in producto.lotes_ordenados()])
+        return self.salida_repartida(nombre, reparto, motivo_salida)
 
-        if sumar and peso_unitario_lote is not None and producto.unidad == "unidades":
-            if peso_unitario_lote <= 0:
-                print("❌ El peso por unidad debe ser mayor que 0.")
-                return False
-            if producto.stock > 0 and producto.peso_unitario:
-                total_kg = producto.stock * producto.peso_unitario + cantidad * peso_unitario_lote
-                producto.peso_unitario = round(total_kg / (producto.stock + cantidad), 4)
-            else:
-                producto.peso_unitario = peso_unitario_lote
-            print(f"⚖️  Peso medio por unidad: {producto.peso_unitario} kg")
+    # ---------- Corregir un lote ----------
 
-        producto.stock = round(producto.stock + (cantidad if sumar else -cantidad), 6)
-        print(f"📦 Stock actualizado: {nombre} -> {producto.stock} {producto.unidad}")
+    def editar_lote(
+        self,
+        nombre: str,
+        lote_id: int,
+        cantidad: Optional[float] = None,
+        precio_unitario: Optional[float] = None,
+        proveedor: Optional[str] = None,
+        fecha_caducidad: Optional[date] = None,
+        borrar_fecha_caducidad: bool = False,
+        peso_unitario: Optional[float] = None,
+    ) -> bool:
+        """
+        CORRIGE los datos de un lote (un error al apuntarlo, un recuento...).
+        No es un movimiento de stock: no queda en el historial. Para registrar
+        que algo se ha gastado o tirado, usa una salida.
 
-        if sumar and nueva_fecha_caducidad is not None:
-            producto.fecha_caducidad = nueva_fecha_caducidad
-            print(f"📅 Fecha de caducidad renovada: {nueva_fecha_caducidad.strftime('%d/%m/%Y')}")
+        None = "no lo toques". borrar_fecha_caducidad=True deja el lote sin
+        caducidad. Una cantidad de 0 elimina el lote.
+        """
+        producto = self.productos.get(nombre)
+        lote = producto.buscar_lote(lote_id) if producto else None
+        if lote is None:
+            print(f"❌ No existe el lote {lote_id} de '{nombre}'.")
+            return False
+        if cantidad is not None and cantidad < 0:
+            raise ValueError("La cantidad no puede ser negativa.")
+        if precio_unitario is not None and precio_unitario < 0:
+            raise ValueError("El precio no puede ser negativo.")
+        if proveedor is not None and (not proveedor.strip() or _es_numero(proveedor)):
+            raise ValueError("El proveedor debe ser texto descriptivo, no puede estar vacío ni ser un número")
+        if peso_unitario is not None and peso_unitario <= 0:
+            raise ValueError("El peso por unidad debe ser mayor que 0.")
 
-        # Se registra SIEMPRE, tanto entradas como salidas -- por eso el
-        # historial nunca puede desincronizarse: es imposible cambiar el
-        # stock sin dejar constancia de por qué.
-        self.historial.append(MovimientoStock(
-            producto_nombre=producto.nombre,
-            categoria=producto.categoria,
-            tipo="entrada" if sumar else "salida",
-            cantidad=cantidad,
-            unidad=producto.unidad,
-            precio_unitario=producto.precio_unitario,
-            motivo=motivo_salida if not sumar else motivo_entrada,
-        ))
+        if cantidad is not None:
+            lote.cantidad = cantidad
+        if precio_unitario is not None:
+            lote.precio_unitario = precio_unitario
+        if proveedor is not None:
+            lote.proveedor = proveedor.strip()
+        if borrar_fecha_caducidad:
+            lote.fecha_caducidad = None
+        elif fecha_caducidad is not None:
+            lote.fecha_caducidad = fecha_caducidad
+        if peso_unitario is not None and producto.unidad == "unidades":
+            lote.peso_unitario = peso_unitario
+        producto.quitar_lotes_vacios()
+        print(f"✏️  Lote corregido: {nombre} -> {lote.descripcion(producto.unidad)}")
         return True
 
     # ---------- Limpieza / despiece ----------
@@ -544,16 +945,18 @@ class Inventario:
         derivados: Optional[dict[str, float]] = None,
         unidad_peso: str = "kg",
         caducidades: Optional[dict[str, date]] = None,
+        lote_id: Optional[int] = None,
     ) -> Limpieza:
         """
-        Limpia o despieza `cantidad` de un producto con merma.
+        Limpia o despieza `cantidad` de UN LOTE de un producto con merma.
 
-        - Sale del inventario `cantidad` del producto en bruto (en su unidad:
-          kg, g o unidades).
-        - Entra `peso_limpio` del producto limpio, que carga con TODO el
-          coste del bruto.
-        - Entra cada derivado aprovechado de `derivados` ({nombre: peso}) a
-          coste 0.
+        - Sale del lote `lote_id` la `cantidad` en bruto (en su unidad: kg,
+          g o unidades). Si el producto solo tiene un lote, no hace falta
+          indicarlo.
+        - Entra un lote nuevo del producto limpio, que carga con TODO el
+          coste de lo que se ha limpiado.
+        - Entra un lote de cada derivado aprovechado de `derivados`
+          ({nombre: peso}) a coste 0.
         - Lo que no se ha asignado a nada es merma, y queda registrado.
 
         Los pesos de salida se indican en `unidad_peso` ("kg" o "g"). Los
@@ -577,8 +980,15 @@ class Inventario:
             raise ValueError("Los pesos del resultado deben indicarse en kg o g.")
         if cantidad <= 0:
             raise ValueError("La cantidad a limpiar debe ser mayor que 0.")
-        if cantidad > origen.stock + 1e-9:
-            raise ValueError(f"Solo hay {origen.stock} {origen.unidad} de '{nombre_origen}'.")
+        if lote_id is None:
+            if len(origen.lotes) != 1:
+                raise ValueError(f"Elige de qué lote de '{nombre_origen}' sale lo que vas a limpiar.")
+            lote_id = origen.lotes[0].id
+        lote = origen.buscar_lote(lote_id)
+        if lote is None:
+            raise ValueError(f"'{nombre_origen}' no tiene el lote {lote_id}.")
+        if cantidad > lote.cantidad + 1e-9:
+            raise ValueError(f"En el lote {lote_id} de '{nombre_origen}' solo hay {_numero(lote.cantidad)} {origen.unidad}.")
 
         producto_limpio = producto_limpio.strip()
         if not producto_limpio:
@@ -602,7 +1012,7 @@ class Inventario:
         if producto_limpio in derivados_limpios:
             raise ValueError(f"'{producto_limpio}' no puede ser a la vez el producto limpio y un derivado.")
 
-        peso_bruto_kg = origen.peso_kg(cantidad)
+        peso_bruto_kg = origen.peso_kg(cantidad, lote)
         peso_limpio_kg = convertir(peso_limpio, unidad_peso, "kg")
         derivados_kg = {n: convertir(p, unidad_peso, "kg") for n, p in derivados_limpios.items()}
         total_kg = peso_limpio_kg + sum(derivados_kg.values())
@@ -632,7 +1042,8 @@ class Inventario:
 
         # --- A partir de aquí todo está validado: se aplica la limpieza ---
         unidad_nueva = origen.unidad if origen.unidad in UNIDADES_PESO else "kg"
-        coste = round(cantidad * origen.precio_unitario, 2)
+        coste = round(cantidad * lote.precio_unitario, 2)
+        etiqueta_origen = lote.etiqueta()
 
         if principal is None:
             principal = Producto(
@@ -648,30 +1059,20 @@ class Inventario:
                     nombre, origen.categoria, 0, unidad_nueva, 0, "Elaboración propia", es_subproducto=True
                 ))
 
-        self.actualizar_stock(nombre_origen, cantidad, sumar=False, motivo_salida="limpieza")
+        self.salida_stock(nombre_origen, cantidad, "limpieza", lote_id)
 
-        # El limpio carga con todo el coste: su precio pasa a ser la media
-        # ponderada entre lo que ya había y lo que acaba de salir.
+        # El lote limpio carga con todo el coste de lo que se limpió.
         cantidad_limpio = round(convertir(peso_limpio_kg, "kg", principal.unidad), 6)
-        principal.precio_unitario = round(
-            (principal.stock * principal.precio_unitario + coste) / (principal.stock + cantidad_limpio), 4
+        self.entrada_stock(
+            producto_limpio, cantidad_limpio, precio_unitario=round(coste / cantidad_limpio, 4),
+            proveedor="Elaboración propia", fecha_caducidad=caducidades.get(producto_limpio), motivo="limpieza",
         )
-        self.actualizar_stock(
-            producto_limpio, cantidad_limpio, sumar=True, motivo_entrada="limpieza",
-            nueva_fecha_caducidad=caducidades.get(producto_limpio),
-        )
-
-        # Los derivados entran a coste 0 (si ya había stock con precio, se
-        # abarata en proporción, igual que haría una media ponderada).
+        # Los derivados entran a coste 0.
         for nombre, kg in derivados_kg.items():
             derivado = self.productos[nombre]
-            cantidad_derivado = round(convertir(kg, "kg", derivado.unidad), 6)
-            derivado.precio_unitario = round(
-                derivado.stock * derivado.precio_unitario / (derivado.stock + cantidad_derivado), 4
-            )
-            self.actualizar_stock(
-                nombre, cantidad_derivado, sumar=True, motivo_entrada="limpieza",
-                nueva_fecha_caducidad=caducidades.get(nombre),
+            self.entrada_stock(
+                nombre, round(convertir(kg, "kg", derivado.unidad), 6), precio_unitario=0,
+                proveedor="Elaboración propia", fecha_caducidad=caducidades.get(nombre), motivo="limpieza",
             )
 
         limpieza = Limpieza(
@@ -683,6 +1084,7 @@ class Inventario:
             peso_limpio_kg=round(peso_limpio_kg, 6),
             derivados_kg={n: round(kg, 6) for n, kg in derivados_kg.items()},
             coste=coste,
+            lote_origen=etiqueta_origen,
         )
         self.limpiezas.append(limpieza)
         print(f"🔪 Limpieza registrada: {limpieza}")
@@ -733,30 +1135,23 @@ class Inventario:
         nombre_actual: str,
         nuevo_nombre: Optional[str] = None,
         categoria: Optional[str] = None,
-        stock: Optional[float] = None,
-        precio_unitario: Optional[float] = None,
         proveedor: Optional[str] = None,
         stock_minimo: Optional[float] = None,
-        fecha_caducidad: Optional[date] = None,
-        borrar_fecha_caducidad: bool = False,
         tiene_merma: Optional[bool] = None,
         peso_unitario: Optional[float] = None,
     ) -> bool:
         """
-        Corrige directamente los datos de un producto YA existente -- a
-        diferencia de actualizar_stock() (que solo SUMA/RESTA cantidades
-        y solo toca la fecha de caducidad al entrar mercancía nueva),
-        aquí se puede corregir cualquier campo, incluido el propio nombre.
+        Corrige los datos GENERALES de un producto ya existente: nombre,
+        categoría, proveedor habitual, stock mínimo y merma. Lo que depende
+        de cada compra (cantidad, precio, caducidad, peso por unidad de un
+        lote concreto) se corrige en su lote, con editar_lote().
 
         Cualquier parámetro que dejes en None (el valor por defecto) NO
-        se modifica -- así puedes cambiar solo el precio sin tener que
+        se modifica -- así puedes cambiar solo el mínimo sin tener que
         repetir todos los demás datos.
 
-        La fecha de caducidad es un caso especial: None podría significar
-        tanto "no la toques" como "bórrala" (un producto SIN fecha es un
-        estado válido), así que hace falta un parámetro aparte para
-        distinguirlo. borrar_fecha_caducidad=True tiene prioridad sobre
-        cualquier valor que pases en fecha_caducidad.
+        peso_unitario: peso por unidad de referencia (el que se propone al
+        registrar compras nuevas de un producto con merma por unidades).
 
         Devuelve True si el cambio se aplicó, False si se abortó (por
         ejemplo, si el nuevo nombre ya lo usa otro producto) -- así quien
@@ -792,21 +1187,12 @@ class Inventario:
             self._renombrar_referencias(nombre_actual, nuevo_nombre)
 
         producto.tiene_merma = merma_final
-        if producto.unidad == "unidades":
-            producto.peso_unitario = peso_final
+        if producto.unidad == "unidades" and peso_unitario is not None:
+            producto.peso_unitario_referencia = peso_unitario
         producto.categoria = categoria_final
         producto.proveedor = proveedor_final
-        if stock is not None:
-            producto.stock = stock
-        if precio_unitario is not None:
-            producto.precio_unitario = precio_unitario
         if stock_minimo is not None:
             producto.stock_minimo = stock_minimo
-
-        if borrar_fecha_caducidad:
-            producto.fecha_caducidad = None
-        elif fecha_caducidad is not None:
-            producto.fecha_caducidad = fecha_caducidad
 
         print(f"✏️  Producto actualizado: {producto}")
         return True
@@ -839,21 +1225,35 @@ class Inventario:
         return [p for p in self.productos.values() if p.categoria == categoria]
 
     def productos_por_proveedor(self, proveedor: str) -> list[Producto]:
-        """Todos los productos que vienen de un proveedor concreto."""
-        return [p for p in self.productos.values() if p.proveedor == proveedor]
+        """Todos los productos que vienen de un proveedor concreto (habitual o de alguno de sus lotes)."""
+        return [
+            p for p in self.productos.values()
+            if p.proveedor == proveedor or any(l.proveedor == proveedor for l in p.lotes)
+        ]
 
     def productos_bajo_minimo(self) -> list[Producto]:
         return [p for p in self.productos.values() if p.esta_bajo_minimo()]
 
+    def lotes_proximos_a_caducar(self, dias: int = 7) -> list[tuple[Producto, Lote]]:
+        """Pares (producto, lote) de los lotes que caducan entre hoy y dentro de `dias` días, los más urgentes primero."""
+        resultado = [
+            (p, l) for p in self.productos.values() for l in p.lotes
+            if l.dias_para_caducar() is not None and 0 <= l.dias_para_caducar() <= dias
+        ]
+        return sorted(resultado, key=lambda par: _clave_caducidad(par[1]))
+
+    def lotes_caducados(self) -> list[tuple[Producto, Lote]]:
+        """Pares (producto, lote) de los lotes cuya caducidad ya ha pasado (candidatos a desechar)."""
+        resultado = [(p, l) for p in self.productos.values() for l in p.lotes if l.esta_caducado()]
+        return sorted(resultado, key=lambda par: _clave_caducidad(par[1]))
+
     def productos_proximos_a_caducar(self, dias: int = 7) -> list[Producto]:
-        resultado = []
-        for p in self.productos.values():
-            restantes = p.dias_para_caducar()
-            # p.stock > 0: si no queda nada físicamente, no tiene sentido
-            # avisar de que "va a caducar" — no hay nada que se eche a perder.
-            if restantes is not None and 0 <= restantes <= dias and p.stock > 0:
-                resultado.append(p)
-        return resultado
+        """Productos con algún lote que caduca en los próximos `dias` días (sin repetir)."""
+        vistos: list[Producto] = []
+        for p, _ in self.lotes_proximos_a_caducar(dias):
+            if p not in vistos:
+                vistos.append(p)
+        return vistos
 
     def valor_total_inventario(self) -> float:
         return round(sum(p.valor_total() for p in self.productos.values()), 2)
@@ -864,6 +1264,8 @@ class Inventario:
             return
         for producto in self.productos.values():
             print(producto)
+            for lote in producto.lotes_ordenados():
+                print(f"    · {lote.descripcion(producto.unidad)}")
 
     def to_dict(self) -> dict:
         """El inventario se convierte en una LISTA de productos y otra de movimientos, ya convertidos."""
@@ -891,60 +1293,35 @@ class Inventario:
 
 if __name__ == "__main__":
     # --- DEMO: esto solo se ejecuta si corres ESTE archivo directamente ---
+    from datetime import timedelta
+
+    hoy = date.today()
     inventario = Inventario()
-
     inventario.agregar_producto(Producto(
-        nombre="Harina de trigo",
-        categoria="Panadería",
-        stock=5,
-        unidad="kg",
-        precio_unitario=1.2,
-        proveedor="Harinas del Sur",
-        stock_minimo=10,
+        "Secreto ibérico", "Carnes", 1, "kg", 14, "Carnicería Pepe", stock_minimo=0.5,
+        fecha_caducidad=hoy + timedelta(days=3),
     ))
+    # Una compra nueva: otro lote, con otra caducidad, otro proveedor y otro precio.
+    inventario.entrada_stock(
+        "Secreto ibérico", 0.8, precio_unitario=15, proveedor="Ibéricos Sierra",
+        fecha_caducidad=hoy + timedelta(days=8),
+    )
 
-    inventario.agregar_producto(Producto(
-        nombre="Aceite de oliva",
-        categoria="Aceites",
-        stock=20,
-        unidad="litros",
-        precio_unitario=4.5,
-        proveedor="Oleícola Andaluza",
-        stock_minimo=5,
-        fecha_caducidad=date(2026, 8, 25),
-    ))
-
-    print("\n--- Inventario completo ---")
+    print("\n--- Inventario completo (con sus lotes) ---")
     inventario.listar_todos()
 
-    print("\n--- Productos bajo mínimo ---")
-    for p in inventario.productos_bajo_minimo():
-        print(p)
+    secreto = inventario.buscar_producto("Secreto ibérico")
+    print(f"\nStock total: {secreto.stock} kg | Precio medio: {secreto.precio_unitario} €/kg")
+    print(f"Caducidad más próxima: {secreto.fecha_caducidad.strftime('%d/%m/%Y')}")
 
-    print("\n--- Próximos a caducar (7 días) ---")
-    for p in inventario.productos_proximos_a_caducar():
-        print(p)
+    # Quien usa el programa decide de qué lote sale: aquí, del que caduca MÁS TARDE.
+    lote_tardio = secreto.lotes_ordenados()[-1]
+    inventario.salida_stock("Secreto ibérico", 0.3, "consumo", lote_tardio.id)
 
-    print(f"\n💰 Valor total del inventario: {inventario.valor_total_inventario()} €")
+    print("\n--- Lotes próximos a caducar (7 días) ---")
+    for producto, lote in inventario.lotes_proximos_a_caducar():
+        print(f"{producto.nombre}: {lote.descripcion(producto.unidad)}")
 
-    # --- EJERCICIO 1: añadir un producto nuevo ---
-    inventario.agregar_producto(Producto(
-        nombre="Tomate",
-        categoria="Verduras",
-        stock=8,
-        unidad="kg",
-        precio_unitario=2.1,
-        proveedor="Huerta Local",
-        stock_minimo=5,
-        fecha_caducidad=date(2026, 8, 20),  # fecha ya pasada, para probar esta_caducado()
-    ))
-
-    # --- EJERCICIO 2: productos_por_proveedor() ---
-    print("\n--- Productos de 'Harinas del Sur' ---")
-    for p in inventario.productos_por_proveedor("Harinas del Sur"):
-        print(p)
-
-    # --- EJERCICIO 3: esta_caducado() ---
-    print("\n--- ¿Qué productos están caducados? ---")
-    for p in inventario.productos.values():
-        print(f"{p.nombre}: {'CADUCADO ❌' if p.esta_caducado() else 'OK ✅'}")
+    print("\n--- Historial ---")
+    for movimiento in inventario.historial:
+        print(movimiento)

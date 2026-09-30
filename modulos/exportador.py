@@ -43,9 +43,9 @@ def _ajustar_ancho_columnas(hoja, ancho: int = 18) -> None:
 
 def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
     hoja = wb.create_sheet("Inventario")
-    columnas = ["Nombre", "Categoría", "Stock", "Unidad", "Precio unitario (€)",
-                "Valor total (€)", "Proveedor", "Stock mínimo", "Fecha caducidad",
-                "Tipo", "Peso por unidad en bruto (kg)"]
+    columnas = ["Nombre", "Categoría", "Stock", "Unidad", "Precio medio (€)",
+                "Valor total (€)", "Proveedor habitual", "Stock mínimo", "Próxima caducidad",
+                "Tipo", "Peso medio por unidad en bruto (kg)", "Lotes"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -63,7 +63,35 @@ def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
         hoja.cell(row=fila, column=9, value=fecha).font = Font(name=FUENTE)
         hoja.cell(row=fila, column=10, value=producto.tipo_descripcion() or "—").font = Font(name=FUENTE)
         hoja.cell(row=fila, column=11, value=producto.peso_unitario or "—").font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=12, value=len(producto.lotes)).font = Font(name=FUENTE)
         fila += 1
+
+    if fila > 2:
+        hoja.cell(row=fila, column=5, value="TOTAL").font = Font(name=FUENTE, bold=True)
+        hoja.cell(row=fila, column=6, value=f"=SUM(F2:F{fila - 1})").font = Font(name=FUENTE, bold=True)
+
+    _ajustar_ancho_columnas(hoja)
+
+
+def _hoja_lotes(wb: Workbook, inventario: Inventario) -> None:
+    """Un renglón por lote: qué hay de cada compra, de quién, a qué precio y cuándo caduca."""
+    hoja = wb.create_sheet("Lotes")
+    columnas = ["Producto", "Lote", "Cantidad", "Unidad", "Precio (€)", "Valor (€)", "Proveedor",
+                "Fecha de entrada", "Caducidad", "Procedencia", "Peso por unidad (kg)"]
+    _escribir_cabecera(hoja, columnas)
+
+    fila = 2
+    for producto in inventario.productos.values():
+        for lote in producto.lotes_ordenados():
+            valores = [
+                producto.nombre, lote.id, lote.cantidad, producto.unidad, lote.precio_unitario,
+                f"=C{fila}*E{fila}", lote.proveedor, lote.fecha_entrada.strftime("%d/%m/%Y"),
+                lote.fecha_caducidad.strftime("%d/%m/%Y") if lote.fecha_caducidad else "—",
+                lote.procedencia, lote.peso_unitario or "—",
+            ]
+            for columna, valor in enumerate(valores, start=1):
+                hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+            fila += 1
 
     if fila > 2:
         hoja.cell(row=fila, column=5, value="TOTAL").font = Font(name=FUENTE, bold=True)
@@ -77,7 +105,7 @@ def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
     hoja = wb.create_sheet("Limpiezas")
     columnas = ["Fecha", "Producto en bruto", "Cantidad", "Unidad", "Peso bruto (kg)",
                 "Producto limpio", "Peso limpio (kg)", "Derivados aprovechados",
-                "Derivados (kg)", "Merma (kg)", "Rendimiento", "Coste (€)"]
+                "Derivados (kg)", "Merma (kg)", "Rendimiento", "Coste (€)", "Lote en bruto"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -88,7 +116,7 @@ def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
             l.peso_bruto_kg, l.producto_limpio, l.peso_limpio_kg, derivados,
             round(sum(l.derivados_kg.values()), 3),
             # Fórmulas reales: merma = bruto - limpio - derivados; rendimiento = limpio / bruto
-            f"=E{fila}-G{fila}-I{fila}", f"=G{fila}/E{fila}", l.coste,
+            f"=E{fila}-G{fila}-I{fila}", f"=G{fila}/E{fila}", l.coste, l.lote_origen or "—",
         ]
         for columna, valor in enumerate(valores, start=1):
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
@@ -149,14 +177,15 @@ def exportar_todo(
     carpeta_salida: str,
 ) -> str:
     """
-    Genera un único archivo Excel con 3 hojas (Inventario, Servicios,
-    Lista de compra) dentro de `carpeta_salida`. Devuelve la ruta del
+    Genera un único archivo Excel con una hoja para cada cosa (Inventario,
+    Lotes, Limpiezas, Servicios, Lista de compra) dentro de `carpeta_salida`. Devuelve la ruta del
     archivo generado.
     """
     wb = Workbook()
     wb.remove(wb.active)  # quitamos la hoja "Sheet" vacía que crea por defecto
 
     _hoja_inventario(wb, inventario)
+    _hoja_lotes(wb, inventario)
     _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)
