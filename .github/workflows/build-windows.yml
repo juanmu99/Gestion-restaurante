@@ -29,8 +29,8 @@ jobs:
 
       - name: Instalar las dependencias del proyecto y PyInstaller
         run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
+          pip install -r requirements.txt -c restricciones.txt
+          pip install pyinstaller==6.22.3 -c restricciones.txt
 
       - name: Construir el ejecutable
         # --paths modulos: para que encuentre inventario.py, servicios.py...

@@ -1,11 +1,17 @@
+# Librerías que usa el programa, con la versión EXACTA con la que se ha probado.
+# Para actualizar alguna: cambia el número aquí, sube el cambio y comprueba
+# que la prueba "Probar interfaz" sale en verde antes de repartir el .exe.
+#
+# Instalar en tu ordenador (desde la carpeta del proyecto):
+#     pip3 install -r requirements.txt -c restricciones.txt
+
 # Para la interfaz gráfica
-# 1.50 o posterior: la app usa width="stretch" en tablas y gráficos
-streamlit>=1.50
-pandas
+streamlit==1.64.0
+pandas==3.0.6
 
 # Para la exportación a Excel
-openpyxl
+openpyxl==3.1.5
 
-# Para el backup a Google Drive (opcional, solo si usas esa función)
-google-auth-oauthlib
-google-api-python-client
+# Para el backup a Google Drive
+google-auth-oauthlib==1.5.0
+google-api-python-client==2.200.0

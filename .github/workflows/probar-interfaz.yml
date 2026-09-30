@@ -31,7 +31,7 @@ jobs:
 
       - name: Instalar dependencias y el navegador para las capturas
         run: |
-          pip install -r requirements.txt playwright
+          pip install -r requirements.txt playwright==1.63.0 -c restricciones.txt
           python -m playwright install --with-deps chromium
 
       - name: Apuntar las versiones exactas instaladas
