@@ -461,7 +461,9 @@ def prueba_gastos(at: AppTest) -> None:
     comprobar(sin_excepciones(at, "añadir servicio con precio") and nuevo.comensales == 10 and nuevo.precio_cobrado == 250,
               f"Servicio con precio por comensal: se guarda el total (250 €, hay {nuevo.precio_cobrado})")
 
-    # Sin precio: es opcional
+    # Sin precio: es opcional (en la app el formulario se vacía solo; el
+    # simulador de pruebas conserva lo escrito, así que se pone a 0 a mano)
+    por_etiqueta(at.number_input, "Precio de cobro (€, opcional)").set_value(0.0)
     por_etiqueta(at.number_input, "Comensales").set_value(4)
     por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
     boton(at.button, "Añadir servicio").click().run()
