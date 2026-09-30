@@ -506,6 +506,61 @@ def prueba_gastos(at: AppTest) -> None:
     comprobar(nuevo.precio_cobrado == 300, "Se puede cambiar el precio de cobro después")
 
 
+@prueba("Material reutilizable")
+def prueba_material(at: AppTest) -> None:
+    reg = at.session_state["registro_material"]
+    serv = at.session_state["registro_servicios"]
+
+    # Inventario > Material: añadir uno nuevo
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🍽️ Material").run()
+    comprobar(sin_excepciones(at, "lista de material"), "La lista de material se muestra sin errores")
+    v = at.session_state["mat_version"]
+    at.text_input(key=f"mat_add_nombre_{v}").input("Cuchillo")
+    at.text_input(key=f"mat_add_categoria_{v}").input("Cubertería")
+    at.number_input(key=f"mat_add_cantidad_{v}").set_value(40)
+    at.number_input(key=f"mat_add_precio_{v}").set_value(1.5)
+    at.button(key=f"mat_add_boton_{v}").click().run()
+    comprobar(reg.buscar("Cuchillo") is not None and reg.buscar("Cuchillo").cantidad_total == 40, "Añadir material")
+
+    # Servicios > Material: salida con la lista de carga que propone el menú
+    servicio = next(s for s in serv.servicios if s.precio_cobrado == 300)  # el de 10 comensales (prueba de gastos)
+    ir_a(at, "Servicios")
+    sb = at.selectbox(key="material_servicio_select")
+    sb.select(opcion(sb, f"#{servicio.id} -")).run()
+    comprobar(at.number_input(key=f"carga_{servicio.id}_Plato llano").value == 20,
+              "La lista de carga propone el material del menú (2 platos x 10 comensales = 20)")
+    at.button(key=f"salida_boton_{servicio.id}").click().run()
+    comprobar(sin_excepciones(at, "salida de material") and reg.en_uso("Plato llano") == 20
+              and reg.disponibles("Plato llano") == 40 and reg.buscar("Plato llano").cantidad_total == 60,
+              "Tras la salida, los platos siguen existiendo (60) pero solo 40 están disponibles")
+
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🍽️ Material").run()
+    comprobar(any("Fuera" in t for t in textos(at.warning)), "El inventario de material avisa de lo que está fuera")
+
+    # Vuelta: 18 platos de 20 (1 roto, 1 perdido); el resto vuelve entero
+    ir_a(at, "Servicios")
+    sb = at.selectbox(key="material_servicio_select")
+    sb.select(opcion(sb, f"#{servicio.id} -")).run()
+    at.number_input(key=f"vuelta_{servicio.id}_Plato llano").set_value(18).run()
+    at.number_input(key=f"rotos_{servicio.id}_Plato llano_2").set_value(1)
+    at.button(key=f"vuelta_boton_{servicio.id}").click().run()
+    comprobar(sin_excepciones(at, "vuelta de material") and reg.en_uso("Plato llano") == 0
+              and reg.buscar("Plato llano").cantidad_total == 58
+              and sorted(i.tipo for i in reg.incidencias) == ["pérdida", "rotura"],
+              "Vuelta: todo deja de estar en uso y los 2 platos que faltan se apuntan (1 rotura y 1 pérdida)")
+    comprobar(reg.coste_incidencias_servicio(servicio.id) == 7.0, "Las roturas y pérdidas cuestan 2 x 3,5 € = 7 €")
+
+    # Material por comensal del menú, en su detalle
+    ir_a(at, "Recetario")
+    menu = at.session_state["recetario"].menus["Menú del día"]
+    at.number_input(key="menu_Menú del día_mat_Plato llano").set_value(1.0)
+    at.button(key="menu_Menú del día_guardar_material").click().run()
+    comprobar(sin_excepciones(at, "material del menú") and menu.materiales_por_comensal.get("Plato llano") == 1,
+              "En el detalle del menú se cambia su material")
+
+
 @prueba("Compras")
 def prueba_compras(at: AppTest) -> None:
     from recetario import Receta, Menu
@@ -556,6 +611,9 @@ def prueba_metricas_y_guardado(at: AppTest) -> None:
               and "Carne de cerdo limpia" in inv2.productos,
               "Al reabrir, se carga la sesión con la limpieza y el producto limpio")
     comprobar(len(at2.session_state["registro_gastos"].gastos) == 2, "Al reabrir, se cargan también los gastos")
+    comprobar(at2.session_state["registro_material"].buscar("Cuchillo") is not None
+              and len(at2.session_state["registro_material"].incidencias) == 2,
+              "Al reabrir, se carga también el material con sus roturas")
 
 
 # ---------------------------------------------------------------- ejecución
@@ -577,6 +635,7 @@ def main() -> int:
     prueba_completar(at)
     prueba_completar_lotes(at)
     prueba_gastos(at)
+    prueba_material(at)
     prueba_compras(at)
     prueba_metricas_y_guardado(at)
 

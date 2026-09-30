@@ -129,12 +129,22 @@ class Menu:
     comensal. Se descuentan al completar el servicio y entran en la lista
     de la compra igual que los ingredientes, pero se guardan aparte para
     que el menú siga "hablando" de comida a simple vista.
+
+    Y MATERIAL por comensal (platos, copas, cubiertos...): no se gasta,
+    sirve para proponer la lista de carga del servicio (ver materiales.py).
     """
 
-    def __init__(self, nombre: str, recetas: list[Receta], consumibles_por_comensal: Optional[dict[str, float]] = None):
+    def __init__(
+        self,
+        nombre: str,
+        recetas: list[Receta],
+        consumibles_por_comensal: Optional[dict[str, float]] = None,
+        materiales_por_comensal: Optional[dict[str, float]] = None,
+    ):
         self.nombre = nombre
         self.recetas = recetas
         self.consumibles_por_comensal = dict(consumibles_por_comensal or {})
+        self.materiales_por_comensal = dict(materiales_por_comensal or {})
 
     def calcular_ingredientes_totales(self, comensales: int) -> dict[str, float]:
         """Suma los ingredientes de TODAS las recetas del menú, ya escalados."""
@@ -186,6 +196,7 @@ class Menu:
             "nombre": self.nombre,
             "recetas": [r.nombre for r in self.recetas],
             "consumibles_por_comensal": self.consumibles_por_comensal,
+            "materiales_por_comensal": self.materiales_por_comensal,
         }
 
     @classmethod
@@ -203,7 +214,9 @@ class Menu:
             if nombre in recetas_disponibles
         ]
         # .get(): los menús guardados antes de los consumibles no los tienen.
-        return cls(datos["nombre"], recetas, datos.get("consumibles_por_comensal", {}))
+        return cls(
+            datos["nombre"], recetas, datos.get("consumibles_por_comensal", {}), datos.get("materiales_por_comensal", {}),
+        )
 
     def urgencia_caducidad(self, inventario: Inventario, dias: int = 7) -> float:
         """Suma la urgencia de todas sus recetas -- ver Receta.urgencia_caducidad()."""
@@ -294,6 +307,17 @@ class Recetario:
                     (nuevo if n == antiguo else n): c for n, c in menu.consumibles_por_comensal.items()
                 }
                 actualizados.append(f"menú {menu.nombre}")
+        return actualizados
+
+    def renombrar_material(self, antiguo: str, nuevo: str) -> list[str]:
+        """Como renombrar_producto(), pero para el material de los menús."""
+        actualizados = []
+        for menu in self.menus.values():
+            if antiguo in menu.materiales_por_comensal:
+                menu.materiales_por_comensal = {
+                    (nuevo if n == antiguo else n): c for n, c in menu.materiales_por_comensal.items()
+                }
+                actualizados.append(menu.nombre)
         return actualizados
 
     def buscar_menu(self, nombre: str) -> Optional[Menu]:

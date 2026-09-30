@@ -2,7 +2,7 @@
 Módulo: persistencia.py
 --------------------------
 Guarda y carga el estado completo de la aplicación (inventario,
-servicios, recetario, compras, informes y gastos) en un único archivo
+servicios, recetario, compras, informes, gastos y material) en un único archivo
 JSON, para que los datos no se pierdan al cerrar el programa.
 
 Se apoya en los métodos to_dict()/from_dict() que hemos añadido a cada
@@ -25,6 +25,7 @@ from recetario import Recetario
 from compras import GestorCompras
 from metricas import ArchivoInformes
 from gastos import RegistroGastos
+from materiales import RegistroMaterial
 
 
 @dataclass
@@ -41,6 +42,7 @@ class Sesion:
     gestor_compras: GestorCompras
     archivo_informes: ArchivoInformes
     registro_gastos: RegistroGastos = field(default_factory=RegistroGastos)
+    registro_material: RegistroMaterial = field(default_factory=RegistroMaterial)
 
 
 def guardar_sesion(
@@ -51,6 +53,7 @@ def guardar_sesion(
     archivo_informes: ArchivoInformes,
     ruta: str,
     registro_gastos: Optional[RegistroGastos] = None,
+    registro_material: Optional[RegistroMaterial] = None,
 ) -> None:
     """Guarda el estado completo de todos los módulos en un archivo JSON."""
     datos = {
@@ -60,6 +63,7 @@ def guardar_sesion(
         "compras": gestor_compras.to_dict(),
         "informes": archivo_informes.to_dict(),
         "gastos": (registro_gastos or RegistroGastos()).to_dict(),
+        "material": (registro_material or RegistroMaterial()).to_dict(),
     }
 
     Path(ruta).parent.mkdir(parents=True, exist_ok=True)
@@ -93,9 +97,12 @@ def cargar_sesion(ruta: str) -> Optional[Sesion]:
 
     # Las sesiones guardadas antes de existir los gastos no los tienen.
     registro_gastos = RegistroGastos.from_dict(datos.get("gastos", {"gastos": []}))
+    registro_material = RegistroMaterial.from_dict(datos.get("material", {}))
 
     print(f"📂 Sesión cargada desde {ruta}")
-    return Sesion(inventario, registro_servicios, recetario, gestor_compras, archivo_informes, registro_gastos)
+    return Sesion(
+        inventario, registro_servicios, recetario, gestor_compras, archivo_informes, registro_gastos, registro_material,
+    )
 
 
 if __name__ == "__main__":

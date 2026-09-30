@@ -323,6 +323,78 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar("Gastos" in libro.sheetnames and "Rentabilidad" in libro.sheetnames,
               "El Excel tiene las hojas 'Gastos' y 'Rentabilidad'")
 
+print("\n--- Material reutilizable ---")
+from materiales import Material, RegistroMaterial, lista_de_carga  # noqa: E402
+
+try:
+    Material("Plato", "Vajilla", 2.5)
+    comprobar(False, "El material se cuenta en unidades enteras")
+except ValueError:
+    comprobar(True, "El material se cuenta en unidades enteras")
+
+reg = RegistroMaterial()
+silencio(reg.agregar_material, Material("Plato llano", "Vajilla", 50, 3.5))
+silencio(reg.agregar_material, Material("Copa", "Cristalería", 30, 2.0))
+comprobar(lista_de_carga({"Plato llano": 2, "Copa": 0.5}, 15) == {"Plato llano": 30, "Copa": 8},
+          "La lista de carga se calcula por comensal y redondea hacia arriba (7,5 copas -> 8)")
+silencio(reg.registrar_salida, 1, {"Plato llano": 30, "Copa": 8})
+comprobar(reg.en_uso("Plato llano") == 30 and reg.disponibles("Plato llano") == 20
+          and reg.buscar("Plato llano").cantidad_total == 50,
+          "El material fuera sigue existiendo (50) pero no está disponible (20)")
+try:
+    reg.registrar_salida(2, {"Plato llano": 25})
+    comprobar(False, "No se puede sacar más material del disponible")
+except ValueError:
+    comprobar(reg.en_uso("Plato llano") == 30, "No se puede sacar más material del disponible")
+try:
+    reg.editar_material("Plato llano", cantidad_total=10)
+    comprobar(False, "El total no puede bajar de lo que está en uso")
+except ValueError:
+    comprobar(True, "El total no puede bajar de lo que está en uso")
+
+incidencias = silencio(reg.registrar_vuelta, 1, {"Plato llano": 27, "Copa": 8}, {"Plato llano": 2})
+comprobar(reg.en_uso("Plato llano") == 0 and reg.buscar("Plato llano").cantidad_total == 47,
+          "Al volver: deja de estar en uso y lo que falta (3) deja de contar en el total")
+comprobar(sorted((i.tipo, i.cantidad) for i in incidencias) == [("pérdida", 1), ("rotura", 2)],
+          "De lo que falta: 2 roturas y 1 pérdida")
+comprobar(reg.coste_incidencias_servicio(1) == 10.5, "Coste de roturas y pérdidas del servicio: 3 x 3,5 € = 10,5 €")
+
+silencio(reg.reponer, "Plato llano", 3)
+silencio(reg.dar_de_baja, "Copa", 1, "rotura")
+comprobar(reg.buscar("Plato llano").cantidad_total == 50 and reg.buscar("Copa").cantidad_total == 29
+          and reg.incidencias[-1].servicio_id is None,
+          "Reponer suma unidades; una rotura en el almacén resta y no es de ningún servicio")
+
+inv = inventario_secreto()
+recetario = Recetario()
+silencio(recetario.agregar_receta, Receta("Secreto a la brasa", "Principal", {"Secreto": 0.2}))
+silencio(recetario.agregar_menu, Menu("Menú brasa", [recetario.recetas["Secreto a la brasa"]], {}, {"Plato llano": 2}))
+servicio = Servicio(HOY, time(21, 0), 4, "Menú brasa", precio_cobrado=100)
+servicio.id = 1
+r = resumen_servicio(servicio, inv, recetario, RegistroGastos(), reg)
+comprobar(r["material"] == 10.5 and r["coste_total"] == round(r["comida"] + 10.5, 2),
+          "El coste del servicio incluye el material roto o perdido")
+
+silencio(reg.editar_material, "Plato llano", nuevo_nombre="Plato blanco")
+recetario.renombrar_material("Plato llano", "Plato blanco")
+comprobar("Plato blanco" in reg.materiales and reg.salidas[0].cantidades.get("Plato blanco") == 30
+          and reg.incidencias[0].material == "Plato blanco"
+          and recetario.menus["Menú brasa"].materiales_por_comensal == {"Plato blanco": 2},
+          "Renombrar un material lo actualiza en salidas, roturas y menús")
+
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = str(Path(carpeta) / "sesion.json")
+    silencio(guardar_sesion, inv, RegistroServicios(), recetario, GestorCompras(), ArchivoInformes(), ruta,
+             RegistroGastos(), reg)
+    sesion = silencio(cargar_sesion, ruta)
+    comprobar(sesion.registro_material.buscar("Plato blanco").cantidad_total == 50
+              and len(sesion.registro_material.incidencias) == 3
+              and sesion.recetario.menus["Menú brasa"].materiales_por_comensal == {"Plato blanco": 2},
+              "El material, sus roturas y el material de los menús se guardan y se cargan")
+    ruta_excel = silencio(exportar_todo, inv, RegistroServicios(), GestorCompras(), carpeta, RegistroGastos(),
+                          recetario, reg)
+    comprobar("Material" in load_workbook(ruta_excel).sheetnames, "El Excel tiene la hoja 'Material'")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

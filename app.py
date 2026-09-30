@@ -26,7 +26,10 @@ from pathlib import Path
 from datetime import date, time, timedelta
 from typing import Optional
 
-sys.path.append(str(Path(__file__).parent / "modulos"))
+# insert(0, ...) y no append(): así Python busca PRIMERO en nuestra carpeta
+# modulos/. Si el ordenador tuviera instalada una librería con el mismo
+# nombre que uno de nuestros módulos, se usaría la nuestra y no la otra.
+sys.path.insert(0, str(Path(__file__).parent / "modulos"))
 
 import streamlit as st
 import pandas as pd
@@ -38,6 +41,7 @@ from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import guardar_sesion, cargar_sesion, Sesion
 from gastos import Gasto, RegistroGastos, resumen_servicio
+from materiales import Material, RegistroMaterial, lista_de_carga
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, rango_mes_calendario, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -195,6 +199,7 @@ def inicializar_estado() -> None:
     st.session_state.gestor_compras = sesion.gestor_compras
     st.session_state.archivo_informes = sesion.archivo_informes
     st.session_state.registro_gastos = sesion.registro_gastos
+    st.session_state.registro_material = sesion.registro_material
     st.session_state.ultima_exportacion = None
     st.session_state.receta_ingredientes = {}  # ingredientes acumulados al crear una receta
 
@@ -237,7 +242,17 @@ def cargar_datos_ejemplo() -> None:
     ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
     rec.agregar_receta(pan)
     rec.agregar_receta(ensalada)
-    rec.agregar_menu(Menu("Menú del día", [pan, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1}))
+    # Material reutilizable: sale a los servicios y vuelve.
+    mat = st.session_state.registro_material
+    for nombre, categoria, unidades, precio in (
+        ("Plato llano", "Vajilla", 60, 3.5), ("Copa de vino", "Cristalería", 48, 2.8), ("Tenedor", "Cubertería", 80, 1.2),
+    ):
+        if nombre not in mat.materiales:
+            mat.agregar_material(Material(nombre, categoria, unidades, precio, "Hostelería Total"))
+    rec.agregar_menu(Menu(
+        "Menú del día", [pan, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1},
+        {"Plato llano": 2, "Copa de vino": 1, "Tenedor": 1},
+    ))
 
 
 # ---------- Lotes: piezas de interfaz compartidas ----------
@@ -436,7 +451,8 @@ def _campo_peso(etiqueta: str, clave: str, valor_kg: float = 0.0) -> Optional[fl
 # Las dos "listas" del inventario. Todo lo de la página Inventario (tabla,
 # avisos y pestañas) trabaja solo con la lista elegida arriba, para que los
 # alimentos y los consumibles no se mezclen.
-VISTAS_INVENTARIO = {"🍅 Alimentos": "alimento", "🧻 Consumibles": "consumible"}
+VISTAS_PRODUCTOS = {"🍅 Alimentos": "alimento", "🧻 Consumibles": "consumible"}
+VISTAS_INVENTARIO = {**VISTAS_PRODUCTOS, "🍽️ Material": "material"}
 
 
 def pagina_inventario() -> None:
@@ -444,6 +460,9 @@ def pagina_inventario() -> None:
     inv = st.session_state.inventario
 
     tipo = VISTAS_INVENTARIO[st.radio("Lista", list(VISTAS_INVENTARIO), horizontal=True, key="inv_tipo")]
+    if tipo == "material":
+        _seccion_material()
+        return
     productos_tipo = inv.consumibles() if tipo == "consumible" else inv.alimentos()
 
     if productos_tipo:
@@ -908,6 +927,199 @@ def _pestana_limpiezas(inv: Inventario) -> None:
     } for l in reversed(inv.limpiezas)], width="stretch", hide_index=True)
 
 
+# ---------- Inventario: material reutilizable ----------
+
+def _seccion_material() -> None:
+    """La lista de material del Inventario: lo que tienes, lo que está fuera y lo disponible."""
+    reg = st.session_state.registro_material
+    serv = st.session_state.registro_servicios
+
+    if reg.materiales:
+        st.dataframe([{
+            "Material": m.nombre, "Categoría": m.categoria, "Total": m.cantidad_total,
+            "En uso": reg.en_uso(m.nombre), "Disponibles": reg.disponibles(m.nombre),
+            "Reposición (€/ud)": _num(m.precio_reposicion), "Proveedor": m.proveedor or "—",
+        } for m in reg.materiales.values()], width="stretch", hide_index=True)
+        st.caption("'En uso' es lo que ha salido a un servicio y aún no ha vuelto: sigue siendo tuyo, pero no está disponible.")
+    else:
+        st.info(
+            "Todavía no hay material: platos, vasos, cubertería, mantelería, bandejas, chafings... "
+            "Añádelo en la pestaña 'Añadir material'."
+        )
+
+    for salida in reg.salidas:
+        if not salida.ha_vuelto:
+            servicio = serv.buscar_por_id(salida.servicio_id)
+            nombre_servicio = f"#{salida.servicio_id} {servicio.menu}" if servicio else f"#{salida.servicio_id}"
+            detalle = ", ".join(f"{c} {n}" for n, c in salida.cantidades.items())
+            st.warning(f"🚚 Fuera, en el servicio {nombre_servicio} (desde el {salida.fecha_salida.strftime('%d/%m/%Y')}): {detalle}")
+
+    st.divider()
+    tab_add, tab_edit, tab_reponer, tab_incidencias = st.tabs([
+        "➕ Añadir material", "✏️ Editar material", "📦 Reponer o dar de baja", "💥 Roturas y pérdidas",
+    ])
+
+    with tab_add:
+        v = st.session_state.setdefault("mat_version", 0)
+        k = lambda campo: f"mat_add_{campo}_{v}"
+        c1, c2 = st.columns(2)
+        nombre = c1.text_input("Nombre", key=k("nombre"), placeholder="Ej: Plato llano")
+        categoria = c2.text_input("Categoría", key=k("categoria"), placeholder="Ej: Vajilla")
+        c3, c4 = st.columns(2)
+        cantidad = c3.number_input("Unidades que tienes", min_value=0, step=1, key=k("cantidad"))
+        precio = c4.number_input("Precio de reposición (€ por unidad)", min_value=0.0, step=0.5, key=k("precio"),
+                                 help="Lo que cuesta reponer una unidad: es el coste que se apunta si se rompe o se pierde.")
+        proveedor = st.text_input("Proveedor (opcional)", key=k("proveedor"))
+        if st.button("Añadir material", type="primary", key=k("boton")):
+            try:
+                if reg.agregar_material(Material(nombre, categoria, int(cantidad), precio, proveedor)):
+                    avisar("success", f"Material '{nombre.strip()}' añadido.")
+                    st.session_state.mat_version += 1
+                    st.rerun()
+                else:
+                    st.error(f"Ya existe un material llamado '{nombre.strip()}'.")
+            except ValueError as e:
+                st.error(str(e))
+
+    if not reg.materiales:
+        return
+    nombres = list(reg.materiales)
+
+    with tab_edit:
+        nombre_sel = st.selectbox("Material a editar", nombres, key="mat_editar_select")
+        material = reg.buscar(nombre_sel)
+        k = lambda campo: f"mat_edit_{campo}_{nombre_sel}"
+        c1, c2 = st.columns(2)
+        nuevo_nombre = c1.text_input("Nombre", value=material.nombre, key=k("nombre"))
+        categoria = c2.text_input("Categoría", value=material.categoria, key=k("categoria"))
+        c3, c4 = st.columns(2)
+        total = c3.number_input("Unidades que tienes (total)", min_value=0, step=1, value=material.cantidad_total, key=k("total"))
+        precio = c4.number_input("Precio de reposición (€ por unidad)", min_value=0.0, step=0.5,
+                                 value=float(material.precio_reposicion), key=k("precio"))
+        proveedor = st.text_input("Proveedor", value=material.proveedor, key=k("proveedor"))
+        st.caption("Para registrar que has comprado más o que se ha roto algo, usa 'Reponer o dar de baja'.")
+        if st.button("Guardar cambios", type="primary", key=k("boton")):
+            try:
+                if reg.editar_material(nombre_sel, nuevo_nombre=nuevo_nombre, categoria=categoria,
+                                       cantidad_total=int(total), precio_reposicion=precio, proveedor=proveedor):
+                    if nuevo_nombre.strip() != nombre_sel:
+                        st.session_state.recetario.renombrar_material(nombre_sel, nuevo_nombre.strip())
+                    avisar("success", "Material actualizado.")
+                    st.rerun()
+                else:
+                    st.error(f"Ya existe otro material llamado '{nuevo_nombre.strip()}'.")
+            except ValueError as e:
+                st.error(str(e))
+
+    with tab_reponer:
+        nombre_sel = st.selectbox("Material", nombres, key="mat_reponer_select")
+        k = lambda campo: f"mat_rep_{campo}_{nombre_sel}"
+        st.caption(
+            f"Tienes {reg.buscar(nombre_sel).cantidad_total} · en uso {reg.en_uso(nombre_sel)} · "
+            f"disponibles {reg.disponibles(nombre_sel)}"
+        )
+        accion = st.radio("¿Qué ha pasado?", ["He comprado más", "Se ha roto", "Se ha perdido"], horizontal=True, key=k("accion"))
+        unidades = st.number_input("Unidades", min_value=0, step=1, key=k("unidades"))
+        if accion != "He comprado más":
+            st.caption("Una rotura o pérdida en el almacén (fuera de un servicio). Las de un servicio se apuntan al registrar su vuelta.")
+        if st.button("Registrar", type="primary", key=k("boton")):
+            try:
+                if accion == "He comprado más":
+                    if reg.reponer(nombre_sel, int(unidades)):
+                        avisar("success", f"{nombre_sel}: +{int(unidades)} unidades.")
+                        st.rerun()
+                    else:
+                        st.error("Indica cuántas unidades has comprado.")
+                else:
+                    tipo = "rotura" if accion == "Se ha roto" else "pérdida"
+                    incidencia = reg.dar_de_baja(nombre_sel, int(unidades), tipo)
+                    avisar("success", f"{tipo.capitalize()} registrada: {incidencia.cantidad} x {nombre_sel} ({incidencia.coste:.2f} €).")
+                    st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+    with tab_incidencias:
+        if not reg.incidencias:
+            st.info("No hay roturas ni pérdidas registradas.")
+        else:
+            st.dataframe([{
+                "Fecha": i.fecha.strftime("%d/%m/%Y"), "Tipo": i.tipo, "Material": i.material, "Unidades": i.cantidad,
+                "Coste (€)": f"{i.coste:.2f}", "Dónde": f"Servicio #{i.servicio_id}" if i.servicio_id else "Almacén",
+            } for i in reversed(reg.incidencias)], width="stretch", hide_index=True)
+            st.metric("Coste total de roturas y pérdidas", f"{sum(i.coste for i in reg.incidencias):.2f} €")
+
+
+# ---------- Servicios: salida y vuelta del material ----------
+
+def _pestana_material_servicio(serv: RegistroServicios, rec: Recetario) -> None:
+    reg = st.session_state.registro_material
+    if not reg.materiales:
+        st.info("No hay material registrado. Añádelo en Inventario > 🍽️ Material.")
+        return
+    servicios = sorted((s for s in serv.servicios if s.estado != "cancelado"), key=lambda s: (s.fecha, s.hora))
+    if not servicios:
+        st.info("No hay servicios.")
+        return
+    opciones = {}
+    for s in servicios:
+        fuera = " · 🚚 material fuera" if reg.salida_de(s.id) else ""
+        opciones[f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}{fuera}"] = s
+    servicio = opciones[st.selectbox("Servicio", list(opciones), key="material_servicio_select")]
+
+    salida = reg.salida_de(servicio.id)
+    if salida is not None:
+        st.subheader("🔙 Vuelta del material")
+        st.caption("Indica cuántas unidades han vuelto. De las que faltan, cuántas se han roto: el resto se apunta como pérdida.")
+        vuelto, rotos = {}, {}
+        for nombre, salio in salida.cantidades.items():
+            c1, c2, c3 = st.columns([2, 1, 1])
+            c1.markdown(f"**{nombre}** · salieron {salio}")
+            vuelto[nombre] = int(c2.number_input("Han vuelto", min_value=0, max_value=salio, value=salio, step=1,
+                                                 key=f"vuelta_{servicio.id}_{nombre}"))
+            faltan = salio - vuelto[nombre]
+            rotos[nombre] = int(c3.number_input("De ellos, rotos", min_value=0, max_value=max(faltan, 0), value=0, step=1,
+                                                key=f"rotos_{servicio.id}_{nombre}_{faltan}", disabled=faltan == 0))
+        if st.button("Registrar vuelta", type="primary", key=f"vuelta_boton_{servicio.id}"):
+            try:
+                incidencias = reg.registrar_vuelta(servicio.id, vuelto, rotos)
+                coste = sum(i.coste for i in incidencias)
+                detalle = f" Roturas y pérdidas: {coste:.2f} €." if incidencias else " Ha vuelto todo."
+                avisar("success", f"Material del servicio #{servicio.id} de vuelta.{detalle}")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+        st.divider()
+
+    st.subheader("🚚 Lista de carga" if salida is None else "🚚 Llevar más material a este servicio")
+    menu = rec.buscar_menu(servicio.menu)
+    sugerida = lista_de_carga(menu.materiales_por_comensal, servicio.comensales) if menu and salida is None else {}
+    if sugerida:
+        st.caption(f"Propuesta según el menú '{servicio.menu}' para {servicio.comensales} comensales. Puedes cambiar las cantidades.")
+    carga = {}
+    for m in reg.materiales.values():
+        disponibles = reg.disponibles(m.nombre)
+        carga[m.nombre] = int(st.number_input(
+            f"{m.nombre} (disponibles: {disponibles})", min_value=0, step=1,
+            value=min(sugerida.get(m.nombre, 0), max(disponibles, 0)), key=f"carga_{servicio.id}_{m.nombre}",
+        ))
+        if sugerida.get(m.nombre, 0) > disponibles:
+            st.caption(f"⚠️ El menú pide {sugerida[m.nombre]} y solo hay {disponibles} disponibles.")
+    if st.button("Registrar salida", type="primary", key=f"salida_boton_{servicio.id}"):
+        try:
+            reg.registrar_salida(servicio.id, carga)
+            avisar("success", f"Material cargado para el servicio #{servicio.id}: ahora figura como 'en uso'.")
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+    anteriores = [s for s in reg.salidas_de(servicio.id) if s.ha_vuelto]
+    if anteriores:
+        st.caption("Ya volvió: " + "; ".join(
+            f"{s.fecha_vuelta.strftime('%d/%m/%Y')}: " + ", ".join(f"{s.vuelto.get(n, 0)}/{c} {n}" for n, c in s.cantidades.items())
+            for s in anteriores
+        ))
+
+
 # ---------- Página: Servicios ----------
 
 def _elegir_lotes_servicio(servicio: Servicio, inv: Inventario, rec: Recetario) -> dict[str, list[int]]:
@@ -966,18 +1178,19 @@ def _texto_euros(valor: Optional[float]) -> str:
 
 def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetario) -> None:
     gastos = st.session_state.registro_gastos
+    material = st.session_state.registro_material
     servicios = sorted((s for s in serv.servicios if s.estado != "cancelado"), key=lambda s: (s.fecha, s.hora))
     if not servicios:
         st.info("No hay servicios.")
         return
 
     st.caption(
-        "Coste = comida + consumibles + gastos del servicio (gasolina, personal...). En los servicios completados es "
+        "Coste = comida + consumibles + gastos del servicio (gasolina, personal...) + material roto o perdido. En los servicios completados es "
         "lo que salió de verdad del inventario; en los pendientes, una estimación (*) con los precios actuales."
     )
     filas = []
     for s in servicios:
-        r = resumen_servicio(s, inv, rec, gastos)
+        r = resumen_servicio(s, inv, rec, gastos, material)
         filas.append({
             "Servicio": f"#{s.id} · {s.fecha.strftime('%d/%m/%Y')} · {s.menu}", "Comensales": s.comensales,
             "Estado": s.estado, "Cobro (€)": _texto_euros(r["cobrado"]),
@@ -990,7 +1203,7 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
     st.subheader("Detalle de un servicio")
     opciones = {f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}": s for s in servicios}
     servicio = opciones[st.selectbox("Servicio", list(opciones), key="rentabilidad_select")]
-    r = resumen_servicio(servicio, inv, rec, gastos)
+    r = resumen_servicio(servicio, inv, rec, gastos, material)
     m1, m2, m3 = st.columns(3)
     m1.metric("Cobro", _texto_euros(r["cobrado"]))
     m2.metric("Coste" + (" (estimado)" if r["estimado"] else ""), _texto_euros(r["coste_total"]))
@@ -1000,6 +1213,8 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
         {"Concepto": "🍅 Comida", "Importe (€)": f"{r['comida']:.2f}"},
         {"Concepto": "🧻 Consumibles", "Importe (€)": f"{r['consumibles']:.2f}"},
     ] + [{"Concepto": f"💶 {cat}", "Importe (€)": f"{imp:.2f}"} for cat, imp in r["gastos_por_categoria"].items()]
+    if r["material"]:
+        desglose.append({"Concepto": "🍽️ Material roto o perdido", "Importe (€)": f"{r['material']:.2f}"})
     st.dataframe(desglose, width="stretch", hide_index=True)
     gastos_servicio = gastos.gastos_de_servicio(servicio.id)
     if gastos_servicio:
@@ -1037,10 +1252,12 @@ def pagina_servicios() -> None:
         st.info("No hay servicios registrados.")
 
     st.divider()
-    tab_add, tab_cancel, tab_completar, tab_rentabilidad = st.tabs(
-        ["➕ Añadir servicio", "🚫 Cancelar servicio", "✅ Completar servicio", "💶 Rentabilidad"]
+    tab_add, tab_cancel, tab_completar, tab_material, tab_rentabilidad = st.tabs(
+        ["➕ Añadir servicio", "🚫 Cancelar servicio", "✅ Completar servicio", "🚚 Material", "💶 Rentabilidad"]
     )
 
+    with tab_material:
+        _pestana_material_servicio(serv, rec)
     with tab_rentabilidad:
         _pestana_rentabilidad(serv, inv, rec)
 
@@ -1177,6 +1394,29 @@ def _editor_consumibles(inv: Inventario, clave: str, actuales: dict[str, float])
     return resultado
 
 
+def _editor_material(clave: str, actuales: dict[str, float]) -> dict[str, float]:
+    """Elegir el material que lleva un menú y cuántas unidades por comensal (para la lista de carga)."""
+    reg = st.session_state.registro_material
+    disponibles = list(reg.materiales)
+    if not disponibles:
+        st.caption("🍽️ No hay material registrado (platos, copas, cubiertos...). Puedes añadirlo en Inventario > Material.")
+        return {}
+    elegidos = st.multiselect(
+        "🍽️ Material por comensal (opcional)", disponibles,
+        default=[n for n in actuales if n in disponibles], key=f"{clave}_materiales",
+        help="Platos, copas, cubiertos... por cada comensal. Sirve para proponer la lista de carga del servicio.",
+    )
+    resultado = {}
+    for nombre in elegidos:
+        cantidad = st.number_input(
+            f"{nombre}: unidades por comensal", min_value=0.0, step=0.5,
+            value=float(actuales.get(nombre, 1.0)), key=f"{clave}_mat_{nombre}",
+        )
+        if cantidad > 0:
+            resultado[nombre] = cantidad
+    return resultado
+
+
 def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
     """Un menú: a simple vista, su comida; al entrar, el detalle de cada receta y sus consumibles."""
     with st.container(border=True):
@@ -1214,11 +1454,28 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                 f"{menu.costo_consumibles_por_comensal(inv)} € = **{total} €**"
             )
 
+            st.markdown("**🍽️ Material**")
+            if menu.materiales_por_comensal:
+                st.dataframe([{"Material": nombre, "Unidades por comensal": _num(cantidad)}
+                              for nombre, cantidad in menu.materiales_por_comensal.items()], width="stretch", hide_index=True)
+                st.caption("No es un coste: el material vuelve. Sirve para proponer la lista de carga de cada servicio.")
+            else:
+                st.caption("Este menú no tiene material asignado.")
+
             st.markdown("**Cambiar los consumibles del menú**")
             nuevos = _editor_consumibles(inv, f"menu_{menu.nombre}", menu.consumibles_por_comensal)
             if inv.consumibles() and st.button("Guardar consumibles", key=f"menu_{menu.nombre}_guardar"):
                 menu.consumibles_por_comensal = nuevos
                 avisar("success", f"Consumibles del menú '{menu.nombre}' guardados.")
+                st.rerun()
+
+            st.markdown("**Cambiar el material del menú**")
+            nuevo_material = _editor_material(f"menu_{menu.nombre}", menu.materiales_por_comensal)
+            if st.session_state.registro_material.materiales and st.button(
+                "Guardar material", key=f"menu_{menu.nombre}_guardar_material"
+            ):
+                menu.materiales_por_comensal = nuevo_material
+                avisar("success", f"Material del menú '{menu.nombre}' guardado.")
                 st.rerun()
 
 
@@ -1308,12 +1565,13 @@ def pagina_recetario() -> None:
             nombre_menu = st.text_input("Nombre del menú", key="nombre_menu_input")
             recetas_elegidas = st.multiselect("Recetas a incluir", list(rec.recetas.keys()), key="recetas_multiselect")
             consumibles = _editor_consumibles(inv, "nuevo_menu", {})
+            materiales = _editor_material("nuevo_menu", {})
             if st.button("Crear menú", type="primary"):
                 if not nombre_menu or not recetas_elegidas:
                     st.error("Indica un nombre y al menos una receta.")
                 else:
                     recetas_obj = [rec.recetas[n] for n in recetas_elegidas]
-                    rec.agregar_menu(Menu(nombre_menu, recetas_obj, consumibles))
+                    rec.agregar_menu(Menu(nombre_menu, recetas_obj, consumibles, materiales))
                     avisar("success", f"Menú '{nombre_menu}' creado.")
                     st.rerun()
 
@@ -1507,7 +1765,7 @@ def pagina_exportar() -> None:
         ruta = exportar_todo(
             st.session_state.inventario, st.session_state.registro_servicios,
             st.session_state.gestor_compras, carpeta,
-            st.session_state.registro_gastos, st.session_state.recetario,
+            st.session_state.registro_gastos, st.session_state.recetario, st.session_state.registro_material,
         )
         st.session_state.ultima_exportacion = ruta
         st.success(f"Exportado a {ruta}")
@@ -1544,7 +1802,7 @@ def pagina_metricas() -> None:
 
     c1, c2 = st.columns(2)
     periodo = c1.selectbox("Periodo", PERIODOS_VALIDOS, index=1, key="periodo_metricas")
-    tipo = VISTAS_INVENTARIO[c2.radio("Productos", list(VISTAS_INVENTARIO), horizontal=True, key="metricas_tipo")]
+    tipo = VISTAS_PRODUCTOS[c2.radio("Productos", list(VISTAS_PRODUCTOS), horizontal=True, key="metricas_tipo")]
     desde, hasta = rango_desde_periodo(periodo)
     st.caption(f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}")
     nombres_tipo = [p.nombre for p in (inv.consumibles() if tipo == "consumible" else inv.alimentos())]
@@ -1732,6 +1990,7 @@ if st.sidebar.button("💾 Guardar sesión"):
         st.session_state.inventario, st.session_state.registro_servicios,
         st.session_state.recetario, st.session_state.gestor_compras,
         st.session_state.archivo_informes, RUTA_SESION, st.session_state.registro_gastos,
+        st.session_state.registro_material,
     )
     st.sidebar.success("Sesión guardada")
 

@@ -85,11 +85,27 @@ def main() -> int:
                     esperar(page)
                     page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario consumibles")), full_page=True)
                     print("📸 Inventario > Consumibles")
+                    numero += 1
+                    page.get_by_text("🍽️ Material", exact=True).first.click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario material")), full_page=True)
+                    print("📸 Inventario > Material")
                     page.get_by_text("🍅 Alimentos", exact=True).first.click()
                     esperar(page)
                 except Exception as e:  # noqa: BLE001
                     errores.append(f"Inventario > Consumibles: {e}")
                 numero += 1
+
+            if pagina == "Servicios":
+                for pestana in ("🚚 Material", "💶 Rentabilidad"):
+                    try:
+                        page.get_by_role("tab", name=pestana).click()
+                        esperar(page)
+                        page.screenshot(path=str(CARPETA / nombre_archivo(numero, f"servicios {pestana}")), full_page=True)
+                        print(f"📸 Servicios > {pestana}")
+                    except Exception as e:  # noqa: BLE001
+                        errores.append(f"Servicios > {pestana}: {e}")
+                    numero += 1
 
             if pagina == "Recetario":
                 try:

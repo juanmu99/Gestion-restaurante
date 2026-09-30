@@ -19,6 +19,7 @@ from datetime import date
 from typing import Optional
 
 from inventario import Inventario
+from materiales import RegistroMaterial
 from recetario import Recetario
 from servicios import Servicio
 
@@ -132,7 +133,8 @@ class RegistroGastos:
 
 
 def resumen_servicio(
-    servicio: Servicio, inventario: Inventario, recetario: Recetario, registro_gastos: RegistroGastos
+    servicio: Servicio, inventario: Inventario, recetario: Recetario, registro_gastos: RegistroGastos,
+    registro_material: Optional[RegistroMaterial] = None,
 ) -> dict:
     """
     Cuánto ha costado (o costará) un servicio y, si se sabe lo que se
@@ -144,7 +146,7 @@ def resumen_servicio(
       cantidades del menú ("estimado" = True).
 
     Devuelve un diccionario con: comida, consumibles, gastos (total) y
-    gastos_por_categoria, coste_total, cobrado (None si no se indicó),
+    gastos_por_categoria, material (roturas y pérdidas), coste_total, cobrado (None si no se indicó),
     margen y margen_porcentaje (None si no hay cobro), y estimado.
     """
     estimado = servicio.estado != "completado"
@@ -167,7 +169,8 @@ def resumen_servicio(
         gastos_por_categoria[g.categoria] = round(gastos_por_categoria.get(g.categoria, 0) + g.importe, 2)
     gastos = round(sum(gastos_por_categoria.values()), 2)
 
-    coste_total = round(comida + consumibles + gastos, 2)
+    material = registro_material.coste_incidencias_servicio(servicio.id) if registro_material else 0.0
+    coste_total = round(comida + consumibles + gastos + material, 2)
     cobrado = servicio.precio_cobrado
     margen = round(cobrado - coste_total, 2) if cobrado is not None else None
     return {
@@ -175,6 +178,7 @@ def resumen_servicio(
         "consumibles": round(consumibles, 2),
         "gastos": gastos,
         "gastos_por_categoria": gastos_por_categoria,
+        "material": material,
         "coste_total": coste_total,
         "cobrado": cobrado,
         "margen": margen,

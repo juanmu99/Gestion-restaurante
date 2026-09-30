@@ -25,6 +25,7 @@ from inventario import Inventario
 from servicios import RegistroServicios
 from compras import GestorCompras
 from gastos import RegistroGastos, resumen_servicio
+from materiales import RegistroMaterial
 from recetario import Recetario
 
 FUENTE = "Arial"
@@ -167,22 +168,45 @@ def _hoja_gastos(wb: Workbook, registro_gastos: RegistroGastos) -> None:
     _ajustar_ancho_columnas(hoja, ancho=20)
 
 
+def _hoja_material(wb: Workbook, registro_material: RegistroMaterial) -> None:
+    hoja = wb.create_sheet("Material")
+    _escribir_cabecera(hoja, ["Material", "Categoría", "Total", "En uso", "Disponibles",
+                              "Precio de reposición (€)", "Valor (€)", "Proveedor"])
+    fila = 2
+    for m in registro_material.materiales.values():
+        valores = [m.nombre, m.categoria, m.cantidad_total, registro_material.en_uso(m.nombre),
+                   f"=C{fila}-D{fila}", m.precio_reposicion, f"=C{fila}*F{fila}", m.proveedor or "—"]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+    fila += 1
+    hoja.cell(row=fila, column=1, value="Roturas y pérdidas").font = Font(name=FUENTE, bold=True)
+    fila += 1
+    for i in registro_material.incidencias:
+        valores = [i.fecha.strftime("%d/%m/%Y"), i.tipo, i.material, i.cantidad, i.coste,
+                   f"servicio #{i.servicio_id}" if i.servicio_id else "almacén"]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+    _ajustar_ancho_columnas(hoja, ancho=20)
+
+
 def _hoja_rentabilidad(
     wb: Workbook, inventario: Inventario, registro: RegistroServicios, recetario: Recetario,
-    registro_gastos: RegistroGastos,
+    registro_gastos: RegistroGastos, registro_material: RegistroMaterial = None,
 ) -> None:
     """Coste y margen de cada servicio (con fórmulas: coste total = suma, margen = cobro - coste)."""
     hoja = wb.create_sheet("Rentabilidad")
     _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", "Comida (€)", "Consumibles (€)", "Gastos (€)",
-                              "Coste total (€)", "Cobro (€)", "Margen (€)", "Coste estimado"])
+                              "Roturas y pérdidas (€)", "Coste total (€)", "Cobro (€)", "Margen (€)", "Coste estimado"])
     fila = 2
     for s in sorted(registro.servicios, key=lambda s: (s.fecha, s.hora)):
         if s.estado == "cancelado":
             continue
-        r = resumen_servicio(s, inventario, recetario, registro_gastos)
+        r = resumen_servicio(s, inventario, recetario, registro_gastos, registro_material)
         valores = [s.id, s.fecha.strftime("%d/%m/%Y"), s.menu, s.estado, r["comida"], r["consumibles"], r["gastos"],
-                   f"=E{fila}+F{fila}+G{fila}", r["cobrado"] if r["cobrado"] is not None else "—",
-                   f"=I{fila}-H{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No"]
+                   r["material"], f"=E{fila}+F{fila}+G{fila}+H{fila}", r["cobrado"] if r["cobrado"] is not None else "—",
+                   f"=J{fila}-I{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No"]
         for columna, valor in enumerate(valores, start=1):
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
         fila += 1
@@ -221,6 +245,7 @@ def exportar_todo(
     carpeta_salida: str,
     registro_gastos: RegistroGastos = None,
     recetario: Recetario = None,
+    registro_material: RegistroMaterial = None,
 ) -> str:
     """
     Genera un único archivo Excel con una hoja para cada cosa (Inventario,
@@ -235,10 +260,12 @@ def exportar_todo(
     _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)
+    if registro_material is not None:
+        _hoja_material(wb, registro_material)
     if registro_gastos is not None:
         _hoja_gastos(wb, registro_gastos)
         if recetario is not None:
-            _hoja_rentabilidad(wb, inventario, registro_servicios, recetario, registro_gastos)
+            _hoja_rentabilidad(wb, inventario, registro_servicios, recetario, registro_gastos, registro_material)
 
     Path(carpeta_salida).mkdir(parents=True, exist_ok=True)
     marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")

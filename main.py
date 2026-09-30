@@ -22,7 +22,10 @@ from typing import Optional
 # Añadimos la carpeta modulos/ al path para poder importar sus archivos
 # con imports "planos" (from inventario import ...), igual que hemos
 # venido haciendo en cada módulo por separado hasta ahora.
-sys.path.append(str(Path(__file__).parent / "modulos"))
+# insert(0, ...) y no append(): así Python busca PRIMERO en nuestra carpeta
+# modulos/. Si el ordenador tuviera instalada una librería con el mismo
+# nombre que uno de nuestros módulos, se usaría la nuestra y no la otra.
+sys.path.insert(0, str(Path(__file__).parent / "modulos"))
 
 from inventario import Inventario, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
@@ -32,6 +35,7 @@ from dashboard import Dashboard
 from exportador import exportar_todo
 from persistencia import guardar_sesion, cargar_sesion
 from gastos import Gasto, RegistroGastos, resumen_servicio
+from materiales import Material, RegistroMaterial, lista_de_carga
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -62,6 +66,7 @@ gestor_compras = GestorCompras()
 dashboard = Dashboard(inventario, registro_servicios, gestor_compras)
 archivo_informes = ArchivoInformes()
 registro_gastos = RegistroGastos()
+registro_material = RegistroMaterial()
 
 ultima_exportacion: str | None = None  # ruta del último Excel generado
 
@@ -733,6 +738,27 @@ def pedir_consumibles_menu(actuales: Optional[dict] = None) -> dict:
             consumibles.pop(producto.nombre, None)
 
 
+def pedir_material_menu(actuales: Optional[dict] = None) -> dict:
+    """Pide el material por comensal de un menú (nombre vacío para terminar)."""
+    materiales = dict(actuales or {})
+    if not registro_material.materiales:
+        return materiales
+    print("Material por comensal (platos, copas, cubiertos...). Nombre vacío para terminar.")
+    print(f"Disponibles: {', '.join(registro_material.materiales)}")
+    while True:
+        nombre = pedir_texto("  Material: ")
+        if not nombre:
+            return materiales
+        if nombre not in registro_material.materiales:
+            print(f"⚠️  '{nombre}' no es un material registrado.")
+            continue
+        cantidad = pedir_numero("  Unidades por comensal (0 para quitarlo): ")
+        if cantidad > 0:
+            materiales[nombre] = cantidad
+        else:
+            materiales.pop(nombre, None)
+
+
 def mostrar_detalle_menu(nombre_menu: str) -> None:
     menu = recetario.buscar_menu(nombre_menu)
     print(f"\n=== {menu.nombre} ===")
@@ -747,11 +773,18 @@ def mostrar_detalle_menu(nombre_menu: str) -> None:
     for nombre, cantidad in menu.consumibles_por_comensal.items():
         producto = inventario.buscar_producto(nombre)
         print(f"     · {nombre}: {cantidad} {producto.unidad if producto else ''} por comensal")
+    print("🍽️  Material (vuelve después del servicio):")
+    if not menu.materiales_por_comensal:
+        print("     (ninguno)")
+    for nombre, cantidad in menu.materiales_por_comensal.items():
+        print(f"     · {nombre}: {cantidad} por comensal")
     comida = menu.costo_por_comensal(inventario)
     consumibles = menu.costo_consumibles_por_comensal(inventario)
     print(f"Coste por comensal: comida {comida}€ + consumibles {consumibles}€ = {round(comida + consumibles, 2)}€")
     if inventario.consumibles() and pedir_si_no("¿Cambiar los consumibles de este menú?"):
         menu.consumibles_por_comensal = pedir_consumibles_menu(menu.consumibles_por_comensal)
+    if registro_material.materiales and pedir_si_no("¿Cambiar el material de este menú?"):
+        menu.materiales_por_comensal = pedir_material_menu(menu.materiales_por_comensal)
 
 
 def menu_recetario():
@@ -815,7 +848,7 @@ def menu_recetario():
                     else:
                         recetas_menu.append(receta)
                 if recetas_menu:
-                    recetario.agregar_menu(Menu(nombre_menu, recetas_menu, pedir_consumibles_menu()))
+                    recetario.agregar_menu(Menu(nombre_menu, recetas_menu, pedir_consumibles_menu(), pedir_material_menu()))
         elif opcion == "5":
             pan_casero = Receta("Pan casero", "Panadería", {"Harina de trigo": 0.15, "Aceite de oliva": 0.01})
             ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
@@ -913,7 +946,7 @@ def accion_exportar_excel():
     global ultima_exportacion
     carpeta_datos = str(_carpeta_base() / "datos")
     ruta = exportar_todo(
-        inventario, registro_servicios, gestor_compras, carpeta_datos, registro_gastos, recetario,
+        inventario, registro_servicios, gestor_compras, carpeta_datos, registro_gastos, recetario, registro_material,
     )
     ultima_exportacion = ruta
     print(f"✅ Exportado a: {ruta}")
@@ -922,6 +955,7 @@ def accion_exportar_excel():
 def accion_guardar_sesion():
     guardar_sesion(
         inventario, registro_servicios, recetario, gestor_compras, archivo_informes, RUTA_SESION, registro_gastos,
+        registro_material,
     )
 
 
@@ -932,6 +966,7 @@ def accion_cargar_sesion():
     # estamos creando variables LOCALES nuevas dentro de esta función, y
     # las de fuera (las que usa el resto del programa) no cambiarían.
     global inventario, registro_servicios, recetario, gestor_compras, dashboard, archivo_informes, registro_gastos
+    global registro_material
 
     sesion = cargar_sesion(RUTA_SESION)
     if sesion is None:
@@ -939,6 +974,7 @@ def accion_cargar_sesion():
 
     inventario, registro_servicios, recetario = sesion.inventario, sesion.registro_servicios, sesion.recetario
     gestor_compras, archivo_informes, registro_gastos = sesion.gestor_compras, sesion.archivo_informes, sesion.registro_gastos
+    registro_material = sesion.registro_material
     # El Dashboard guarda referencias a los objetos antiguos, así que hay
     # que reconstruirlo con los nuevos o seguiría mostrando datos viejos.
     dashboard = Dashboard(inventario, registro_servicios, gestor_compras)
@@ -996,7 +1032,16 @@ def accion_cargar_datos_ejemplo():
     ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
     recetario.agregar_receta(pan_casero)
     recetario.agregar_receta(ensalada)
-    recetario.agregar_menu(Menu("Menú del día", [pan_casero, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1}))
+    # Material reutilizable: sale a los servicios y vuelve.
+    for nombre, categoria, unidades, precio in (
+        ("Plato llano", "Vajilla", 60, 3.5), ("Copa de vino", "Cristalería", 48, 2.8), ("Tenedor", "Cubertería", 80, 1.2),
+    ):
+        if nombre not in registro_material.materiales:
+            registro_material.agregar_material(Material(nombre, categoria, unidades, precio, "Hostelería Total"))
+    recetario.agregar_menu(Menu(
+        "Menú del día", [pan_casero, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1},
+        {"Plato llano": 2, "Copa de vino": 1, "Tenedor": 1},
+    ))
 
     print("✅ Datos de ejemplo cargados en los 4 módulos.")
 
@@ -1165,12 +1210,13 @@ def menu_gastos():
             if not servicios:
                 print("No hay servicios.")
             for s in sorted(servicios, key=lambda s: (s.fecha, s.hora)):
-                r = resumen_servicio(s, inventario, recetario, registro_gastos)
+                r = resumen_servicio(s, inventario, recetario, registro_gastos, registro_material)
                 estimado = " (estimado)" if r["estimado"] else ""
                 porcentaje = f" ({r['margen_porcentaje']:.0%})" if r["margen_porcentaje"] is not None else ""
                 print(
                     f"#{s.id} {s.fecha.strftime('%d/%m/%Y')} {s.menu}: coste {texto_euros(r['coste_total'])}{estimado} "
-                    f"[comida {r['comida']:.2f} + consumibles {r['consumibles']:.2f} + gastos {r['gastos']:.2f}] | "
+                    f"[comida {r['comida']:.2f} + consumibles {r['consumibles']:.2f} + gastos {r['gastos']:.2f} "
+                    f"+ material roto/perdido {r['material']:.2f}] | "
                     f"cobro {texto_euros(r['cobrado'])} | margen {texto_euros(r['margen'])}{porcentaje}"
                 )
         elif opcion == "5":
@@ -1186,6 +1232,118 @@ def menu_gastos():
             return
         else:
             print("⚠️  Opción no válida.")
+        pausa()
+
+
+def listar_material() -> None:
+    if not registro_material.materiales:
+        print("No hay material registrado.")
+    for m in registro_material.materiales.values():
+        print(
+            f"{m.nombre} ({m.categoria}) | total {m.cantidad_total} | en uso {registro_material.en_uso(m.nombre)} | "
+            f"disponibles {registro_material.disponibles(m.nombre)} | reposición {m.precio_reposicion}€/ud"
+        )
+    for salida in registro_material.salidas:
+        if not salida.ha_vuelto:
+            print(f"🚚 Fuera en el servicio #{salida.servicio_id}: {salida.cantidades}")
+
+
+def pedir_material_existente() -> Optional[str]:
+    nombre = pedir_texto("Material: ")
+    if nombre not in registro_material.materiales:
+        print(f"❌ No existe el material '{nombre}'.")
+        return None
+    return nombre
+
+
+def menu_material():
+    while True:
+        print("\n--- MATERIAL ---")
+        print("1. Ver material (total, en uso y disponible)")
+        print("2. Añadir material")
+        print("3. Editar material")
+        print("4. He comprado más / se ha roto o perdido en el almacén")
+        print("5. Salida de material a un servicio (lista de carga)")
+        print("6. Vuelta del material de un servicio")
+        print("7. Ver roturas y pérdidas")
+        print("0. Volver")
+        opcion = pedir_texto("Elige una opción: ")
+        try:
+            if opcion == "1":
+                listar_material()
+            elif opcion == "2":
+                nombre = pedir_texto("Nombre: ")
+                categoria = pedir_texto_no_numerico("Categoría (ej: Vajilla): ")
+                unidades = pedir_entero("Unidades que tienes: ")
+                precio = pedir_numero("Precio de reposición (€ por unidad): ")
+                proveedor = pedir_texto("Proveedor (opcional): ")
+                registro_material.agregar_material(Material(nombre, categoria, unidades, precio, proveedor))
+            elif opcion == "3":
+                nombre = pedir_material_existente()
+                if nombre:
+                    m = registro_material.buscar(nombre)
+                    print("Deja vacío lo que no cambie.")
+                    nuevo = pedir_texto(f"Nombre [{m.nombre}]: ") or None
+                    categoria = pedir_texto_no_numerico_opcional(f"Categoría [{m.categoria}]: ")
+                    total = pedir_numero_opcional(f"Unidades totales [{m.cantidad_total}]: ")
+                    precio = pedir_numero_opcional(f"Precio de reposición [{m.precio_reposicion}]: ")
+                    if registro_material.editar_material(
+                        nombre, nuevo, categoria, int(total) if total is not None else None, precio,
+                    ) and nuevo and nuevo != nombre:
+                        recetario.renombrar_material(nombre, nuevo)
+            elif opcion == "4":
+                nombre = pedir_material_existente()
+                if nombre:
+                    accion = pedir_opcion("¿Qué ha pasado?", ("comprado", "rotura", "pérdida"))
+                    unidades = pedir_entero("Unidades: ")
+                    if accion == "comprado":
+                        registro_material.reponer(nombre, unidades)
+                    else:
+                        registro_material.dar_de_baja(nombre, unidades, accion)
+            elif opcion == "5":
+                id_servicio = pedir_entero("Nº del servicio: ")
+                servicio = registro_servicios.buscar_por_id(id_servicio)
+                if servicio is None:
+                    print(f"❌ No existe el servicio #{id_servicio}")
+                else:
+                    menu = recetario.buscar_menu(servicio.menu)
+                    sugerida = lista_de_carga(menu.materiales_por_comensal, servicio.comensales) if menu else {}
+                    print("Lista de carga (Enter = la cantidad propuesta por el menú):")
+                    carga = {}
+                    for m in registro_material.materiales.values():
+                        propuesta = sugerida.get(m.nombre, 0)
+                        valor = pedir_numero_opcional(
+                            f"  {m.nombre} [{propuesta}] (disponibles {registro_material.disponibles(m.nombre)}): "
+                        )
+                        carga[m.nombre] = int(propuesta if valor is None else valor)
+                    registro_material.registrar_salida(id_servicio, carga)
+            elif opcion == "6":
+                id_servicio = pedir_entero("Nº del servicio: ")
+                salida = registro_material.salida_de(id_servicio)
+                if salida is None:
+                    print(f"❌ El servicio #{id_servicio} no tiene material fuera.")
+                else:
+                    vuelto, rotos = {}, {}
+                    for nombre, salio in salida.cantidades.items():
+                        valor = pedir_numero_opcional(f"  {nombre}: salieron {salio}. ¿Cuántos han vuelto? [{salio}]: ")
+                        vuelto[nombre] = salio if valor is None else int(valor)
+                        faltan = salio - vuelto[nombre]
+                        if faltan > 0:
+                            rotos[nombre] = pedir_entero(f"    Faltan {faltan}. ¿Cuántos se han roto? (el resto, perdidos): ")
+                    incidencias = registro_material.registrar_vuelta(id_servicio, vuelto, rotos)
+                    if incidencias:
+                        print(f"Coste de roturas y pérdidas: {sum(i.coste for i in incidencias):.2f}€")
+            elif opcion == "7":
+                if not registro_material.incidencias:
+                    print("No hay roturas ni pérdidas registradas.")
+                for i in registro_material.incidencias:
+                    print(i)
+            elif opcion == "0":
+                return
+            else:
+                print("⚠️  Opción no válida.")
+        except ValueError as e:
+            print(f"❌ {e}")
         pausa()
 
 
@@ -1206,6 +1364,7 @@ def menu_principal():
         print("10. Guardar sesión")
         print("11. Cargar sesión")
         print("12. Gastos y rentabilidad")
+        print("13. Material (vajilla, cubertería...)")
         print("0. Salir")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1239,6 +1398,8 @@ def menu_principal():
             pausa()
         elif opcion == "12":
             menu_gastos()
+        elif opcion == "13":
+            menu_material()
         elif opcion == "0":
             respuesta = pedir_texto("¿Guardar sesión antes de salir? (s/n): ").strip().lower()
             if respuesta == "s":
