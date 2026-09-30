@@ -649,7 +649,10 @@ def _pestana_lotes(inv: Inventario) -> None:
     if not inv.productos:
         st.info("No hay productos.")
         return
-    nombre_sel = st.selectbox("Producto", list(inv.productos.keys()), key="lotes_select")
+    nombres = list(inv.productos.keys())
+    # Se abre con el primer producto que tenga lotes (no con uno vacío).
+    inicial = next((i for i, n in enumerate(nombres) if inv.productos[n].lotes), 0)
+    nombre_sel = st.selectbox("Producto", nombres, index=inicial, key="lotes_select")
     producto = inv.buscar_producto(nombre_sel)
     if not producto.lotes:
         st.info(f"No queda ningún lote de '{nombre_sel}'.")
