@@ -66,6 +66,7 @@ jobs:
           --hidden-import exportador
           --hidden-import persistencia
           --hidden-import metricas
+          --hidden-import gastos
           --hidden-import google_drive_backup
           --collect-all google_auth_oauthlib
           --collect-all googleapiclient
