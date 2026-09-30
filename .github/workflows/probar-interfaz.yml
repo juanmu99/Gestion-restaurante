@@ -34,6 +34,13 @@ jobs:
           pip install -r requirements.txt playwright
           python -m playwright install --with-deps chromium
 
+      - name: Apuntar las versiones exactas instaladas
+        run: |
+          mkdir -p resultados
+          pip freeze > resultados/versiones.txt
+          echo "# Última PyInstaller disponible:" >> resultados/versiones.txt
+          pip index versions pyinstaller 2>/dev/null | head -1 >> resultados/versiones.txt
+
       - name: Probar la interfaz (Streamlit real, sin navegador)
         id: pruebas
         continue-on-error: true
