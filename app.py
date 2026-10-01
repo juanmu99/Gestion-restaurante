@@ -1167,46 +1167,101 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
     """
     Costes que no estaban previstos y surgen al hacer el servicio (un taxi,
     hielo de última hora, una hora extra de un camarero...). Se van
-    añadiendo a una lista y se guardan como gastos del servicio AL
-    COMPLETARLO. Devuelve la lista de lo añadido hasta ahora.
+    añadiendo a una lista y se guardan AL COMPLETAR el servicio.
+
+    Si el coste es la compra de un PRODUCTO DEL INVENTARIO (5 kg de tomate
+    de urgencia, de los que se usan 3), no se guarda como gasto: entra como
+    compra (un lote nuevo), lo usado sale como consumo del servicio y lo
+    que sobra se queda en el inventario. Así no se cuenta nada dos veces.
     """
+    inv = st.session_state.inventario
     clave = f"extras_{servicio.id}"
     extras = st.session_state.setdefault(clave, [])
     st.markdown("**💶 Costes adicionales no previstos (opcional)**")
-    st.caption("Se guardarán como gastos de este servicio al completarlo y contarán en su rentabilidad.")
-    if extras:
-        for i, extra in enumerate(extras):
-            c1, c2 = st.columns([5, 1])
+    st.caption("Se guardarán al completar el servicio y contarán en su rentabilidad.")
+    for i, extra in enumerate(extras):
+        c1, c2 = st.columns([5, 1])
+        if extra.get("producto"):
+            unidad = inv.buscar_producto(extra["producto"]).unidad
+            sobra = extra["comprada"] - extra["usada"]
+            c1.write(
+                f"• 📦 {extra['producto']}: comprados {_num(extra['comprada'])} {unidad} por {extra['importe']:.2f} €, "
+                f"usados {_num(extra['usada'])}" + (f", sobran {_num(sobra)} (al inventario)" if sobra > 0 else "")
+            )
+        else:
             c1.write(f"• {extra['concepto']} ({extra['categoria']}): {extra['importe']:.2f} €")
-            if c2.button("Quitar", key=f"{clave}_quitar_{i}"):
-                extras.pop(i)
-                st.rerun()
+        if c2.button("Quitar", key=f"{clave}_quitar_{i}"):
+            extras.pop(i)
+            st.rerun()
+
     v = st.session_state.setdefault(f"{clave}_version", 0)
     k = lambda campo: f"{clave}_{campo}_{v}"
-    c1, c2, c3 = st.columns([3, 2, 1])
-    concepto = c1.text_input("Concepto", key=k("concepto"), placeholder="Ej: Hielo de última hora")
-    categoria = c2.selectbox("Categoría", Gasto.CATEGORIAS, index=len(Gasto.CATEGORIAS) - 1, key=k("categoria"))
-    importe = c3.number_input("Importe (€)", min_value=0.0, step=1.0, key=k("importe"))
+    es_producto = st.checkbox(
+        "Es un producto del inventario (lo que sobre se queda en el inventario)", key=k("es_producto"),
+        disabled=not inv.productos,
+    )
+    nuevo = None
+    if es_producto:
+        nombre = st.selectbox("Producto", list(inv.productos), key=k("producto"))
+        producto = inv.buscar_producto(nombre)
+        c1, c2, c3 = st.columns(3)
+        comprada = c1.number_input(f"Comprado ({producto.unidad})", min_value=0.0, step=0.1, key=k("comprada"))
+        usada = c2.number_input(f"Usado en el servicio ({producto.unidad})", min_value=0.0, step=0.1, key=k("usada"))
+        importe = c3.number_input("Importe pagado (€)", min_value=0.0, step=1.0, key=k("importe"))
+        proveedor = st.text_input("Dónde se compró", value=producto.proveedor, key=k("proveedor"))
+        fecha = None
+        if not producto.es_consumible() and comprada > usada and st.checkbox(
+            "Lo que sobra tiene fecha de caducidad", key=k("tiene_fecha")
+        ):
+            fecha = st.date_input("Fecha de caducidad", key=k("fecha"))
+        if comprada > 0 and usada > comprada:
+            st.error("Lo usado no puede ser más que lo comprado.")
+        nuevo = {"concepto": f"{nombre} (compra no prevista)", "categoria": "Otros", "importe": importe,
+                 "producto": nombre, "comprada": comprada, "usada": usada, "proveedor": proveedor,
+                 "fecha_caducidad": fecha}
+    else:
+        c1, c2, c3 = st.columns([3, 2, 1])
+        concepto = c1.text_input("Concepto", key=k("concepto"), placeholder="Ej: Taxi de vuelta")
+        categoria = c2.selectbox("Categoría", Gasto.CATEGORIAS, index=len(Gasto.CATEGORIAS) - 1, key=k("categoria"))
+        importe = c3.number_input("Importe (€)", min_value=0.0, step=1.0, key=k("importe"))
+        nuevo = {"concepto": concepto.strip(), "categoria": categoria, "importe": importe}
+
     if st.button("➕ Añadir coste", key=k("anadir")):
-        if not concepto.strip():
+        if not nuevo["concepto"]:
             st.error("Indica el concepto del coste.")
-        elif importe <= 0:
+        elif nuevo["importe"] <= 0:
             st.error("El importe debe ser mayor que 0.")
+        elif nuevo.get("producto") and (nuevo["comprada"] <= 0 or nuevo["usada"] > nuevo["comprada"]):
+            st.error("Indica cuánto se compró (más de 0) y cuánto se usó (como mucho lo comprado).")
         else:
-            extras.append({"concepto": concepto.strip(), "categoria": categoria, "importe": importe})
+            extras.append(nuevo)
             st.session_state[f"{clave}_version"] = v + 1
             st.rerun()
     return extras
 
 
 def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> None:
-    """Guarda los costes adicionales como gastos del servicio y vacía la lista."""
+    """
+    Guarda los costes adicionales al completar el servicio: los normales como
+    gastos del servicio; las compras de productos, en el inventario (ver
+    Inventario.compra_para_servicio). Después vacía la lista.
+    """
     gastos = st.session_state.registro_gastos
+    inv = st.session_state.inventario
     for extra in extras:
-        gastos.agregar_gasto(Gasto(extra["concepto"], extra["categoria"], extra["importe"], servicio_id=servicio.id,
-                                   notas="Coste no previsto, añadido al completar el servicio"))
+        if extra.get("producto"):
+            try:
+                inv.compra_para_servicio(
+                    extra["producto"], extra["comprada"], extra["usada"], extra["importe"], servicio.id,
+                    proveedor=extra["proveedor"], fecha_caducidad=extra["fecha_caducidad"],
+                )
+            except ValueError as e:
+                avisar("error", f"No se pudo registrar la compra de '{extra['producto']}': {e}")
+        else:
+            gastos.agregar_gasto(Gasto(extra["concepto"], extra["categoria"], extra["importe"], servicio_id=servicio.id,
+                                       notas="Coste no previsto, añadido al completar el servicio"))
     if extras:
-        avisar("info", f"💶 {len(extras)} coste(s) adicional(es) guardado(s) como gastos del servicio "
+        avisar("info", f"💶 {len(extras)} coste(s) adicional(es) registrado(s) para el servicio "
                        f"({sum(e['importe'] for e in extras):.2f} €).")
     st.session_state[f"extras_{servicio.id}"] = []
 

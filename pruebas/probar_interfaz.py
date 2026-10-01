@@ -448,7 +448,19 @@ def prueba_completar_lotes(at: AppTest) -> None:
         at.number_input(key=f"{clave}_importe_{v}").set_value(importe)
         at.button(key=f"{clave}_anadir_{v}").click().run()
     at.button(key=f"{clave}_quitar_1").click().run()
-    comprobar([e["concepto"] for e in at.session_state[clave]] == ["Hielo de última hora"],
+
+    # Compra no prevista de un producto: 1 kg de tomate por 3 €, se usa 0,4
+    v = at.session_state[f"{clave}_version"]
+    at.checkbox(key=f"{clave}_es_producto_{v}").check().run()
+    at.selectbox(key=f"{clave}_producto_{v}").select("Tomate").run()
+    at.number_input(key=f"{clave}_comprada_{v}").set_value(1.0)
+    at.number_input(key=f"{clave}_usada_{v}").set_value(0.4)
+    at.number_input(key=f"{clave}_importe_{v}").set_value(3.0)
+    at.text_input(key=f"{clave}_proveedor_{v}").input("Mercado central")
+    at.button(key=f"{clave}_anadir_{v}").click().run()
+    tomate = at.session_state["inventario"].buscar_producto("Tomate")
+    stock_tomate = tomate.stock
+    comprobar([e["concepto"] for e in at.session_state[clave]] == ["Hielo de última hora", "Tomate (compra no prevista)"],
               "Se pueden añadir y quitar costes adicionales antes de completar")
     gastos = at.session_state["registro_gastos"]
     comprobar(not gastos.gastos, "...y no se guardan hasta completar el servicio")
@@ -460,6 +472,13 @@ def prueba_completar_lotes(at: AppTest) -> None:
     comprobar(len(gastos.gastos) == 1 and gastos.gastos[0].servicio_id == servicio.id
               and gastos.gastos[0].importe == 12 and gastos.gastos[0].categoria == "Otros",
               "Al completar, el coste adicional se guarda como gasto del servicio")
+    nuevo_lote = tomate.lotes[-1]
+    comprobar(abs(tomate.stock - (stock_tomate + 0.6)) < 1e-9 and nuevo_lote.proveedor == "Mercado central"
+              and nuevo_lote.precio_unitario == 3 and abs(nuevo_lote.cantidad - 0.6) < 1e-9,
+              "La compra de tomate entra como lote y los 0,6 kg que sobran se quedan en el inventario")
+    ultimo = at.session_state["inventario"].historial[-1]
+    comprobar(ultimo.motivo == "consumo" and ultimo.servicio_id == servicio.id and abs(ultimo.cantidad - 0.4) < 1e-9,
+              "Lo usado (0,4 kg) sale como consumo de ese servicio")
 
 
 @prueba("Precio de cobro, gastos y rentabilidad")

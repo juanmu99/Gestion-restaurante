@@ -323,6 +323,28 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar("Gastos" in libro.sheetnames and "Rentabilidad" in libro.sheetnames,
               "El Excel tiene las hojas 'Gastos' y 'Rentabilidad'")
 
+print("\n--- Compra no prevista de un producto para un servicio ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 0, "kg", 2, "Huerta"))
+servicio = Servicio(HOY, time(14, 0), 10, "Menú")
+servicio.id = 99
+try:
+    inv.compra_para_servicio("Tomate", 5, 6, 10, servicio.id)
+    comprobar(False, "No se puede usar más de lo que se compró")
+except ValueError:
+    comprobar(inv.buscar_producto("Tomate").stock == 0, "No se puede usar más de lo que se compró (y no toca nada)")
+lote = silencio(inv.compra_para_servicio, "Tomate", 5, 3, 12.5, servicio.id, "Mercado central",
+                HOY + timedelta(days=4))
+tomate = inv.buscar_producto("Tomate")
+comprobar(tomate.stock == 2 and lote.precio_unitario == 2.5 and lote.proveedor == "Mercado central"
+          and lote.fecha_caducidad == HOY + timedelta(days=4),
+          "Entra como lote (a 12,5 € / 5 kg = 2,5 €/kg) y sobran 2 kg en el inventario")
+servicio.estado = "completado"
+r = resumen_servicio(servicio, inv, Recetario(), RegistroGastos())
+comprobar(r["comida"] == 7.5, "El servicio carga solo lo usado (3 kg x 2,5 € = 7,5 €)")
+comprobar(Metricas(inv).gasto_por_categoria(HOY, HOY) == {"Verduras": 12.5},
+          "En Métricas cuenta como compra (12,5 €), una sola vez")
+
 print("\n--- Material reutilizable ---")
 from materiales import Material, RegistroMaterial, lista_de_carga  # noqa: E402
 

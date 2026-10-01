@@ -798,7 +798,9 @@ class Inventario:
 
     # ---------- Salidas: siempre de un lote concreto ----------
 
-    def salida_stock(self, nombre: str, cantidad: float, motivo: str, lote_id: int) -> bool:
+    def salida_stock(
+        self, nombre: str, cantidad: float, motivo: str, lote_id: int, servicio_id: Optional[int] = None,
+    ) -> bool:
         """
         Saca `cantidad` del lote `lote_id` de un producto. Quien usa el
         programa decide de qué lote sale (puede querer gastar antes uno que
@@ -811,7 +813,7 @@ class Inventario:
         Devuelve True si se aplicó, False si se rechazó (producto o lote
         inexistente, motivo no válido o no hay tanto en ese lote).
         """
-        return self.salida_repartida(nombre, [(lote_id, cantidad)], motivo)
+        return self.salida_repartida(nombre, [(lote_id, cantidad)], motivo, servicio_id)
 
     def salida_repartida(
         self, nombre: str, reparto: list[tuple[int, float]], motivo: str, servicio_id: Optional[int] = None,
@@ -859,6 +861,46 @@ class Inventario:
             print(f"📦 Salida ({motivo}): {_numero(cantidad)} {producto.unidad} de {nombre} [{lote.etiqueta()}]")
         producto.quitar_lotes_vacios()
         return True
+
+    def compra_para_servicio(
+        self,
+        nombre: str,
+        comprada: float,
+        usada: float,
+        importe_total: float,
+        servicio_id: int,
+        proveedor: Optional[str] = None,
+        fecha_caducidad: Optional[date] = None,
+    ) -> Lote:
+        """
+        Una compra NO PREVISTA hecha para un servicio (ej: 5 kg de tomate de
+        urgencia, de los que se usan 3). En un solo paso:
+        1. Entra la compra como un lote nuevo (cuenta como compra en Métricas),
+           a precio = importe_total / comprada.
+        2. Sale lo usado de ese lote como consumo DE ESE SERVICIO (cuenta en
+           su coste real).
+        3. Lo que sobra se queda en el inventario, en ese lote.
+        Comprueba todo antes de tocar nada. Devuelve el lote creado.
+        """
+        producto = self.productos.get(nombre)
+        if producto is None:
+            raise ValueError(f"No existe el producto '{nombre}'.")
+        if comprada <= 0:
+            raise ValueError("La cantidad comprada debe ser mayor que 0.")
+        if usada < 0 or usada > comprada + 1e-9:
+            raise ValueError("Lo usado no puede ser negativo ni mayor que lo comprado.")
+        if importe_total <= 0:
+            raise ValueError("El importe debe ser mayor que 0.")
+        if proveedor is not None and proveedor.strip() and _es_numero(proveedor.strip()):
+            raise ValueError("El proveedor debe ser texto descriptivo.")
+
+        lote = self.entrada_stock(
+            nombre, comprada, precio_unitario=round(importe_total / comprada, 4),
+            proveedor=proveedor, fecha_caducidad=fecha_caducidad,
+        )
+        if usada > 0:
+            self.salida_stock(nombre, min(usada, lote.cantidad), "consumo", lote.id, servicio_id)
+        return lote
 
     def desechar_lote(self, nombre: str, lote_id: int) -> bool:
         """Tira un lote ENTERO (normalmente uno caducado): sale todo como desperdicio."""

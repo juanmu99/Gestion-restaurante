@@ -693,6 +693,24 @@ def menu_servicios():
 def pedir_costes_adicionales(servicio: Servicio) -> None:
     """Costes no previstos del servicio (taxi, hielo...): se guardan como gastos de ese servicio."""
     while pedir_si_no("¿Hubo algún coste adicional no previsto?"):
+        if pedir_si_no("  ¿Es la compra de un producto del inventario? (lo que sobre se queda en el inventario)"):
+            nombre = pedir_texto("  Producto: ")
+            producto = inventario.buscar_producto(nombre)
+            if producto is None:
+                print(f"❌ No existe el producto '{nombre}'.")
+                continue
+            comprada = pedir_numero(f"  Cantidad comprada ({producto.unidad}): ")
+            usada = pedir_numero(f"  Cantidad usada en el servicio ({producto.unidad}): ")
+            importe = pedir_numero("  Importe pagado (€): ")
+            proveedor = pedir_texto_no_numerico_opcional(f"  Dónde se compró [{producto.proveedor}]: ")
+            fecha = None
+            if not producto.es_consumible() and comprada > usada and pedir_si_no("  ¿Lo que sobra tiene fecha de caducidad?"):
+                fecha = pedir_fecha("  Fecha de caducidad")
+            try:
+                inventario.compra_para_servicio(nombre, comprada, usada, importe, servicio.id, proveedor, fecha)
+            except ValueError as e:
+                print(f"❌ {e}")
+            continue
         concepto = pedir_texto("  Concepto: ")
         categoria = pedir_opcion("  Categoría", Gasto.CATEGORIAS)
         importe = pedir_numero("  Importe (€): ")
