@@ -1163,6 +1163,54 @@ def _elegir_lotes_servicio(servicio: Servicio, inv: Inventario, rec: Recetario) 
     return elecciones
 
 
+def _costes_adicionales(servicio: Servicio) -> list[dict]:
+    """
+    Costes que no estaban previstos y surgen al hacer el servicio (un taxi,
+    hielo de última hora, una hora extra de un camarero...). Se van
+    añadiendo a una lista y se guardan como gastos del servicio AL
+    COMPLETARLO. Devuelve la lista de lo añadido hasta ahora.
+    """
+    clave = f"extras_{servicio.id}"
+    extras = st.session_state.setdefault(clave, [])
+    st.markdown("**💶 Costes adicionales no previstos (opcional)**")
+    st.caption("Se guardarán como gastos de este servicio al completarlo y contarán en su rentabilidad.")
+    if extras:
+        for i, extra in enumerate(extras):
+            c1, c2 = st.columns([5, 1])
+            c1.write(f"• {extra['concepto']} ({extra['categoria']}): {extra['importe']:.2f} €")
+            if c2.button("Quitar", key=f"{clave}_quitar_{i}"):
+                extras.pop(i)
+                st.rerun()
+    v = st.session_state.setdefault(f"{clave}_version", 0)
+    k = lambda campo: f"{clave}_{campo}_{v}"
+    c1, c2, c3 = st.columns([3, 2, 1])
+    concepto = c1.text_input("Concepto", key=k("concepto"), placeholder="Ej: Hielo de última hora")
+    categoria = c2.selectbox("Categoría", Gasto.CATEGORIAS, index=len(Gasto.CATEGORIAS) - 1, key=k("categoria"))
+    importe = c3.number_input("Importe (€)", min_value=0.0, step=1.0, key=k("importe"))
+    if st.button("➕ Añadir coste", key=k("anadir")):
+        if not concepto.strip():
+            st.error("Indica el concepto del coste.")
+        elif importe <= 0:
+            st.error("El importe debe ser mayor que 0.")
+        else:
+            extras.append({"concepto": concepto.strip(), "categoria": categoria, "importe": importe})
+            st.session_state[f"{clave}_version"] = v + 1
+            st.rerun()
+    return extras
+
+
+def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> None:
+    """Guarda los costes adicionales como gastos del servicio y vacía la lista."""
+    gastos = st.session_state.registro_gastos
+    for extra in extras:
+        gastos.agregar_gasto(Gasto(extra["concepto"], extra["categoria"], extra["importe"], servicio_id=servicio.id,
+                                   notas="Coste no previsto, añadido al completar el servicio"))
+    if extras:
+        avisar("info", f"💶 {len(extras)} coste(s) adicional(es) guardado(s) como gastos del servicio "
+                       f"({sum(e['importe'] for e in extras):.2f} €).")
+    st.session_state[f"extras_{servicio.id}"] = []
+
+
 def _texto_reparto(fila: dict) -> str:
     if not fila["reparto"]:
         return "—"
@@ -1336,9 +1384,12 @@ def pagina_servicios() -> None:
                         + ". Se descontará todo lo disponible de todos sus lotes (quedará a 0)."
                     )
 
+            extras = _costes_adicionales(servicio)
+
             if st.button("Completar servicio", type="primary"):
                 if filas is None:
                     servicio.completar()
+                    _registrar_costes_adicionales(servicio, extras)
                     avisar("warning", f"Servicio #{servicio.id} completado sin descontar stock (menú no encontrado).")
                     st.rerun()
                 try:
@@ -1346,6 +1397,7 @@ def pagina_servicios() -> None:
                 except ValueError as e:
                     st.error(str(e))
                 else:
+                    _registrar_costes_adicionales(servicio, extras)
                     cortos = [f["ingrediente"] for f in filas if f["faltante"] > 0]
                     if cortos:
                         avisar(

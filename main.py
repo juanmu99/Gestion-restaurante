@@ -658,6 +658,7 @@ def menu_servicios():
                     if confirmar:
                         servicio.completar()
                         print(f"✅ Servicio #{id_servicio} completado (sin descuento de stock).")
+                        pedir_costes_adicionales(servicio)
                 else:
                     elecciones = pedir_lotes_servicio(servicio, filas)
                     filas = recetario.previsualizar_consumo(servicio, inventario, elecciones)
@@ -679,6 +680,7 @@ def menu_servicios():
                         try:
                             recetario.completar_servicio(servicio, inventario, elecciones)
                             print(f"✅ Servicio #{id_servicio} completado.")
+                            pedir_costes_adicionales(servicio)
                         except ValueError as e:
                             print(f"❌ {e}")
         elif opcion == "0":
@@ -686,6 +688,21 @@ def menu_servicios():
         else:
             print("⚠️  Opción no válida.")
         pausa()
+
+
+def pedir_costes_adicionales(servicio: Servicio) -> None:
+    """Costes no previstos del servicio (taxi, hielo...): se guardan como gastos de ese servicio."""
+    while pedir_si_no("¿Hubo algún coste adicional no previsto?"):
+        concepto = pedir_texto("  Concepto: ")
+        categoria = pedir_opcion("  Categoría", Gasto.CATEGORIAS)
+        importe = pedir_numero("  Importe (€): ")
+        try:
+            registro_gastos.agregar_gasto(Gasto(
+                concepto, categoria, importe, servicio_id=servicio.id,
+                notas="Coste no previsto, añadido al completar el servicio",
+            ))
+        except ValueError as e:
+            print(f"❌ {e}")
 
 
 def pedir_lotes_servicio(servicio: Servicio, filas: list[dict]) -> dict[str, list[int]]:

@@ -439,16 +439,34 @@ def prueba_completar_lotes(at: AppTest) -> None:
 
     complemento = at.selectbox(key=f"{base}_1")
     complemento.select(opcion(complemento, "Lote 2 ·")).run()
+
+    # Costes adicionales no previstos: se añaden dos y se quita uno
+    clave = f"extras_{servicio.id}"
+    for concepto, importe in (("Hielo de última hora", 12.0), ("Error", 3.0)):
+        v = at.session_state[f"{clave}_version"]
+        at.text_input(key=f"{clave}_concepto_{v}").input(concepto)
+        at.number_input(key=f"{clave}_importe_{v}").set_value(importe)
+        at.button(key=f"{clave}_anadir_{v}").click().run()
+    at.button(key=f"{clave}_quitar_1").click().run()
+    comprobar([e["concepto"] for e in at.session_state[clave]] == ["Hielo de última hora"],
+              "Se pueden añadir y quitar costes adicionales antes de completar")
+    gastos = at.session_state["registro_gastos"]
+    comprobar(not gastos.gastos, "...y no se guardan hasta completar el servicio")
+
     boton(at.button, "Completar servicio").click().run()
     comprobar(sin_excepciones(at, "completar con lotes") and servicio.estado == "completado"
               and secreto.buscar_lote(3) is None and abs(secreto.buscar_lote(2).cantidad - 0.2) < 1e-9,
               "Completa: 0,5 kg del lote 3 y los 0,3 que faltan del lote 2")
+    comprobar(len(gastos.gastos) == 1 and gastos.gastos[0].servicio_id == servicio.id
+              and gastos.gastos[0].importe == 12 and gastos.gastos[0].categoria == "Otros",
+              "Al completar, el coste adicional se guarda como gasto del servicio")
 
 
 @prueba("Precio de cobro, gastos y rentabilidad")
 def prueba_gastos(at: AppTest) -> None:
     serv = at.session_state["registro_servicios"]
     gastos = at.session_state["registro_gastos"]
+    antes = len(gastos.gastos)  # el coste adicional de la prueba anterior
 
     # Añadir un servicio con precio POR COMENSAL (25 € x 10 = 250 €)
     ir_a(at, "Servicios")
@@ -482,8 +500,8 @@ def prueba_gastos(at: AppTest) -> None:
             sb = at.selectbox(key=f"gasto_servicio_{v}")
             sb.select(opcion(sb, f"#{nuevo.id} -"))
         at.button(key=f"gasto_boton_{v}").click().run()
-    comprobar(sin_excepciones(at, "registrar gastos") and len(gastos.gastos) == 2
-              and gastos.gastos[0].servicio_id == nuevo.id and gastos.gastos[1].servicio_id is None,
+    comprobar(sin_excepciones(at, "registrar gastos") and len(gastos.gastos) == antes + 2
+              and gastos.gastos[-2].servicio_id == nuevo.id and gastos.gastos[-1].servicio_id is None,
               "Se registran un gasto del servicio y uno general")
 
     # Un gasto mal puesto se puede eliminar
@@ -494,7 +512,7 @@ def prueba_gastos(at: AppTest) -> None:
     sb = at.selectbox(key="gasto_eliminar_select")
     sb.select(opcion(sb, f"#{gastos.gastos[-1].id} -"))
     at.button(key="gasto_eliminar_boton").click().run()
-    comprobar(len(gastos.gastos) == 2 and all(g.concepto != "Error" for g in gastos.gastos), "Eliminar un gasto")
+    comprobar(len(gastos.gastos) == antes + 2 and all(g.concepto != "Error" for g in gastos.gastos), "Eliminar un gasto")
 
     # Rentabilidad: coste con el gasto del servicio y margen; cambiar el precio
     ir_a(at, "Servicios")
@@ -610,7 +628,7 @@ def prueba_metricas_y_guardado(at: AppTest) -> None:
     comprobar(sin_excepciones(at2, "la carga de la sesión") and len(inv2.limpiezas) == 1
               and "Carne de cerdo limpia" in inv2.productos,
               "Al reabrir, se carga la sesión con la limpieza y el producto limpio")
-    comprobar(len(at2.session_state["registro_gastos"].gastos) == 2, "Al reabrir, se cargan también los gastos")
+    comprobar(len(at2.session_state["registro_gastos"].gastos) == 3, "Al reabrir, se cargan también los gastos")
     comprobar(at2.session_state["registro_material"].buscar("Cuchillo") is not None
               and len(at2.session_state["registro_material"].incidencias) == 2,
               "Al reabrir, se carga también el material con sus roturas")
