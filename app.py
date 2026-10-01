@@ -42,6 +42,7 @@ from exportador import exportar_todo
 from persistencia import guardar_sesion, cargar_sesion, Sesion
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
+import historial
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, rango_mes_calendario, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -1412,6 +1413,7 @@ def pagina_servicios() -> None:
         filas = [{
             "ID": s.id, "Fecha": s.fecha.strftime("%d/%m/%Y"), "Hora": s.hora.strftime("%H:%M"),
             "Comensales": s.comensales, "Menú": s.menu, "Estado": s.estado,
+            "Cliente": s.cliente or "—", "Lugar": s.lugar or "—",
             "Cobro (€)": _num(s.precio_cobrado) if s.precio_cobrado is not None else "—", "Notas": s.notas,
         } for s in sorted(serv.servicios, key=lambda s: (s.fecha, s.hora))]
         st.dataframe(filas, width="stretch", hide_index=True)
@@ -1435,6 +1437,9 @@ def pagina_servicios() -> None:
             hora = c2.time_input("Hora")
             comensales = st.number_input("Comensales", min_value=1, step=1)
             menu_nombre = st.text_input("Nombre del menú")
+            c5, c6 = st.columns(2)
+            cliente = c5.text_input("Cliente (opcional)", placeholder="Ej: Familia García")
+            lugar = c6.text_input("Lugar (opcional)", placeholder="Ej: Finca Los Olivos, Écija")
             notas = st.text_area("Notas (opcional)")
             c3, c4 = st.columns(2)
             precio = c3.number_input(
@@ -1450,6 +1455,7 @@ def pagina_servicios() -> None:
                 try:
                     serv.agregar_servicio(Servicio(
                         fecha, hora, int(comensales), menu_nombre, notas, precio_cobrado=precio_cobrado,
+                        cliente=cliente, lugar=lugar,
                     ))
                     st.success("Servicio añadido.")
                 except ValueError as e:
@@ -1504,10 +1510,16 @@ def pagina_servicios() -> None:
                     )
 
             extras = _costes_adicionales(servicio)
+            valoracion = st.text_area(
+                "📝 ¿Cómo fue? (opcional)", key=f"valoracion_{servicio.id}",
+                placeholder="Incidencias, qué sobró o faltó, qué cambiar la próxima vez...",
+                help="Queda guardado en el historial del servicio. Se puede añadir o cambiar después.",
+            )
 
             if st.button("Completar servicio", type="primary"):
                 if filas is None:
                     servicio.completar()
+                    servicio.valoracion = valoracion.strip()
                     _registrar_costes_adicionales(servicio, extras)
                     avisar("warning", f"Servicio #{servicio.id} completado sin descontar stock (menú no encontrado).")
                     st.rerun()
@@ -1516,6 +1528,7 @@ def pagina_servicios() -> None:
                 except ValueError as e:
                     st.error(str(e))
                 else:
+                    servicio.valoracion = valoracion.strip()
                     _registrar_costes_adicionales(servicio, extras)
                     cortos = [f["ingrediente"] for f in filas if f["faltante"] > 0]
                     if cortos:
@@ -1527,6 +1540,177 @@ def pagina_servicios() -> None:
                     else:
                         avisar("success", f"Servicio #{servicio.id} completado y stock descontado correctamente.")
                     st.rerun()
+
+
+# ---------- Página: Historial de servicios ----------
+
+def pagina_historial() -> None:
+    st.header("📜 Historial de servicios")
+    serv = st.session_state.registro_servicios
+    inv = st.session_state.inventario
+    rec = st.session_state.recetario
+    gastos = st.session_state.registro_gastos
+    material = st.session_state.registro_material
+
+    c1, c2, c3 = st.columns(3)
+    periodo = c1.selectbox("Periodo", PERIODOS_VALIDOS, index=PERIODOS_VALIDOS.index("todo"), key="hist_periodo")
+    menus = sorted({s.menu for s in serv.servicios})
+    menu = c2.selectbox("Menú", ["Todos"] + menus, key="hist_menu")
+    cliente = c3.selectbox("Cliente", ["Todos"] + historial.clientes(serv), key="hist_cliente")
+    c4, c5 = st.columns([3, 1])
+    texto = c4.text_input("Buscar", key="hist_texto", placeholder="Cliente, lugar, notas, valoración...")
+    cancelados = c5.checkbox("Ver cancelados", key="hist_cancelados")
+    desde, _ = rango_desde_periodo(periodo)
+    hasta = date.max  # un servicio completado es historial aunque su fecha sea futura
+    lista = historial.filtrar_servicios(
+        serv, desde, hasta, None if menu == "Todos" else menu, None if cliente == "Todos" else cliente,
+        texto, cancelados,
+    )
+    if not lista:
+        st.info("No hay servicios completados con estos filtros. Los servicios aparecen aquí al completarlos.")
+        return
+
+    # --- Resumen del periodo ---
+    r = historial.resumen_periodo(lista, inv, rec, gastos, material)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Servicios", r["servicios"])
+    m2.metric("Comensales", r["comensales"])
+    m3.metric("Facturado", f"{r['facturado']:.2f} €")
+    m4.metric("Margen", _texto_euros(r["margen"]),
+              delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
+    detalles = [f"Coste total {r['coste']:.2f} €"]
+    if r["coste_por_comensal"] is not None:
+        detalles.append(f"coste medio por comensal {r['coste_por_comensal']:.2f} €")
+    if r["menu_mas_repetido"]:
+        detalles.append(f"menú más repetido: {r['menu_mas_repetido']}")
+    if r["menu_mas_rentable"]:
+        detalles.append(f"más rentable por comensal: {r['menu_mas_rentable']}")
+    if r["servicios_sin_cobro"]:
+        detalles.append(f"{r['servicios_sin_cobro']} sin precio de cobro (no cuentan en el margen)")
+    st.caption(" · ".join(detalles))
+
+    filas = []
+    for s in lista:
+        rs = resumen_servicio(s, inv, rec, gastos, material)
+        filas.append({
+            "Nº": s.id, "Fecha": s.fecha.strftime("%d/%m/%Y"), "Cliente": s.cliente or "—", "Lugar": s.lugar or "—",
+            "Menú": s.menu, "Comensales": s.comensales, "Estado": s.estado,
+            "Cobro (€)": _texto_euros(rs["cobrado"]), "Coste (€)": _texto_euros(rs["coste_total"]),
+            "Margen (€)": _texto_euros(rs["margen"]),
+            "Margen (%)": f"{rs['margen_porcentaje']:.0%}" if rs["margen_porcentaje"] is not None else "—",
+        })
+    st.dataframe(filas, width="stretch", hide_index=True)
+    margenes = [(f"#{s.id} {s.fecha.strftime('%d/%m')}", resumen_servicio(s, inv, rec, gastos, material)["margen"])
+                for s in reversed(lista) if s.estado == "completado"]
+    margenes = [(n, m) for n, m in margenes if m is not None]
+    if margenes:
+        st.bar_chart(pd.DataFrame(margenes, columns=["Servicio", "Margen (€)"]).set_index("Servicio"))
+
+    # --- Ficha de un servicio ---
+    st.divider()
+    st.subheader("Ficha del servicio")
+    opciones = {f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}" + (f" - {s.cliente}" if s.cliente else ""): s
+                for s in lista}
+    servicio = opciones[st.selectbox("Servicio", list(opciones), key="hist_ficha")]
+    _ficha_servicio(servicio, inv, rec, gastos, material)
+
+
+def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos: RegistroGastos,
+                    material: RegistroMaterial) -> None:
+    f = historial.ficha(servicio, inv, rec, gastos, material)
+    r = f["rentabilidad"]
+    k = lambda campo: f"hist_{campo}_{servicio.id}"
+
+    completado = servicio.fecha_completado.strftime("%d/%m/%Y") if servicio.fecha_completado else "—"
+    st.markdown(
+        f"**{servicio.menu}** · {servicio.fecha.strftime('%d/%m/%Y')} a las {servicio.hora.strftime('%H:%M')} · "
+        f"{servicio.comensales} comensales · {servicio.estado} (completado el {completado})"
+    )
+    if servicio.notas:
+        st.caption(f"Notas: {servicio.notas}")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Cobro", _texto_euros(r["cobrado"]))
+    m2.metric("Coste", _texto_euros(r["coste_total"]))
+    m3.metric("Margen", _texto_euros(r["margen"]),
+              delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
+    m4.metric("Coste por comensal", f"{f['coste_por_comensal']:.2f} €")
+
+    tab_gasto, tab_plan, tab_gastos, tab_material, tab_menu = st.tabs(
+        ["🍅 Lo que se gastó", "📋 Previsto frente a real", "💶 Gastos", "🍽️ Material", "📖 Menú"]
+    )
+    with tab_gasto:
+        if f["consumos"]:
+            st.dataframe([{
+                "Producto": ("🧻 " if c["tipo"] == "consumible" else "") + c["producto"],
+                "Cantidad": f"{_num(c['cantidad'])} {c['unidad']}", "Lote": c["lote"], "Coste (€)": f"{c['coste']:.2f}",
+            } for c in f["consumos"]], width="stretch", hide_index=True)
+            st.caption(f"Comida {r['comida']:.2f} € · consumibles {r['consumibles']:.2f} € (a precio real de cada lote)")
+        else:
+            st.info("No salió nada del inventario para este servicio.")
+    with tab_plan:
+        if f["previsto_frente_a_real"]:
+            st.dataframe([{
+                "Producto": p["producto"], "Previsto": f"{_num(p['previsto'])} {p['unidad']}",
+                "Real": f"{_num(p['real'])} {p['unidad']}",
+                "Diferencia": "—" if abs(p["diferencia"]) < 1e-9 else f"{p['diferencia']:+g} {p['unidad']}",
+            } for p in f["previsto_frente_a_real"]], width="stretch", hide_index=True)
+            st.caption("Diferencia negativa: salió menos de lo que pedía el menú (normalmente faltaba stock). "
+                       "Positiva: se usó más (compras de urgencia).")
+        else:
+            st.info("No hay datos del menú de este servicio.")
+    with tab_gastos:
+        if f["gastos"]:
+            st.dataframe([{"Concepto": g.concepto, "Categoría": g.categoria, "Importe (€)": f"{g.importe:.2f}",
+                           "Notas": g.notas} for g in f["gastos"]], width="stretch", hide_index=True)
+        else:
+            st.info("Este servicio no tiene gastos apuntados.")
+    with tab_material:
+        if f["salidas_material"]:
+            for salida in f["salidas_material"]:
+                estado = f"volvió el {salida.fecha_vuelta.strftime('%d/%m/%Y')}" if salida.ha_vuelto else "🚚 todavía fuera"
+                st.caption(f"Salió el {salida.fecha_salida.strftime('%d/%m/%Y')} · {estado}")
+                st.dataframe([{"Material": n, "Salieron": c,
+                               "Volvieron": salida.vuelto.get(n, 0) if salida.ha_vuelto else "—"}
+                              for n, c in salida.cantidades.items()], width="stretch", hide_index=True)
+            for i in f["incidencias_material"]:
+                st.write(f"💥 {i.tipo.capitalize()}: {i.cantidad} x {i.material} ({i.coste:.2f} €)")
+        else:
+            st.info("No se llevó material registrado a este servicio.")
+    with tab_menu:
+        foto = servicio.menu_completado
+        if not foto:
+            st.info("No hay copia del menú (el servicio se completó antes de existir el historial, o el menú no existía).")
+        else:
+            st.caption("Así era el menú cuando se completó el servicio (aunque después se haya cambiado).")
+            for receta in foto["recetas"]:
+                st.markdown(f"**{receta['nombre']}** · {receta['categoria']}")
+                st.write(", ".join(f"{n} {_num(c)}/comensal" for n, c in receta["ingredientes_por_comensal"].items()))
+            if foto.get("consumibles_por_comensal"):
+                st.write("🧻 " + ", ".join(f"{n} {_num(c)}/comensal" for n, c in foto["consumibles_por_comensal"].items()))
+            if foto.get("materiales_por_comensal"):
+                st.write("🍽️ " + ", ".join(f"{n} {_num(c)}/comensal" for n, c in foto["materiales_por_comensal"].items()))
+
+    st.markdown("**Datos del servicio**")
+    c1, c2 = st.columns(2)
+    cliente = c1.text_input("Cliente", value=servicio.cliente, key=k("cliente"))
+    lugar = c2.text_input("Lugar", value=servicio.lugar, key=k("lugar"))
+    valoracion = st.text_area("📝 ¿Cómo fue?", value=servicio.valoracion, key=k("valoracion"),
+                              placeholder="Incidencias, qué sobró o faltó, qué cambiar la próxima vez...")
+    if st.button("Guardar", key=k("guardar")):
+        servicio.cliente, servicio.lugar, servicio.valoracion = cliente.strip(), lugar.strip(), valoracion.strip()
+        avisar("success", f"Servicio #{servicio.id} actualizado.")
+        st.rerun()
+
+    st.markdown("**🔁 Repetir este servicio**")
+    st.caption("Crea un servicio nuevo con el mismo menú, comensales, precio, cliente y lugar.")
+    c3, c4, c5 = st.columns([2, 2, 1])
+    fecha = c3.date_input("Fecha", key=k("repetir_fecha"))
+    hora = c4.time_input("Hora", value=servicio.hora, key=k("repetir_hora"))
+    if c5.button("Repetir", key=k("repetir")):
+        nuevo = historial.repetir_servicio(st.session_state.registro_servicios, servicio, fecha, hora)
+        avisar("success", f"Creado el servicio #{nuevo.id} para el {fecha.strftime('%d/%m/%Y')} (pendiente).")
+        st.rerun()
 
 
 # ---------- Página: Recetario ----------
@@ -2152,7 +2336,7 @@ st.sidebar.markdown(
 )
 pagina = st.sidebar.radio(
     "Navegación",
-    ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"],
+    ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"],
 )
 
 st.sidebar.divider()
@@ -2178,6 +2362,8 @@ elif pagina == "Inventario":
     pagina_inventario()
 elif pagina == "Servicios":
     pagina_servicios()
+elif pagina == "Historial":
+    pagina_historial()
 elif pagina == "Recetario":
     pagina_recetario()
 elif pagina == "Compras":

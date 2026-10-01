@@ -20,7 +20,7 @@ URL = "http://localhost:8501"
 RAIZ = Path(__file__).resolve().parent.parent
 CARPETA = RAIZ / "resultados" / "capturas"
 
-PAGINAS = ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]
+PAGINAS = ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]
 PESTANAS_INVENTARIO = ["✏️ Editar producto", "📦 Actualizar stock", "🏷️ Lotes", "🔪 Limpiar producto", "📜 Limpiezas"]
 
 

@@ -133,7 +133,7 @@ def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
 
 def _hoja_servicios(wb: Workbook, registro: RegistroServicios) -> None:
     hoja = wb.create_sheet("Servicios")
-    columnas = ["ID", "Fecha", "Hora", "Comensales", "Menú", "Estado", "Notas", "Precio de cobro (€)"]
+    columnas = ["ID", "Fecha", "Hora", "Comensales", "Menú", "Estado", "Notas", "Precio de cobro (€)", "Cliente", "Lugar"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -147,6 +147,8 @@ def _hoja_servicios(wb: Workbook, registro: RegistroServicios) -> None:
         hoja.cell(row=fila, column=7, value=s.notas).font = Font(name=FUENTE)
         cobro = s.precio_cobrado if s.precio_cobrado is not None else "—"
         hoja.cell(row=fila, column=8, value=cobro).font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=9, value=s.cliente or "—").font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=10, value=s.lugar or "—").font = Font(name=FUENTE)
         fila += 1
 
     _ajustar_ancho_columnas(hoja)
@@ -166,6 +168,30 @@ def _hoja_gastos(wb: Workbook, registro_gastos: RegistroGastos) -> None:
         hoja.cell(row=fila, column=4, value="TOTAL").font = Font(name=FUENTE, bold=True)
         hoja.cell(row=fila, column=5, value=f"=SUM(E2:E{fila - 1})").font = Font(name=FUENTE, bold=True)
     _ajustar_ancho_columnas(hoja, ancho=20)
+
+
+def _hoja_historial(
+    wb: Workbook, inventario: Inventario, registro: RegistroServicios, recetario: Recetario,
+    registro_gastos: RegistroGastos, registro_material: RegistroMaterial = None,
+) -> None:
+    """Una fila por servicio completado: quién, dónde, cuántos, cuánto costó y cuánto se ganó, y cómo fue."""
+    hoja = wb.create_sheet("Historial")
+    _escribir_cabecera(hoja, ["ID", "Fecha", "Completado", "Cliente", "Lugar", "Menú", "Comensales", "Coste (€)",
+                              "Cobro (€)", "Margen (€)", "Coste por comensal (€)", "Valoración"])
+    fila = 2
+    for s in sorted(registro.servicios, key=lambda s: (s.fecha, s.hora)):
+        if s.estado != "completado":
+            continue
+        r = resumen_servicio(s, inventario, recetario, registro_gastos, registro_material)
+        valores = [s.id, s.fecha.strftime("%d/%m/%Y"),
+                   s.fecha_completado.strftime("%d/%m/%Y") if s.fecha_completado else "—",
+                   s.cliente or "—", s.lugar or "—", s.menu, s.comensales, r["coste_total"],
+                   r["cobrado"] if r["cobrado"] is not None else "—",
+                   f"=I{fila}-H{fila}" if r["cobrado"] is not None else "—", f"=H{fila}/G{fila}", s.valoracion or "—"]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+    _ajustar_ancho_columnas(hoja, ancho=18)
 
 
 def _hoja_material(wb: Workbook, registro_material: RegistroMaterial) -> None:
@@ -266,6 +292,7 @@ def exportar_todo(
         _hoja_gastos(wb, registro_gastos)
         if recetario is not None:
             _hoja_rentabilidad(wb, inventario, registro_servicios, recetario, registro_gastos, registro_material)
+            _hoja_historial(wb, inventario, registro_servicios, recetario, registro_gastos, registro_material)
 
     Path(carpeta_salida).mkdir(parents=True, exist_ok=True)
     marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")

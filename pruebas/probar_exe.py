@@ -38,7 +38,7 @@ URL = "http://localhost:8501"
 RAIZ = Path(__file__).resolve().parent.parent
 RESULTADOS = RAIZ / "resultados"
 CAPTURAS = RESULTADOS / "capturas_exe"
-PAGINAS = ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]
+PAGINAS = ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]
 
 lineas: list[str] = []
 fallos = 0

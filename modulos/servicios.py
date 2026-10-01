@@ -39,11 +39,16 @@ class Servicio:
         notas: str = "",
         estado: str = "pendiente",
         precio_cobrado: Optional[float] = None,
+        cliente: str = "",
+        lugar: str = "",
     ):
         """
         precio_cobrado: lo que se cobra por el servicio ENTERO (opcional).
         Sirve para calcular el margen; si no se indica, el programa
         funciona igual, solo que sin margen.
+
+        cliente y lugar: para quién y dónde es (opcionales). Sirven para
+        buscar en el historial ("todo lo que hemos hecho para los García").
         """
         if comensales <= 0:
             raise ValueError("El número de comensales debe ser mayor que 0")
@@ -63,6 +68,16 @@ class Servicio:
         self.notas = notas
         self.estado = estado
         self.precio_cobrado = precio_cobrado
+        self.cliente = cliente.strip()
+        self.lugar = lugar.strip()
+        # Se rellenan al completar el servicio (ver Recetario.completar_servicio):
+        self.fecha_completado: Optional[date] = None
+        # Copia de cómo era el menú AL COMPLETARLO (recetas, cantidades,
+        # consumibles y material): si después se cambia la receta, el
+        # historial sigue mostrando lo que se hizo de verdad.
+        self.menu_completado: Optional[dict] = None
+        # "Cómo fue": incidencias, qué sobró o faltó, qué cambiar la próxima vez.
+        self.valoracion = ""
 
     def fecha_hora(self) -> datetime:
         """Combina fecha y hora en un único objeto datetime."""
@@ -76,12 +91,15 @@ class Servicio:
 
     def completar(self) -> None:
         self.estado = "completado"
+        self.fecha_completado = date.today()
 
     def __str__(self) -> str:
         cobro = f" | Cobro: {self.precio_cobrado}€" if self.precio_cobrado is not None else ""
+        cliente = f" | Cliente: {self.cliente}" if self.cliente else ""
+        lugar = f" | Lugar: {self.lugar}" if self.lugar else ""
         return (
             f"[#{self.id}] {self.fecha.strftime('%d/%m/%Y')} {self.hora.strftime('%H:%M')} | "
-            f"{self.comensales} comensales | Menú: {self.menu} | Estado: {self.estado}{cobro}"
+            f"{self.comensales} comensales | Menú: {self.menu} | Estado: {self.estado}{cliente}{lugar}{cobro}"
         )
 
     def to_dict(self) -> dict:
@@ -94,6 +112,11 @@ class Servicio:
             "notas": self.notas,
             "estado": self.estado,
             "precio_cobrado": self.precio_cobrado,
+            "cliente": self.cliente,
+            "lugar": self.lugar,
+            "fecha_completado": self.fecha_completado.isoformat() if self.fecha_completado else None,
+            "menu_completado": self.menu_completado,
+            "valoracion": self.valoracion,
         }
 
     @classmethod
@@ -106,7 +129,13 @@ class Servicio:
             notas=datos["notas"],
             estado=datos["estado"],
             precio_cobrado=datos.get("precio_cobrado"),  # no existe en sesiones antiguas
+            cliente=datos.get("cliente", ""),
+            lugar=datos.get("lugar", ""),
         )
+        if datos.get("fecha_completado"):
+            servicio.fecha_completado = date.fromisoformat(datos["fecha_completado"])
+        servicio.menu_completado = datos.get("menu_completado")
+        servicio.valoracion = datos.get("valoracion", "")
         # El constructor le asigna un id NUEVO automáticamente (usando el
         # contador de clase); lo sobrescribimos con el id ORIGINAL guardado,
         # para que este servicio siga siendo "el mismo" que antes de guardar.

@@ -124,7 +124,8 @@ def prueba_arranque(at: AppTest) -> None:
 
 @prueba("Todas las páginas se muestran")
 def prueba_paginas(at: AppTest) -> None:
-    for pagina in ["Dashboard", "Inventario", "Servicios", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]:
+    for pagina in ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas",
+                   "Exportar / Backup"]:
         ir_a(at, pagina)
         comprobar(sin_excepciones(at, pagina) and not at.error, f"Página '{pagina}' sin errores")
 
@@ -400,12 +401,15 @@ def prueba_completar(at: AppTest) -> None:
     at.selectbox(key="completar_select").select(
         f"#{pendiente.id} - {pendiente.fecha.strftime('%d/%m/%Y')} - {pendiente.menu}"
     ).run()
+    at.text_area(key=f"valoracion_{pendiente.id}").input("Todo bien; sobró pan")
     boton(at.button, "Completar servicio").click().run()
     servilletas = at.session_state["inventario"].buscar_producto("Servilletas de papel")
     comprobar(sin_excepciones(at, "completar servicio") and pendiente.estado == "completado",
               "Servicio completado desde la interfaz")
     comprobar(servilletas.stock == 500 - 3 * pendiente.comensales,
               f"También descuenta los consumibles del menú (quedan {servilletas.stock} servilletas)")
+    comprobar(pendiente.valoracion == "Todo bien; sobró pan" and pendiente.menu_completado is not None,
+              "Al completar se guardan la valoración y la copia del menú")
 
 
 @prueba("Completar servicio eligiendo lotes")
@@ -521,14 +525,19 @@ def prueba_gastos(at: AppTest) -> None:
     por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
     por_etiqueta(at.number_input, "Precio de cobro (€, opcional)").set_value(25.0)
     por_etiqueta(at.radio, "El precio es").set_value("Por comensal")
+    por_etiqueta(at.text_input, "Cliente (opcional)").input("Familia García")
+    por_etiqueta(at.text_input, "Lugar (opcional)").input("Finca Los Olivos")
     boton(at.button, "Añadir servicio").click().run()
     nuevo = serv.servicios[-1]
     comprobar(sin_excepciones(at, "añadir servicio con precio") and nuevo.comensales == 10 and nuevo.precio_cobrado == 250,
               f"Servicio con precio por comensal: se guarda el total (250 €, hay {nuevo.precio_cobrado})")
+    comprobar(nuevo.cliente == "Familia García" and nuevo.lugar == "Finca Los Olivos", "Se guardan el cliente y el lugar")
 
     # Sin precio: es opcional (en la app el formulario se vacía solo; el
     # simulador de pruebas conserva lo escrito, así que se pone a 0 a mano)
     por_etiqueta(at.number_input, "Precio de cobro (€, opcional)").set_value(0.0)
+    por_etiqueta(at.text_input, "Cliente (opcional)").input("")
+    por_etiqueta(at.text_input, "Lugar (opcional)").input("")
     por_etiqueta(at.number_input, "Comensales").set_value(4)
     por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
     boton(at.button, "Añadir servicio").click().run()
@@ -658,6 +667,39 @@ def prueba_compras(at: AppTest) -> None:
                   "Marcar como comprado repone las patas en el inventario")
 
 
+@prueba("Historial de servicios")
+def prueba_historial(at: AppTest) -> None:
+    serv = at.session_state["registro_servicios"]
+    ir_a(at, "Historial")
+    comprobar(sin_excepciones(at, "historial") and not at.error, "La página de historial se muestra sin errores")
+    completados = [s for s in serv.servicios if s.estado == "completado"]
+    filas = at.dataframe[0].value
+    comprobar(len(filas) == len(completados), f"Lista los {len(completados)} servicios completados")
+
+    primero = next(s for s in completados if s.menu == "Menú del día")
+    sb = at.selectbox(key="hist_ficha")
+    sb.select(opcion(sb, f"#{primero.id} -")).run()
+    comprobar(sin_excepciones(at, "ficha del servicio"), "La ficha del servicio se muestra sin errores")
+    comprobar(any("Todo bien" in str(t.value) for t in at.text_area), "La ficha muestra la valoración")
+
+    at.text_input(key=f"hist_cliente_{primero.id}").input("Bodega Ruiz")
+    at.button(key=f"hist_guardar_{primero.id}").click().run()
+    comprobar(primero.cliente == "Bodega Ruiz", "Desde la ficha se puede poner o cambiar el cliente")
+
+    at.selectbox(key="hist_cliente").select("Bodega Ruiz").run()
+    comprobar(len(at.dataframe[0].value) == 1, "Filtrar el historial por cliente")
+
+    antes = len(serv.servicios)
+    sb = at.selectbox(key="hist_ficha")
+    sb.select(opcion(sb, f"#{primero.id} -")).run()
+    at.date_input(key=f"hist_repetir_fecha_{primero.id}").set_value(date.today() + timedelta(days=40))
+    at.button(key=f"hist_repetir_{primero.id}").click().run()
+    nuevo = serv.servicios[-1]
+    comprobar(len(serv.servicios) == antes + 1 and nuevo.estado == "pendiente" and nuevo.menu == primero.menu
+              and nuevo.cliente == "Bodega Ruiz" and nuevo.comensales == primero.comensales,
+              "Repetir un servicio crea uno nuevo pendiente con los mismos datos")
+
+
 @prueba("Métricas y guardado")
 def prueba_metricas_y_guardado(at: AppTest) -> None:
     ir_a(at, "Métricas")
@@ -702,6 +744,7 @@ def main() -> int:
     prueba_gastos(at)
     prueba_material(at)
     prueba_compras(at)
+    prueba_historial(at)
     prueba_metricas_y_guardado(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))

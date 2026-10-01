@@ -36,6 +36,7 @@ from exportador import exportar_todo
 from persistencia import guardar_sesion, cargar_sesion
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
+import historial
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -627,12 +628,15 @@ def menu_servicios():
             hora = pedir_hora("Hora del servicio")
             comensales = pedir_entero("Número de comensales: ")
             menu_nombre = pedir_texto("Nombre del menú: ")
+            cliente = pedir_texto("Cliente (opcional): ")
+            lugar = pedir_texto("Lugar (opcional): ")
             notas = pedir_texto("Notas (opcional): ")
             precio_cobrado = pedir_precio_cobro(comensales)
             try:
-                registro_servicios.agregar_servicio(
-                    Servicio(fecha, hora, comensales, menu_nombre, notas, precio_cobrado=precio_cobrado)
-                )
+                registro_servicios.agregar_servicio(Servicio(
+                    fecha, hora, comensales, menu_nombre, notas, precio_cobrado=precio_cobrado,
+                    cliente=cliente, lugar=lugar,
+                ))
             except ValueError as e:
                 print(f"❌ {e}")
         elif opcion == "3":
@@ -659,6 +663,7 @@ def menu_servicios():
                         servicio.completar()
                         print(f"✅ Servicio #{id_servicio} completado (sin descuento de stock).")
                         pedir_costes_adicionales(servicio)
+                        servicio.valoracion = pedir_texto("¿Cómo fue? (opcional, para el historial): ")
                 else:
                     elecciones = pedir_lotes_servicio(servicio, filas)
                     filas = recetario.previsualizar_consumo(servicio, inventario, elecciones)
@@ -681,6 +686,7 @@ def menu_servicios():
                             recetario.completar_servicio(servicio, inventario, elecciones)
                             print(f"✅ Servicio #{id_servicio} completado.")
                             pedir_costes_adicionales(servicio)
+                            servicio.valoracion = pedir_texto("¿Cómo fue? (opcional, para el historial): ")
                         except ValueError as e:
                             print(f"❌ {e}")
         elif opcion == "0":
@@ -1407,6 +1413,86 @@ def menu_material():
         pausa()
 
 
+def mostrar_ficha_servicio(servicio: Servicio) -> None:
+    f = historial.ficha(servicio, inventario, recetario, registro_gastos, registro_material)
+    r = f["rentabilidad"]
+    print(f"\n=== Servicio #{servicio.id} ===")
+    print(servicio)
+    if servicio.fecha_completado:
+        print(f"Completado el {servicio.fecha_completado.strftime('%d/%m/%Y')}")
+    print(f"Cobro {texto_euros(r['cobrado'])} | coste {texto_euros(r['coste_total'])} | margen {texto_euros(r['margen'])} "
+          f"| coste por comensal {f['coste_por_comensal']:.2f}€")
+    print("\n🍅 Lo que se gastó:")
+    for c in f["consumos"] or [None]:
+        print("   (nada)" if c is None else f"   {c['producto']}: {round(c['cantidad'], 3)} {c['unidad']} [{c['lote']}] = {c['coste']:.2f}€")
+    print("📋 Previsto frente a real:")
+    for p in f["previsto_frente_a_real"] or [None]:
+        print("   (sin datos del menú)" if p is None else
+              f"   {p['producto']}: previsto {p['previsto']} | real {p['real']} {p['unidad']} | diferencia {p['diferencia']:+g}")
+    print("💶 Gastos:")
+    for g in f["gastos"] or [None]:
+        print("   (ninguno)" if g is None else f"   {g.concepto} ({g.categoria}): {g.importe:.2f}€")
+    print("🍽️  Material:")
+    for salida in f["salidas_material"] or [None]:
+        if salida is None:
+            print("   (ninguno)")
+        else:
+            print(f"   Salió: {salida.cantidades} | " + (f"volvió: {salida.vuelto}" if salida.ha_vuelto else "todavía fuera"))
+    for i in f["incidencias_material"]:
+        print(f"   💥 {i}")
+    print(f"📝 Cómo fue: {servicio.valoracion or '(sin valoración)'}")
+
+
+def menu_historial():
+    while True:
+        print("\n--- HISTORIAL DE SERVICIOS ---")
+        print("1. Ver servicios completados (con resumen)")
+        print("2. Ver la ficha de un servicio")
+        print("3. Cambiar cliente, lugar o valoración de un servicio")
+        print("4. Repetir un servicio (crear uno igual en otra fecha)")
+        print("0. Volver")
+        opcion = pedir_texto("Elige una opción: ")
+        if opcion == "1":
+            periodo = pedir_opcion("Periodo", PERIODOS_VALIDOS)
+            desde, _ = rango_desde_periodo(periodo)
+            cliente = pedir_texto("Cliente (vacío = todos): ") or None
+            texto = pedir_texto("Buscar texto (vacío = todo): ")
+            lista = historial.filtrar_servicios(registro_servicios, desde, date.max, cliente=cliente, texto=texto)
+            if not lista:
+                print("No hay servicios completados con esos filtros.")
+            for s in lista:
+                r = resumen_servicio(s, inventario, recetario, registro_gastos, registro_material)
+                print(f"#{s.id} {s.fecha.strftime('%d/%m/%Y')} {s.menu} | {s.cliente or '—'} | {s.comensales} com. | "
+                      f"coste {texto_euros(r['coste_total'])} | cobro {texto_euros(r['cobrado'])} | margen {texto_euros(r['margen'])}")
+            if lista:
+                r = historial.resumen_periodo(lista, inventario, recetario, registro_gastos, registro_material)
+                print(f"\nTotal: {r['servicios']} servicios, {r['comensales']} comensales, facturado {r['facturado']:.2f}€, "
+                      f"coste {r['coste']:.2f}€, margen {texto_euros(r['margen'])}")
+                if r["menu_mas_repetido"]:
+                    print(f"Menú más repetido: {r['menu_mas_repetido']} | más rentable: {r['menu_mas_rentable'] or '—'}")
+        elif opcion in ("2", "3", "4"):
+            servicio = registro_servicios.buscar_por_id(pedir_entero("Nº del servicio: "))
+            if servicio is None:
+                print("❌ No existe ese servicio.")
+            elif opcion == "2":
+                mostrar_ficha_servicio(servicio)
+            elif opcion == "3":
+                print("Deja vacío lo que no cambie.")
+                servicio.cliente = pedir_texto(f"Cliente [{servicio.cliente}]: ") or servicio.cliente
+                servicio.lugar = pedir_texto(f"Lugar [{servicio.lugar}]: ") or servicio.lugar
+                servicio.valoracion = pedir_texto(f"Cómo fue [{servicio.valoracion}]: ") or servicio.valoracion
+                print("✅ Guardado.")
+            else:
+                fecha = pedir_fecha("Fecha del nuevo servicio")
+                hora = pedir_hora("Hora del nuevo servicio")
+                historial.repetir_servicio(registro_servicios, servicio, fecha, hora)
+        elif opcion == "0":
+            return
+        else:
+            print("⚠️  Opción no válida.")
+        pausa()
+
+
 def menu_principal():
     while True:
         print("\n" + "=" * 40)
@@ -1425,6 +1511,7 @@ def menu_principal():
         print("11. Cargar sesión")
         print("12. Gastos y rentabilidad")
         print("13. Material (vajilla, cubertería...)")
+        print("14. Historial de servicios")
         print("0. Salir")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1460,6 +1547,8 @@ def menu_principal():
             menu_gastos()
         elif opcion == "13":
             menu_material()
+        elif opcion == "14":
+            menu_historial()
         elif opcion == "0":
             respuesta = pedir_texto("¿Guardar sesión antes de salir? (s/n): ").strip().lower()
             if respuesta == "s":

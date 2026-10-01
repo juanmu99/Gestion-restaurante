@@ -17,6 +17,7 @@ Conceptos de Python nuevos en este módulo:
 - Importar clases de otros módulos propios (from inventario import ...)
 """
 
+import copy
 from typing import Optional
 
 from inventario import Inventario
@@ -156,6 +157,22 @@ class Menu:
                 # totales, empieza sumando desde 0 en vez de dar error.
                 totales[ingrediente] = round(totales.get(ingrediente, 0) + cantidad, 3)
         return totales
+
+    def foto(self) -> dict:
+        """
+        Copia completa de cómo es el menú AHORA (con las recetas dentro, no
+        solo sus nombres), para guardarla en un servicio al completarlo.
+        """
+        # deepcopy: una copia INDEPENDIENTE de todo, también de los
+        # diccionarios de dentro. Con una copia normal, la foto compartiría
+        # los ingredientes con la receta y, al cambiar la receta después,
+        # también cambiaría el historial.
+        return copy.deepcopy({
+            "nombre": self.nombre,
+            "recetas": [r.to_dict() for r in self.recetas],
+            "consumibles_por_comensal": self.consumibles_por_comensal,
+            "materiales_por_comensal": self.materiales_por_comensal,
+        })
 
     def calcular_consumibles(self, comensales: int) -> dict[str, float]:
         """Los consumibles del menú, ya escalados al número de comensales."""
@@ -430,6 +447,7 @@ class Recetario:
         for fila in filas:
             if fila["reparto"]:
                 inventario.salida_repartida(fila["ingrediente"], fila["reparto"], "consumo", servicio.id)
+        servicio.menu_completado = self.buscar_menu(servicio.menu).foto()
         servicio.completar()
         return filas
 

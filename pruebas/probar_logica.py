@@ -417,6 +417,64 @@ with tempfile.TemporaryDirectory() as carpeta:
                           recetario, reg)
     comprobar("Material" in load_workbook(ruta_excel).sheetnames, "El Excel tiene la hoja 'Material'")
 
+print("\n--- Historial de servicios ---")
+import historial  # noqa: E402
+
+inv = inventario_secreto()
+recetario = Recetario()
+silencio(recetario.agregar_receta, Receta("Secreto a la brasa", "Principal", {"Secreto": 0.2}))
+silencio(recetario.agregar_menu, Menu("Menú brasa", [recetario.recetas["Secreto a la brasa"]]))
+registro = RegistroServicios()
+garcia = Servicio(HOY, time(21, 0), 4, "Menú brasa", precio_cobrado=100, cliente="Familia García", lugar="Finca Los Olivos")
+lopez = Servicio(HOY, time(14, 0), 15, "Menú brasa", cliente="López")  # pide 3 kg y solo hay 1,8
+cancelado = Servicio(HOY, time(13, 0), 2, "Menú brasa", cliente="Ruiz")
+for s_ in (garcia, lopez, cancelado):
+    silencio(registro.agregar_servicio, s_)
+cancelado.cancelar()
+silencio(recetario.completar_servicio, garcia, inv, {"Secreto": [1]})
+garcia.valoracion = "Sobró pan; llevar más hielo"
+silencio(recetario.completar_servicio, lopez, inv)
+
+comprobar(garcia.fecha_completado == HOY and garcia.menu_completado["recetas"][0]["nombre"] == "Secreto a la brasa",
+          "Al completar se guardan la fecha y una copia del menú")
+recetario.recetas["Secreto a la brasa"].ingredientes_por_comensal["Secreto"] = 0.5
+comprobar(historial.previsto(garcia) == {"Secreto": 0.8},
+          "Si después se cambia la receta, el historial sigue mostrando lo que se hizo (0,2 x 4 = 0,8 kg)")
+filas = historial.previsto_frente_a_real(lopez, inv)
+comprobar(filas[0]["previsto"] == 3 and abs(filas[0]["real"] - 1.0) < 1e-9 and abs(filas[0]["diferencia"] + 2) < 1e-9,
+          "Previsto frente a real: el menú pedía 3 kg y solo salió 1 kg (lo que quedaba)")
+comprobar([s_.id for s_ in historial.filtrar_servicios(registro, date(2000, 1, 1), date.max)] == [garcia.id, lopez.id],
+          "El historial solo lista los completados, los más recientes primero")
+comprobar(len(historial.filtrar_servicios(registro, date(2000, 1, 1), date.max, incluir_cancelados=True)) == 3,
+          "Opcionalmente, también los cancelados")
+comprobar([s_.id for s_ in historial.filtrar_servicios(registro, date(2000, 1, 1), date.max, cliente="Familia García")] == [garcia.id],
+          "Filtrar por cliente")
+comprobar([s_.id for s_ in historial.filtrar_servicios(registro, date(2000, 1, 1), date.max, texto="hielo")] == [garcia.id],
+          "Buscar texto (también en la valoración)")
+comprobar(historial.clientes(registro) == ["Familia García", "López", "Ruiz"], "Lista de clientes")
+r = historial.resumen_periodo(historial.filtrar_servicios(registro, date(2000, 1, 1), date.max), inv, recetario,
+                              RegistroGastos(), RegistroMaterial())
+comprobar(r["servicios"] == 2 and r["comensales"] == 19 and r["facturado"] == 100 and r["servicios_sin_cobro"] == 1
+          and r["menu_mas_repetido"] == "Menú brasa",
+          "Resumen del periodo: 2 servicios, 19 comensales, 100 € facturados (1 sin precio)")
+f = historial.ficha(garcia, inv, recetario, RegistroGastos(), RegistroMaterial())
+comprobar(len(f["consumos"]) == 1 and f["consumos"][0]["lote"].startswith("Lote 1") and f["coste_por_comensal"] > 0,
+          "La ficha recoge lo que salió de cada lote y el coste por comensal")
+nuevo = silencio(historial.repetir_servicio, registro, garcia, HOY + timedelta(days=30), time(20, 0))
+comprobar(nuevo.estado == "pendiente" and nuevo.menu == "Menú brasa" and nuevo.cliente == "Familia García"
+          and nuevo.precio_cobrado == 100 and nuevo.comensales == 4 and nuevo.id != garcia.id,
+          "Repetir un servicio crea uno nuevo igual en otra fecha")
+copia = RegistroServicios.from_dict(registro.to_dict())
+g2 = copia.buscar_por_id(garcia.id)
+comprobar(g2.cliente == "Familia García" and g2.lugar == "Finca Los Olivos" and g2.valoracion == garcia.valoracion
+          and g2.fecha_completado == HOY and g2.menu_completado == garcia.menu_completado,
+          "Cliente, lugar, valoración y copia del menú se guardan y se cargan")
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta_excel = silencio(exportar_todo, inv, registro, GestorCompras(), carpeta, RegistroGastos(), recetario, RegistroMaterial())
+    hoja = load_workbook(ruta_excel)["Historial"]
+    comprobar(hoja.max_row == 3 and hoja["D2"].value in ("Familia García", "López"),
+              "El Excel tiene la hoja 'Historial' con una fila por servicio completado")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")
