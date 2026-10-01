@@ -690,6 +690,28 @@ def menu_servicios():
         pausa()
 
 
+def pedir_producto_nuevo(nombre: str):
+    """Da de alta un producto sin stock (lo pone la compra), pidiendo sus datos como en Inventario > Añadir."""
+    tipo = pedir_opcion("  ¿Qué es?", Producto.TIPOS)
+    categoria = pedir_texto_no_numerico("  Categoría: ")
+    unidad = pedir_opcion("  Unidad", Producto.UNIDADES_VALIDAS)
+    tiene_merma, peso_unitario = False, None
+    if tipo == "alimento" and unidad in UNIDADES_PESO + ("unidades",):
+        tiene_merma = pedir_si_no("  ¿Es un producto con merma (se limpia o despieza antes de usarse)?")
+        if tiene_merma and unidad == "unidades":
+            peso_unitario = pedir_peso_kg("  Peso en bruto de cada unidad")
+    stock_minimo = pedir_numero("  Stock mínimo: ")
+    proveedor = pedir_texto_no_numerico("  Proveedor habitual: ")
+    try:
+        producto = Producto(nombre, categoria, 0, unidad, 0, proveedor, stock_minimo,
+                            tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return None
+    inventario.agregar_producto(producto)
+    return producto
+
+
 def pedir_costes_adicionales(servicio: Servicio) -> None:
     """Costes no previstos del servicio (taxi, hielo...): se guardan como gastos de ese servicio."""
     while pedir_si_no("¿Hubo algún coste adicional no previsto?"):
@@ -697,8 +719,11 @@ def pedir_costes_adicionales(servicio: Servicio) -> None:
             nombre = pedir_texto("  Producto: ")
             producto = inventario.buscar_producto(nombre)
             if producto is None:
-                print(f"❌ No existe el producto '{nombre}'.")
-                continue
+                if not pedir_si_no(f"  '{nombre}' no está en el inventario. ¿Darlo de alta ahora?"):
+                    continue
+                producto = pedir_producto_nuevo(nombre)
+                if producto is None:
+                    continue
             comprada = pedir_numero(f"  Cantidad comprada ({producto.unidad}): ")
             usada = pedir_numero(f"  Cantidad usada en el servicio ({producto.unidad}): ")
             importe = pedir_numero("  Importe pagado (€): ")

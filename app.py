@@ -1182,10 +1182,12 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
     for i, extra in enumerate(extras):
         c1, c2 = st.columns([5, 1])
         if extra.get("producto"):
-            unidad = inv.buscar_producto(extra["producto"]).unidad
+            existente = extra.get("producto_nuevo") or inv.buscar_producto(extra["producto"])
+            unidad = existente.unidad
             sobra = extra["comprada"] - extra["usada"]
+            marca = " (nuevo en el inventario)" if extra.get("producto_nuevo") else ""
             c1.write(
-                f"• 📦 {extra['producto']}: comprados {_num(extra['comprada'])} {unidad} por {extra['importe']:.2f} €, "
+                f"• 📦 {extra['producto']}{marca}: comprados {_num(extra['comprada'])} {unidad} por {extra['importe']:.2f} €, "
                 f"usados {_num(extra['usada'])}" + (f", sobran {_num(sobra)} (al inventario)" if sobra > 0 else "")
             )
         else:
@@ -1198,19 +1200,33 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
     k = lambda campo: f"{clave}_{campo}_{v}"
     es_producto = st.checkbox(
         "Es un producto del inventario (lo que sobre se queda en el inventario)", key=k("es_producto"),
-        disabled=not inv.productos,
     )
     nuevo = None
     if es_producto:
-        nombre = st.selectbox("Producto", list(inv.productos), key=k("producto"))
-        producto = inv.buscar_producto(nombre)
+        opciones_producto = ["Uno que ya está en el inventario", "Uno nuevo (darlo de alta)"]
+        if not inv.productos:
+            opciones_producto = opciones_producto[1:]
+        es_nuevo = st.radio("¿Qué producto?", opciones_producto, horizontal=True, key=k("es_nuevo")).startswith("Uno nuevo")
+        ficha = None
+        if es_nuevo:
+            ficha = _ficha_producto_nuevo(k)
+            producto = ficha["producto"]
+            nombre = producto.nombre if producto else ""
+        else:
+            nombre = st.selectbox("Producto", list(inv.productos), key=k("producto"))
+            producto = inv.buscar_producto(nombre)
+        unidad = producto.unidad if producto else ficha["unidad"]
         c1, c2, c3 = st.columns(3)
-        comprada = c1.number_input(f"Comprado ({producto.unidad})", min_value=0.0, step=0.1, key=k("comprada"))
-        usada = c2.number_input(f"Usado en el servicio ({producto.unidad})", min_value=0.0, step=0.1, key=k("usada"))
+        comprada = c1.number_input(f"Comprado ({unidad})", min_value=0.0, step=0.1, key=k("comprada"))
+        usada = c2.number_input(f"Usado en el servicio ({unidad})", min_value=0.0, step=0.1, key=k("usada"))
         importe = c3.number_input("Importe pagado (€)", min_value=0.0, step=1.0, key=k("importe"))
-        proveedor = st.text_input("Dónde se compró", value=producto.proveedor, key=k("proveedor"))
+        proveedor = st.text_input(
+            "Dónde se compró", value=producto.proveedor if producto and not es_nuevo else "", key=k("proveedor"),
+            help="Si lo dejas vacío, se usa el proveedor habitual del producto.",
+        )
         fecha = None
-        if not producto.es_consumible() and comprada > usada and st.checkbox(
+        es_consumible = producto.es_consumible() if producto else ficha["tipo"] == "consumible"
+        if not es_consumible and comprada > usada and st.checkbox(
             "Lo que sobra tiene fecha de caducidad", key=k("tiene_fecha")
         ):
             fecha = st.date_input("Fecha de caducidad", key=k("fecha"))
@@ -1218,7 +1234,8 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
             st.error("Lo usado no puede ser más que lo comprado.")
         nuevo = {"concepto": f"{nombre} (compra no prevista)", "categoria": "Otros", "importe": importe,
                  "producto": nombre, "comprada": comprada, "usada": usada, "proveedor": proveedor,
-                 "fecha_caducidad": fecha}
+                 "fecha_caducidad": fecha, "producto_nuevo": producto if es_nuevo else None,
+                 "error_ficha": ficha["error"] if es_nuevo else None}
     else:
         c1, c2, c3 = st.columns([3, 2, 1])
         concepto = c1.text_input("Concepto", key=k("concepto"), placeholder="Ej: Taxi de vuelta")
@@ -1227,7 +1244,12 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
         nuevo = {"concepto": concepto.strip(), "categoria": categoria, "importe": importe}
 
     if st.button("➕ Añadir coste", key=k("anadir")):
-        if not nuevo["concepto"]:
+        nuevos_pendientes = [e["producto"] for e in extras if e.get("producto_nuevo")]
+        if nuevo.get("error_ficha"):
+            st.error(nuevo["error_ficha"])
+        elif nuevo.get("producto_nuevo") and (nuevo["producto"] in inv.productos or nuevo["producto"] in nuevos_pendientes):
+            st.error(f"Ya existe un producto llamado '{nuevo['producto']}'. Elígelo en 'Uno que ya está en el inventario'.")
+        elif not nuevo["concepto"]:
             st.error("Indica el concepto del coste.")
         elif nuevo["importe"] <= 0:
             st.error("El importe debe ser mayor que 0.")
@@ -1238,6 +1260,44 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
             st.session_state[f"{clave}_version"] = v + 1
             st.rerun()
     return extras
+
+
+def _ficha_producto_nuevo(k) -> dict:
+    """
+    Los datos de un producto NUEVO, los mismos que en Inventario > Añadir
+    producto (sin el stock ni el precio: los pone la propia compra).
+    Devuelve {"producto": Producto o None, "error": texto o None, "unidad", "tipo"}.
+    El producto NO se añade al inventario aquí: solo se prepara, y se añade
+    al completar el servicio.
+    """
+    st.caption("Datos del producto nuevo (como en Inventario > Añadir producto):")
+    tipos = {"Alimento": "alimento", "Consumible": "consumible"}
+    tipo = tipos[st.radio("Tipo", list(tipos), horizontal=True, key=k("nuevo_tipo"))]
+    c1, c2 = st.columns(2)
+    nombre = c1.text_input("Nombre", key=k("nuevo_nombre"))
+    categoria = c2.text_input("Categoría", key=k("nuevo_categoria"))
+    c3, c4 = st.columns(2)
+    unidad = c3.selectbox("Unidad", Producto.UNIDADES_VALIDAS, key=k("nuevo_unidad"))
+    stock_minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.1, key=k("nuevo_stock_minimo"))
+    tiene_merma, peso_unitario = False, None
+    if tipo == "alimento" and unidad in UNIDADES_PESO + ("unidades",):
+        tiene_merma = st.checkbox("Producto con merma (se limpia o despieza antes de usarse)", key=k("nuevo_merma"))
+        if tiene_merma and unidad == "unidades":
+            peso_unitario = _campo_peso("Peso en bruto de cada unidad", k("nuevo_peso"))
+    proveedor = st.text_input("Proveedor habitual", key=k("nuevo_proveedor"),
+                              help="Dónde se suele comprar. Se propondrá en la lista de la compra.")
+    resultado = {"producto": None, "error": None, "unidad": unidad, "tipo": tipo}
+    if not nombre.strip():
+        resultado["error"] = "Ponle un nombre al producto nuevo."
+        return resultado
+    try:
+        resultado["producto"] = Producto(
+            nombre.strip(), categoria, 0, unidad, 0, proveedor, stock_minimo,
+            tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo,
+        )
+    except ValueError as e:
+        resultado["error"] = str(e)
+    return resultado
 
 
 def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> None:
@@ -1251,6 +1311,10 @@ def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> Non
     for extra in extras:
         if extra.get("producto"):
             try:
+                if extra.get("producto_nuevo") and extra["producto"] not in inv.productos:
+                    nuevo_producto = extra["producto_nuevo"]
+                    nuevo_producto.precio_referencia = round(extra["importe"] / extra["comprada"], 4)
+                    inv.agregar_producto(nuevo_producto)
                 inv.compra_para_servicio(
                     extra["producto"], extra["comprada"], extra["usada"], extra["importe"], servicio.id,
                     proveedor=extra["proveedor"], fecha_caducidad=extra["fecha_caducidad"],

@@ -460,7 +460,29 @@ def prueba_completar_lotes(at: AppTest) -> None:
     at.button(key=f"{clave}_anadir_{v}").click().run()
     tomate = at.session_state["inventario"].buscar_producto("Tomate")
     stock_tomate = tomate.stock
-    comprobar([e["concepto"] for e in at.session_state[clave]] == ["Hielo de última hora", "Tomate (compra no prevista)"],
+
+    # Compra no prevista de un producto NUEVO: se da de alta con sus datos
+    def producto_nuevo(nombre: str) -> None:
+        v = at.session_state[f"{clave}_version"]
+        at.checkbox(key=f"{clave}_es_producto_{v}").check().run()
+        at.radio(key=f"{clave}_es_nuevo_{v}").set_value("Uno nuevo (darlo de alta)").run()
+        at.text_input(key=f"{clave}_nuevo_nombre_{v}").input(nombre)
+        at.text_input(key=f"{clave}_nuevo_categoria_{v}").input("Verduras")
+        at.selectbox(key=f"{clave}_nuevo_unidad_{v}").select("kg")
+        at.number_input(key=f"{clave}_nuevo_stock_minimo_{v}").set_value(1.0)
+        at.text_input(key=f"{clave}_nuevo_proveedor_{v}").input("Huerta Local").run()
+        at.number_input(key=f"{clave}_comprada_{v}").set_value(2.0)
+        at.number_input(key=f"{clave}_usada_{v}").set_value(1.5)
+        at.number_input(key=f"{clave}_importe_{v}").set_value(3.0)
+        at.button(key=f"{clave}_anadir_{v}").click().run()
+
+    producto_nuevo("Tomate")
+    comprobar(any("Ya existe" in t for t in textos(at.error)), "Un producto nuevo no puede llamarse como uno que ya existe")
+    producto_nuevo("Cebolla")
+    comprobar("Cebolla" not in at.session_state["inventario"].productos,
+              "El producto nuevo no se da de alta hasta completar el servicio")
+    comprobar([e["concepto"] for e in at.session_state[clave]]
+              == ["Hielo de última hora", "Tomate (compra no prevista)", "Cebolla (compra no prevista)"],
               "Se pueden añadir y quitar costes adicionales antes de completar")
     gastos = at.session_state["registro_gastos"]
     comprobar(not gastos.gastos, "...y no se guardan hasta completar el servicio")
@@ -476,9 +498,15 @@ def prueba_completar_lotes(at: AppTest) -> None:
     comprobar(abs(tomate.stock - (stock_tomate + 0.6)) < 1e-9 and nuevo_lote.proveedor == "Mercado central"
               and nuevo_lote.precio_unitario == 3 and abs(nuevo_lote.cantidad - 0.6) < 1e-9,
               "La compra de tomate entra como lote y los 0,6 kg que sobran se quedan en el inventario")
-    ultimo = at.session_state["inventario"].historial[-1]
+    hist = at.session_state["inventario"].historial
+    ultimo = next(m for m in reversed(hist) if m.producto_nombre == "Tomate")
     comprobar(ultimo.motivo == "consumo" and ultimo.servicio_id == servicio.id and abs(ultimo.cantidad - 0.4) < 1e-9,
-              "Lo usado (0,4 kg) sale como consumo de ese servicio")
+              "Lo usado sale como consumo de ese servicio")
+    cebolla = at.session_state["inventario"].buscar_producto("Cebolla")
+    comprobar(cebolla is not None and cebolla.categoria == "Verduras" and cebolla.stock_minimo == 1
+              and cebolla.proveedor == "Huerta Local" and abs(cebolla.stock - 0.5) < 1e-9
+              and cebolla.lotes[0].precio_unitario == 1.5,
+              "Al completar se da de alta 'Cebolla' con sus datos, entra la compra (2 kg a 1,5 €/kg) y sobran 0,5 kg")
 
 
 @prueba("Precio de cobro, gastos y rentabilidad")
