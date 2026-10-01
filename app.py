@@ -1575,7 +1575,8 @@ def pagina_historial() -> None:
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Servicios", r["servicios"])
     m2.metric("Comensales", r["comensales"])
-    m3.metric("Facturado", f"{r['facturado']:.2f} €")
+    # Sin ningún servicio con precio de cobro, "0 €" confundiría: no es que no se cobrara, es que no se apuntó.
+    m3.metric("Facturado", _texto_euros(r["facturado"] if r["margen"] is not None else None))
     m4.metric("Margen", _texto_euros(r["margen"]),
               delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
     detalles = [f"Coste total {r['coste']:.2f} €"]
