@@ -679,6 +679,24 @@ def prueba_compras(at: AppTest) -> None:
         comprobar(inv.buscar_producto("Pata de cerdo").stock == stock_antes + pedidas,
                   "Marcar como comprado repone las patas en el inventario")
 
+    # Una compra registrada desde el INVENTARIO de algo pendiente en la lista
+    pendiente = next((i for i in comp.items_pendientes() if inv.buscar_producto(i.ingrediente)
+                      and inv.buscar_producto(i.ingrediente).unidad == "kg"), None)
+    comprobar(pendiente is not None, "Hay algún producto pendiente en la lista para probar")
+    if pendiente is not None:
+        nombre = pendiente.ingrediente
+        ir_a(at, "Inventario")
+        at.selectbox(key="stock_select").select(nombre).run()
+        at.radio(key=f"stock_tipo_{nombre}").set_value("Entrada (compra)").run()
+        comprobar(any("pendiente en la lista" in t for t in textos(at.info))
+                  and at.checkbox(key=f"stock_marcar_lista_{nombre}").value is True,
+                  "Al comprar desde el inventario, avisa de que está en la lista y propone marcarlo")
+        at.number_input(key=f"stock_cantidad_{nombre}").set_value(10.0)
+        at.number_input(key=f"stock_precio_{nombre}").set_value(2.0)
+        at.button(key=f"stock_boton_{nombre}").click().run()
+        comprobar(comp.pendiente_de(nombre) is None and any(i.ingrediente == nombre and i.comprado for i in comp.items),
+                  f"'{nombre}' queda marcado como comprado en la lista")
+
 
 @prueba("Historial de servicios")
 def prueba_historial(at: AppTest) -> None:

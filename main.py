@@ -365,7 +365,13 @@ def menu_inventario():
                 print(f"❌ No existe el producto '{nombre}'.")
             elif pedir_si_no("¿Es una entrada de mercancía (compra)?"):
                 cantidad = pedir_numero("Cantidad: ")
-                inventario.entrada_stock(nombre, cantidad, **pedir_datos_entrada(producto))
+                lote = inventario.entrada_stock(nombre, cantidad, **pedir_datos_entrada(producto))
+                pendiente = gestor_compras.pendiente_de(nombre)
+                if lote is not None and pendiente is not None and pedir_si_no(
+                    f"'{nombre}' está pendiente en la lista de la compra ({pendiente.cantidad} {pendiente.unidad}). "
+                    "¿Marcarlo también como comprado?"
+                ):
+                    gestor_compras.marcar_comprado(nombre, cantidad_comprada=cantidad)
             elif not producto.lotes:
                 print(f"❌ No queda stock de '{nombre}'.")
             else:

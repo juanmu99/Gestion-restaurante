@@ -345,6 +345,24 @@ comprobar(r["comida"] == 7.5, "El servicio carga solo lo usado (3 kg x 2,5 € =
 comprobar(Metricas(inv).gasto_por_categoria(HOY, HOY) == {"Verduras": 12.5},
           "En Métricas cuenta como compra (12,5 €), una sola vez")
 
+print("\n--- Lista de la compra al día ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Arroz", "Despensa", 1, "kg", 1.5, "Mayorista"))
+silencio(inv.agregar_producto, Producto("Aceite", "Despensa", 0, "litros", 4, "Mayorista"))
+recetario = Recetario()
+silencio(recetario.agregar_receta, Receta("Paella", "Principal", {"Arroz": 0.1, "Aceite": 0.01}))
+silencio(recetario.agregar_menu, Menu("Menú paella", [recetario.recetas["Paella"]]))
+paella = Servicio(HOY + timedelta(days=2), time(14, 0), 50, "Menú paella")  # 5 kg de arroz, 0,5 l de aceite
+gestor = GestorCompras()
+silencio(gestor.generar_lista_desde_servicios, [paella], recetario, inv)
+comprobar(gestor.pendiente_de("Arroz").cantidad == 4 and gestor.pendiente_de("Aceite") is not None,
+          "La lista pide arroz (faltan 4 kg) y aceite")
+silencio(inv.entrada_stock, "Arroz", 5, precio_unitario=1.4)  # comprado desde el inventario, sin pasar por la lista
+avisos = silencio(gestor.generar_lista_desde_servicios, [paella], recetario, inv)
+comprobar(gestor.pendiente_de("Arroz") is None and gestor.pendiente_de("Aceite") is not None,
+          "Al regenerar la lista, se quita lo que ya no hace falta (el arroz) y se mantiene lo demás")
+comprobar(any("Arroz" in a and "ya no hace falta" in a for a in avisos), "...y se avisa de ello")
+
 print("\n--- Material reutilizable ---")
 from materiales import Material, RegistroMaterial, lista_de_carga  # noqa: E402
 

@@ -736,6 +736,14 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
     if es_entrada:
         st.caption("Cada compra se guarda como un lote nuevo, con su precio y proveedor.")
         datos = _campos_entrada(producto, k)
+        # Si este producto está pendiente en la lista de la compra, se ofrece
+        # marcarlo también allí (si no, seguiría apareciendo como pendiente).
+        pendiente = st.session_state.gestor_compras.pendiente_de(nombre_sel)
+        marcar_en_lista = False
+        if pendiente is not None:
+            st.info(f"🛒 '{nombre_sel}' está pendiente en la lista de la compra ({_num(pendiente.cantidad)} {pendiente.unidad}).")
+            marcar_en_lista = st.checkbox("Marcarlo también como comprado en la lista de la compra", value=True,
+                                          key=k("marcar_lista"))
         if st.button("Registrar compra", type="primary", key=k("boton")):
             if cantidad <= 0:
                 st.error("La cantidad debe ser mayor que 0.")
@@ -754,6 +762,9 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
                     st.error("No se ha registrado la compra: revisa los datos (el proveedor debe ser texto).")
                 else:
                     avisar("success", f"Compra registrada como {lote.etiqueta()} ({_num(cantidad)} {producto.unidad}).")
+                    if marcar_en_lista:
+                        st.session_state.gestor_compras.marcar_comprado(nombre_sel, cantidad_comprada=cantidad)
+                        avisar("info", f"🛒 '{nombre_sel}' marcado como comprado en la lista de la compra.")
                     vaciar_campos("stock_", conservar=("stock_select", k("tipo")))
                     st.rerun()
         return

@@ -93,6 +93,10 @@ class GestorCompras:
         (Si se comparara servicio por servicio, el mismo stock parecería
         cubrir el déficit de varios servicios a la vez, lo cual es incorrecto.)
 
+        Paso 4: los productos que estaban PENDIENTES en la lista y que ya no
+                hacen falta (por ejemplo, porque se compraron registrándolos
+                directamente en el inventario) se quitan de la lista.
+
         Devuelve una lista de avisos para quien la muestre (consola o
         interfaz), por ejemplo cuando un producto aún no tiene limpiezas
         registradas y no se conoce su rendimiento.
@@ -155,6 +159,7 @@ class GestorCompras:
             )
 
         # --- Paso 3: comparar contra el stock ---
+        hacen_falta: set[str] = set()
         for ingrediente, cantidad_necesaria in necesidades_acumuladas.items():
             if ingrediente in no_se_compran:
                 continue
@@ -173,6 +178,16 @@ class GestorCompras:
             proveedor = producto.proveedor if producto else "Desconocido"
             precio = producto.precio_unitario if producto else 0
             self.agregar_item(ItemCompra(ingrediente, faltante, unidad, proveedor, precio))
+            hacen_falta.add(ingrediente)
+
+        # --- Paso 4: quitar lo pendiente que ya no hace falta ---
+        for item in list(self.items_pendientes()):
+            if item.ingrediente not in hacen_falta:
+                self.items.remove(item)
+                avisos.append(
+                    f"'{item.ingrediente}' ya no hace falta comprarlo (hay stock suficiente para estos servicios): "
+                    "se ha quitado de la lista."
+                )
 
         for aviso in avisos:
             print(f"ℹ️  {aviso}")
@@ -202,6 +217,10 @@ class GestorCompras:
 
     def items_pendientes(self) -> list[ItemCompra]:
         return [i for i in self.items if not i.comprado]
+
+    def pendiente_de(self, ingrediente: str) -> Optional[ItemCompra]:
+        """El item PENDIENTE de la lista para ese ingrediente, o None si no está pendiente."""
+        return next((i for i in self.items if i.ingrediente == ingrediente and not i.comprado), None)
 
     def marcar_comprado(self, ingrediente: str, cantidad_comprada: Optional[float] = None) -> None:
         """
