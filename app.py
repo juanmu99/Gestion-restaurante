@@ -161,6 +161,18 @@ hr { border-color: var(--border) !important; }
 
 # ---------- Estado de la sesión ----------
 
+def vaciar_campos(prefijo: str, conservar: tuple = ()) -> None:
+    """
+    Vacía los campos de un formulario (los widgets cuya key empieza por
+    `prefijo`) para que, tras registrar algo, no se queden escritos los
+    datos de la vez anterior. Borrar su valor guardado en session_state
+    hace que, en la siguiente recarga, vuelvan a su valor inicial.
+    """
+    for clave in list(st.session_state.keys()):
+        if isinstance(clave, str) and clave.startswith(prefijo) and clave not in conservar:
+            del st.session_state[clave]
+
+
 def avisar(tipo: str, texto: str) -> None:
     """
     Guarda un aviso para mostrarlo en la SIGUIENTE ejecución del script.
@@ -308,15 +320,20 @@ def _campos_entrada(producto: Producto, k) -> dict:
     """
     unidad_txt = "unidad" if producto.unidad == "unidades" else producto.unidad
     c1, c2 = st.columns(2)
+    # El precio y el peso empiezan vacíos: son de ESTA compra, y no deben
+    # darse por buenos sin mirarlos. Los de la última vez se muestran como pista.
     precio = c1.number_input(
-        f"Precio de este lote (€ por {unidad_txt})", min_value=0.0,
-        value=float(producto.precio_referencia), step=0.1, key=k("precio"),
+        f"Precio de este lote (€ por {unidad_txt})", min_value=0.0, value=None, placeholder="Precio de esta compra",
+        step=0.1, key=k("precio"),
+        help=f"La última compra fue a {_num(producto.precio_referencia)} € por {unidad_txt}." if producto.precio_referencia else None,
     )
     proveedor = c2.text_input("Proveedor de este lote", value=producto.proveedor, key=k("proveedor"))
     necesita_peso = producto.tiene_merma and producto.unidad == "unidades"
     peso = None
     if necesita_peso:
-        peso = _campo_peso("Peso en bruto de cada unidad de este lote", k("peso"), producto.peso_unitario or 0.0)
+        peso = _campo_peso("Peso en bruto de cada unidad de este lote", k("peso"))
+        if producto.peso_unitario:
+            st.caption(f"La última vez: {_num(producto.peso_unitario)} kg por unidad.")
     fecha = None
     if not producto.es_consumible() and st.checkbox("¿Este lote tiene fecha de caducidad?", key=k("tiene_fecha")):
         fecha = st.date_input("Fecha de caducidad de este lote", key=k("fecha"))
@@ -722,6 +739,8 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
         if st.button("Registrar compra", type="primary", key=k("boton")):
             if cantidad <= 0:
                 st.error("La cantidad debe ser mayor que 0.")
+            elif datos["precio"] is None:
+                st.error("Indica el precio de esta compra.")
             elif datos["necesita_peso"] and datos["peso"] is None:
                 st.error("Indica el peso en bruto de cada unidad de este lote.")
             elif not datos["proveedor"].strip():
@@ -735,6 +754,7 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
                     st.error("No se ha registrado la compra: revisa los datos (el proveedor debe ser texto).")
                 else:
                     avisar("success", f"Compra registrada como {lote.etiqueta()} ({_num(cantidad)} {producto.unidad}).")
+                    vaciar_campos("stock_", conservar=("stock_select", k("tipo")))
                     st.rerun()
         return
 
@@ -757,6 +777,7 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
             )
         elif inv.salida_stock(nombre_sel, cantidad, motivo, lote_id):
             avisar("success", f"Salida registrada: {_num(cantidad)} {producto.unidad} del lote {lote_id} ({motivo}).")
+            vaciar_campos("stock_", conservar=("stock_select", k("tipo")))
             st.rerun()
         else:
             st.error("No se ha podido registrar la salida.")
@@ -815,12 +836,13 @@ def _pestana_limpiar(inv: Inventario) -> None:
 
     c1, c2 = st.columns(2)
     por_unidades = origen.unidad == "unidades"
+    # Todo empieza VACÍO (value=None): así nada parece "ya rellenado" de una
+    # limpieza anterior y no se registra nada sin haberlo escrito a propósito.
     cantidad = c1.number_input(
         f"Cantidad a limpiar ({origen.unidad}, hay {_num(lote.cantidad)} en este lote)",
-        min_value=0.0, max_value=float(lote.cantidad),
-        value=float(min(1.0, lote.cantidad)) if por_unidades else float(lote.cantidad),
+        min_value=0.0, max_value=float(lote.cantidad), value=None, placeholder="0",
         step=1.0 if por_unidades else 0.1, key=k("cantidad"),
-    )
+    ) or 0.0
     peso_bruto_kg = origen.peso_kg(cantidad, lote) if cantidad > 0 else 0.0
     c2.metric("Peso en bruto", f"{peso_bruto_kg:.3f} kg")
     rendimiento = inv.rendimiento_medio(origen_nombre)
@@ -831,22 +853,48 @@ def _pestana_limpiar(inv: Inventario) -> None:
 
     unidad_peso = st.radio("Pesos del resultado en", UNIDADES_PESO, horizontal=True, key=k("unidad"))
     c3, c4 = st.columns(2)
-    sugerido = inv.producto_limpio_de(origen_nombre) or f"{origen_nombre} limpio"
-    producto_limpio = c3.text_input("Producto limpio", value=sugerido, key=k("limpio"))
-    peso_limpio = c4.number_input(f"Peso limpio ({unidad_peso})", min_value=0.0, step=0.1, key=k("peso_limpio"))
+    # El producto limpio se ELIGE entre los que ya salen de este bruto, para
+    # no crear duplicados por una errata ("Carne cerdo limpia"). Solo si es
+    # nuevo se escribe el nombre.
+    NUEVO = "➕ Producto limpio nuevo…"
+    existentes = [p.nombre for p in inv.productos.values() if p.origen == origen_nombre]
+    if existentes:
+        elegido = c3.selectbox("Producto limpio", existentes + [NUEVO], index=None,
+                               placeholder="Elige el producto limpio...", key=k("limpio_select"))
+    else:
+        elegido = NUEVO
+    if elegido == NUEVO:
+        producto_limpio = c3.text_input("Nombre del producto limpio nuevo", key=k("limpio"),
+                                        placeholder=f"Ej: {origen_nombre} limpio")
+    else:
+        producto_limpio = elegido or ""
+    peso_limpio = c4.number_input(f"Peso limpio ({unidad_peso})", min_value=0.0, value=None, placeholder="0",
+                                  step=0.1, key=k("peso_limpio")) or 0.0
     fecha_caducidad = None
     if st.checkbox("Poner fecha de caducidad al producto limpio", key=k("tiene_fecha")):
         fecha_caducidad = st.date_input("Fecha de caducidad del producto limpio", key=k("fecha"))
 
     st.markdown("**Derivados que se aprovechan**")
     st.caption("Una fila por cada parte que se reaprovecha, con su peso. Lo que no pongas aquí se registra como merma.")
+    # La tabla empieza vacía. Los derivados de la última vez solo se añaden
+    # si se pide con el botón (y entonces con peso 0, para escribirlo).
     habituales = inv.derivados_habituales(origen_nombre)
+    clave_habituales = k("usar_habituales")
+    usar_habituales = st.session_state.get(clave_habituales, False)
+    if habituales and not usar_habituales:
+        c5, c6 = st.columns([3, 1])
+        c5.caption("La última vez se aprovechó: " + ", ".join(habituales))
+        if c6.button("Añadir los de la última vez", key=k("boton_habituales")):
+            st.session_state[clave_habituales] = True
+            st.rerun()
+    filas_iniciales = habituales if usar_habituales else []
     tabla_inicial = pd.DataFrame({
-        "Derivado": pd.Series(habituales, dtype="string"),
-        "Peso": pd.Series([0.0] * len(habituales), dtype="float"),
+        "Derivado": pd.Series(filas_iniciales, dtype="string"),
+        "Peso": pd.Series([0.0] * len(filas_iniciales), dtype="float"),
     })
     tabla = st.data_editor(
-        tabla_inicial, num_rows="dynamic", width="stretch", hide_index=True, key=k("derivados"),
+        tabla_inicial, num_rows="dynamic", width="stretch", hide_index=True,
+        key=k(f"derivados_{int(usar_habituales)}"),
         column_config={
             "Derivado": st.column_config.TextColumn("Derivado"),
             "Peso": st.column_config.NumberColumn(f"Peso ({unidad_peso})", min_value=0.0, step=0.01),
@@ -1028,6 +1076,7 @@ def _seccion_material() -> None:
                 if accion == "He comprado más":
                     if reg.reponer(nombre_sel, int(unidades)):
                         avisar("success", f"{nombre_sel}: +{int(unidades)} unidades.")
+                        vaciar_campos(k("unidades"))
                         st.rerun()
                     else:
                         st.error("Indica cuántas unidades has comprado.")
@@ -1035,6 +1084,7 @@ def _seccion_material() -> None:
                     tipo = "rotura" if accion == "Se ha roto" else "pérdida"
                     incidencia = reg.dar_de_baja(nombre_sel, int(unidades), tipo)
                     avisar("success", f"{tipo.capitalize()} registrada: {incidencia.cantidad} x {nombre_sel} ({incidencia.coste:.2f} €).")
+                    vaciar_campos(k("unidades"))
                     st.rerun()
             except ValueError as e:
                 st.error(str(e))
@@ -1109,6 +1159,7 @@ def _pestana_material_servicio(serv: RegistroServicios, rec: Recetario) -> None:
         try:
             reg.registrar_salida(servicio.id, carga)
             avisar("success", f"Material cargado para el servicio #{servicio.id}: ahora figura como 'en uso'.")
+            vaciar_campos(f"carga_{servicio.id}_")
             st.rerun()
         except ValueError as e:
             st.error(str(e))
@@ -1893,13 +1944,14 @@ def pagina_recetario() -> None:
                 else:
                     cantidad_final = cantidad_ing
                 st.session_state.receta_ingredientes[producto_ing.nombre] = cantidad_final
+                vaciar_campos(f"cantidad_ing_{nombre_ing}")
                 st.rerun()
 
             if st.session_state.receta_ingredientes:
                 st.write("Ingredientes añadidos hasta ahora:")
                 st.json(st.session_state.receta_ingredientes)
 
-            with st.form("form_finalizar_receta"):
+            with st.form("form_finalizar_receta", clear_on_submit=True):
                 nombre_receta = st.text_input("Nombre de la receta")
                 categoria_receta = st.text_input("Categoría")
                 crear = st.form_submit_button("Guardar receta", type="primary")
@@ -1929,6 +1981,8 @@ def pagina_recetario() -> None:
                     recetas_obj = [rec.recetas[n] for n in recetas_elegidas]
                     rec.agregar_menu(Menu(nombre_menu, recetas_obj, consumibles, materiales))
                     avisar("success", f"Menú '{nombre_menu}' creado.")
+                    for prefijo in ("nombre_menu_input", "recetas_multiselect", "nuevo_menu_"):
+                        vaciar_campos(prefijo)
                     st.rerun()
 
     with tab_recomendar:
@@ -2024,7 +2078,9 @@ def pagina_compras() -> None:
             k = lambda campo: f"compra_{campo}_{nombre_marcar}"
             datos = _campos_entrada(producto_marcar, k)
             if st.button("Marcar como comprado y reponer inventario"):
-                if datos["necesita_peso"] and datos["peso"] is None:
+                if datos["precio"] is None:
+                    st.error("Indica el precio de esta compra.")
+                elif datos["necesita_peso"] and datos["peso"] is None:
                     st.error("Indica el peso en bruto de cada unidad de este lote.")
                 elif cantidad_real <= 0:
                     st.error("La cantidad comprada debe ser mayor que 0.")
@@ -2044,6 +2100,8 @@ def pagina_compras() -> None:
                             f"'{nombre_marcar}' marcado como comprado y repuesto en inventario "
                             f"(+{cantidad_real} {item_marcar.unidad}, {lote.etiqueta()}).",
                         )
+                        vaciar_campos("compra_")
+                        vaciar_campos("cantidad_real_")
                         st.rerun()
 
 

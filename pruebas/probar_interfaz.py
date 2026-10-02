@@ -210,6 +210,12 @@ def prueba_stock(at: AppTest) -> None:
     at.radio(key="stock_tipo_Pata de cerdo").set_value("Entrada (compra)").run()
     at.selectbox(key="stock_peso_Pata de cerdo_unidad").select("kg").run()
     at.number_input(key="stock_peso_Pata de cerdo_kg").set_value(6.0)
+    comprobar(at.number_input(key="stock_precio_Pata de cerdo").value is None,
+              "El precio de la compra empieza vacío (no se da por bueno el de la última vez)")
+    at.button(key="stock_boton_Pata de cerdo").click().run()
+    comprobar(inv.buscar_producto("Pata de cerdo").stock == 2 and any("precio" in t for t in textos(at.error)),
+              "Sin precio no se registra la compra")
+    at.number_input(key="stock_precio_Pata de cerdo").set_value(42.0)
     at.button(key="stock_boton_Pata de cerdo").click().run()
     pata = inv.buscar_producto("Pata de cerdo")
     comprobar(pata.stock == 4 and pata.peso_unitario == 6.5 and len(pata.lotes) == 2,
@@ -228,6 +234,8 @@ def prueba_stock(at: AppTest) -> None:
               and secreto.buscar_lote(1).cantidad == 1,
               "Salida del lote elegido (lote 2): solo baja ese lote")
     comprobar(inv.historial[-1].lote_id == 2, "El historial apunta de qué lote salió")
+    comprobar(at.number_input(key="stock_cantidad_Secreto ibérico").value == 0,
+              "Tras registrar la salida, el formulario queda vacío")
 
     # Sacar de un lote más de lo que tiene: error y nada cambia
     at.number_input(key="stock_cantidad_Secreto ibérico").set_value(0.9)
@@ -285,6 +293,10 @@ def prueba_limpiar(at: AppTest) -> None:
     # Limpieza imposible: más limpio que bruto
     v = at.session_state["limpiar_version"]
     k = lambda campo: f"limpiar_{campo}_Pata de cerdo_{v}_1"
+    comprobar(at.number_input(key=k("cantidad")).value is None and at.number_input(key=k("peso_limpio")).value is None
+              and at.selectbox(key=k("limpio_select")).value is None,
+              "Al volver a limpiar, el formulario empieza vacío (sin datos de la limpieza anterior)")
+    at.selectbox(key=k("limpio_select")).select("Carne de cerdo limpia").run()
     at.number_input(key=k("cantidad")).set_value(1.0)
     at.number_input(key=k("peso_limpio")).set_value(20.0)
     at.button(key=k("boton")).click().run()
@@ -662,6 +674,7 @@ def prueba_compras(at: AppTest) -> None:
         at.selectbox(key="marcar_comprado_select").select("Pata de cerdo").run()
         at.selectbox(key="compra_peso_Pata de cerdo_unidad").select("kg").run()
         at.number_input(key="compra_peso_Pata de cerdo_kg").set_value(7.0)
+        at.number_input(key="compra_precio_Pata de cerdo").set_value(45.0)
         boton(at.button, "Marcar como comprado y reponer inventario").click().run()
         comprobar(inv.buscar_producto("Pata de cerdo").stock == stock_antes + pedidas,
                   "Marcar como comprado repone las patas en el inventario")
