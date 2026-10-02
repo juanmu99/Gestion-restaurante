@@ -1,0 +1,151 @@
+--- Entradas: cada compra es un lote ---
+✅ Una compra nueva crea un segundo lote
+✅ El stock total es la suma de los lotes (1,8 kg)
+✅ La caducidad del producto es la del lote más próximo
+✅ El valor es cada lote a su precio (14 + 12 = 26 €)
+✅ Cada lote guarda su proveedor
+✅ Aunque tenga la misma caducidad, cada compra es un lote aparte
+✅ Sin indicar proveedor ni precio se usan el habitual y el de la última compra
+✅ Los productos sin caducidad también tienen un lote por compra
+
+--- Salidas: del lote que elige el usuario ---
+✅ Se puede sacar del lote que caduca MÁS TARDE
+✅ Solo baja el lote elegido
+✅ No se puede sacar de un lote más de lo que tiene
+✅ El historial apunta el lote y su precio real
+✅ Un lote que llega a 0 desaparece
+✅ Los números de lote no se reutilizan
+
+--- Desechar un lote caducado ---
+✅ Se detecta el lote caducado
+✅ Y el que caduca en los próximos días, aparte
+✅ Se desecha el lote caducado
+✅ Solo queda el lote bueno
+✅ Queda registrado como desperdicio (2 kg)
+✅ El gasto cuenta la compra a su precio (3 kg x 2,5 €); el stock inicial no es una compra
+
+--- Limpieza de un lote concreto ---
+✅ Cada lote de patas guarda su propio peso por unidad
+✅ Con varios lotes hay que elegir cuál se limpia
+✅ Usa el peso y el precio de ESE lote (8 kg, 50 €)
+✅ La limpieza recuerda de qué lote salió
+✅ El lote limpio carga con todo el coste (50 € / 5 kg)
+✅ Los derivados entran a coste 0
+✅ Solo sale el lote limpiado
+
+--- Completar un servicio eligiendo lotes ---
+✅ Por defecto propone el lote que caduca antes (y aquí llega)
+✅ Si el lote elegido no llega, dice cuánto falta y con qué lotes se puede completar
+✅ No deja completar sin elegir con qué lote se completa
+✅ ...y no toca nada
+✅ Saca 0,8 del lote 2 y los 0,2 que faltan del lote 1
+✅ El servicio queda completado
+✅ Si no hay bastante en total, se usan todos los lotes
+✅ ...y se descuenta todo lo que había
+
+--- Guardar, cargar y sesiones antiguas ---
+✅ Los lotes se guardan y se cargan igual
+✅ El historial conserva el lote de cada movimiento
+✅ Una sesión de antes de los lotes se convierte en un lote con su stock, precio y caducidad
+
+--- Corregir lotes y productos ---
+✅ Se puede corregir la cantidad, el proveedor y la caducidad de un lote
+✅ Se puede quitar la caducidad de un lote
+✅ Renombrar el producto conserva sus lotes
+
+--- Excel ---
+✅ El Excel tiene una hoja 'Lotes' con un renglón por lote (+ cabecera y total)
+
+--- Consumibles ---
+✅ Un consumible no guarda caducidad
+✅ Un consumible no puede tener merma
+✅ Sus compras tampoco guardan caducidad
+✅ Alimentos y consumibles se listan por separado
+✅ A simple vista, el menú solo muestra sus ingredientes
+✅ Las necesidades suman comida y consumibles
+✅ El coste de la comida y el de los consumibles se calculan por separado
+✅ Completar el servicio descuenta también los consumibles (8 servilletas)
+✅ El historial sabe qué movimientos son de consumibles
+✅ El gasto se separa en alimentos y consumibles ({'alimento': 0, 'consumible': 2.0})
+✅ La lista de la compra incluye los consumibles que faltan (400 - 292 = 108)
+✅ Renombrar un consumible lo actualiza en los menús
+✅ Los consumibles del menú se guardan y se cargan
+✅ El tipo del producto se guarda y se carga
+✅ Corregir el tipo a consumible quita la caducidad y pasa su historial a consumibles
+
+--- Gastos, precio de cobro y margen ---
+✅ Un gasto con importe 0 se rechaza
+✅ Un gasto con categoría inventada se rechaza
+✅ Un gasto con concepto vacío se rechaza
+✅ Servicio pendiente: coste estimado de la comida + sus gastos (no los generales)
+✅ Margen = cobro - coste
+✅ Sin precio de cobro no hay margen (y no falla nada)
+✅ Servicio completado: coste REAL de lo que salió (0,8 kg del lote a 15 €/kg = 12 €)
+✅ Las salidas de un servicio quedan apuntadas con su número
+✅ Los gastos y los precios de cobro se guardan y se cargan
+✅ Tras guardar y cargar, el coste real del servicio sigue igual
+✅ Una sesión de antes de los gastos se carga sin gastos
+✅ El Excel tiene las hojas 'Gastos' y 'Rentabilidad'
+
+--- Compra no prevista de un producto para un servicio ---
+✅ No se puede usar más de lo que se compró (y no toca nada)
+✅ Entra como lote (a 12,5 € / 5 kg = 2,5 €/kg) y sobran 2 kg en el inventario
+✅ El servicio carga solo lo usado (3 kg x 2,5 € = 7,5 €)
+✅ En Métricas cuenta como compra (12,5 €), una sola vez
+
+--- Lista de la compra al día ---
+✅ La lista pide arroz (faltan 4 kg) y aceite
+✅ Al regenerar la lista, se quita lo que ya no hace falta (el arroz) y se mantiene lo demás
+✅ ...y se avisa de ello
+
+--- Material reutilizable ---
+✅ El material se cuenta en unidades enteras
+✅ La lista de carga se calcula por comensal y redondea hacia arriba (7,5 copas -> 8)
+✅ El material fuera sigue existiendo (50) pero no está disponible (20)
+✅ No se puede sacar más material del disponible
+✅ El total no puede bajar de lo que está en uso
+✅ Al volver: deja de estar en uso y lo que falta (3) deja de contar en el total
+✅ De lo que falta: 2 roturas y 1 pérdida
+✅ Coste de roturas y pérdidas del servicio: 3 x 3,5 € = 10,5 €
+✅ Reponer suma unidades; una rotura en el almacén resta y no es de ningún servicio
+✅ El coste del servicio incluye el material roto o perdido
+✅ Renombrar un material lo actualiza en salidas, roturas y menús
+✅ El material, sus roturas y el material de los menús se guardan y se cargan
+✅ El Excel tiene la hoja 'Material'
+
+--- Historial de servicios ---
+✅ Al completar se guardan la fecha y una copia del menú
+✅ Si después se cambia la receta, el historial sigue mostrando lo que se hizo (0,2 x 4 = 0,8 kg)
+✅ Previsto frente a real: el menú pedía 3 kg y solo salió 1 kg (lo que quedaba)
+✅ El historial solo lista los completados, los más recientes primero
+✅ Opcionalmente, también los cancelados
+✅ Filtrar por cliente
+✅ Buscar texto (también en la valoración)
+✅ Lista de clientes
+✅ Resumen del periodo: 2 servicios, 19 comensales, 100 € facturados (1 sin precio)
+✅ La ficha recoge lo que salió de cada lote y el coste por comensal
+✅ Repetir un servicio crea uno nuevo igual en otra fecha
+✅ Cliente, lugar, valoración y copia del menú se guardan y se cargan
+✅ El Excel tiene la hoja 'Historial' con una fila por servicio completado
+
+--- Elaboraciones (recetas preparadas por adelantado) ---
+✅ La vida útil propone la caducidad (hoy + 3 días)
+✅ La vida útil se guarda y se carga
+✅ Sin ingredientes suficientes no se prepara (y no toca nada)
+✅ Preparar gasta los ingredientes del lote elegido (2 kg del lote 2)
+✅ Queda en el historial con el motivo 'elaboración'
+✅ La tanda tiene 20 raciones, su caducidad y su coste real por ración (0,34 €)
+✅ Por defecto se usan las raciones preparadas (20) y el resto (10) se hace con ingredientes
+✅ Solo se descuentan los ingredientes de las 10 raciones restantes (1 kg de tomate)
+✅ Se puede elegir no usar las raciones preparadas (todo con ingredientes: 3 kg)
+✅ La lista de la compra descuenta lo ya preparado (80 - 20 = 60 raciones: 6 kg, hay 3 -> faltan 3)
+✅ ...pero no cuenta una tanda que habrá caducado el día del servicio
+✅ Al completar, la tanda se gasta y su coste queda apuntado en el servicio
+✅ El coste del servicio = raciones preparadas + ingredientes del resto
+✅ El historial muestra las raciones preparadas usadas y el previsto ya las descuenta
+✅ Se detectan las tandas caducadas
+✅ Desechar una tanda cuenta como desperdicio, con su coste
+✅ Lo gastado al preparar cuenta como consumo en Métricas
+✅ Las tandas y sus usos se guardan y se cargan
+
+RESULTADO: TODO BIEN

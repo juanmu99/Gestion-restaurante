@@ -1,0 +1,141 @@
+Streamlit 1.64.0 | Python 3.12.14 | 2026-10-02
+
+--- Arranque y datos de ejemplo ---
+✅ La app arranca sin errores
+✅ Datos de ejemplo cargados
+
+--- Todas las páginas se muestran ---
+✅ Página 'Dashboard' sin errores
+✅ Página 'Inventario' sin errores
+✅ Página 'Servicios' sin errores
+✅ Página 'Historial' sin errores
+✅ Página 'Recetario' sin errores
+✅ Página 'Compras' sin errores
+✅ Página 'Gastos' sin errores
+✅ Página 'Métricas' sin errores
+✅ Página 'Exportar / Backup' sin errores
+
+--- Añadir productos ---
+✅ Añadir producto sin excepciones
+✅ Pollo con merma por unidades: 2200 g/unidad se guardan como 2.2 kg
+✅ Mensaje de 'producto añadido' visible
+✅ El formulario queda vacío tras añadir
+✅ Sin peso por unidad: error visible y no se añade
+✅ Se guarda la fecha de caducidad elegida (en su primer lote)
+
+--- Actualizar stock ---
+✅ Salida con motivo 'desperdicio' registrada
+✅ Salida mayor que el stock: error visible y el stock no cambia
+✅ El precio de la compra empieza vacío (no se da por bueno el de la última vez)
+✅ Sin precio no se registra la compra
+✅ Compra con peso por unidad: un lote nuevo, 4 patas de media 6.5 kg (hay 4.0, 6.5 kg)
+✅ Salida del lote elegido (lote 2): solo baja ese lote
+✅ El historial apunta de qué lote salió
+✅ Tras registrar la salida, el formulario queda vacío
+✅ Más de lo que tiene el lote: error visible y no cambia nada
+✅ Compra: lote 3 con su cantidad, precio, proveedor y caducidad
+
+--- Limpiar producto ---
+✅ Vista previa de la limpieza sin errores
+✅ Limpieza registrada
+✅ Lote 2: 2 patas de 6 kg = 12 kg bruto, 8 kg limpio, 4 kg de merma (bruto 12.0, merma 4.0)
+✅ Se crea 'Carne de cerdo limpia' con 8 kg y su origen
+✅ Quedan las 2 patas del lote 1
+✅ Mensaje de limpieza visible tras recargar
+✅ Al volver a limpiar, el formulario empieza vacío (sin datos de la limpieza anterior)
+✅ Más limpio que bruto: error visible y no se registra nada
+
+--- Editar producto ---
+✅ Editar: activar la merma de un producto
+✅ Al cambiar de producto se cargan sus datos
+✅ Con un solo lote, sus datos aparecen sin elegir nada
+✅ Editar producto corrige a la vez los datos generales y los de la compra (cantidad, precio, proveedor, caducidad)
+
+--- Lotes: corregir y desechar ---
+✅ Editar producto con varios lotes: se corrige solo el lote elegido
+✅ El lote caducado se avisa en rojo arriba
+✅ 'Desechar lote' lo tira entero y lo apunta como desperdicio
+✅ Quedan los lotes 2 y 3
+
+--- Consumibles ---
+✅ La lista de consumibles se muestra sin errores
+✅ En la lista de consumibles solo aparecen consumibles
+✅ Al añadir un consumible no se pide caducidad ni merma
+✅ Se añade como consumible
+✅ Y no aparece en la lista de alimentos
+✅ Las recetas solo ofrecen alimentos como ingredientes
+✅ En el detalle del menú se cambian sus consumibles (3 servilletas por comensal)
+✅ Métricas de consumibles sin errores
+
+--- Elaboraciones ---
+✅ La lista de elaboraciones se muestra (con la tanda de ejemplo)
+✅ Sin vida útil, la caducidad empieza vacía
+✅ Sin caducidad no se prepara
+✅ Preparar 2 raciones de pan gasta 0,3 kg de harina y crea la tanda
+✅ Se puede poner la vida útil a una receta
+✅ Con vida útil, la caducidad se propone (hoy + 4 días)
+
+--- Completar servicio ---
+✅ Servicio completado desde la interfaz
+✅ También descuenta los consumibles del menú (quedan 476.0 servilletas)
+✅ Al completar se usan por defecto las raciones ya preparadas (4 de ensalada y 2 de pan)
+✅ Al completar se guardan la valoración y la copia del menú
+
+--- Completar servicio eligiendo lotes ---
+✅ Si el lote elegido no llega, pide elegir con qué lote completar (sin elegirlo por ti)
+✅ Sin elegir el lote de complemento no se completa (error visible, nada cambia)
+✅ Un producto nuevo no puede llamarse como uno que ya existe
+✅ El producto nuevo no se da de alta hasta completar el servicio
+✅ Se pueden añadir y quitar costes adicionales antes de completar
+✅ ...y no se guardan hasta completar el servicio
+✅ Completa: 0,5 kg del lote 3 y los 0,3 que faltan del lote 2
+✅ Al completar, el coste adicional se guarda como gasto del servicio
+✅ La compra de tomate entra como lote y los 0,6 kg que sobran se quedan en el inventario
+✅ Lo usado sale como consumo de ese servicio
+✅ Al completar se da de alta 'Cebolla' con sus datos, entra la compra (2 kg a 1,5 €/kg) y sobran 0,5 kg
+
+--- Precio de cobro, gastos y rentabilidad ---
+✅ Servicio con precio por comensal: se guarda el total (250 €, hay 250.0)
+✅ Se guardan el cliente y el lugar
+✅ El precio de cobro es opcional
+✅ Se registran un gasto del servicio y uno general
+✅ Eliminar un gasto
+✅ La pestaña de rentabilidad se muestra sin errores
+✅ Se puede cambiar el precio de cobro después
+
+--- Material reutilizable ---
+✅ La lista de material se muestra sin errores
+✅ Añadir material
+✅ La lista de carga propone el material del menú (2 platos x 10 comensales = 20)
+✅ Tras la salida, los platos siguen existiendo (60) pero solo 40 están disponibles
+✅ El inventario de material avisa de lo que está fuera
+✅ Vuelta: todo deja de estar en uso y los 2 platos que faltan se apuntan (1 rotura y 1 pérdida)
+✅ Las roturas y pérdidas cuestan 2 x 3,5 € = 7 €
+✅ En el detalle del menú se cambia su material
+
+--- Compras ---
+✅ La lista pide patas enteras (3 unidades)
+✅ Aviso de la conversión limpio -> bruto visible
+✅ Marcar como comprado repone las patas en el inventario
+✅ Hay algún producto pendiente en la lista para probar
+✅ Al comprar desde el inventario, avisa de que está en la lista y propone marcarlo
+✅ 'Harina de trigo' queda marcado como comprado en la lista
+
+--- Historial de servicios ---
+✅ La página de historial se muestra sin errores
+✅ Lista los 2 servicios completados
+✅ La ficha del servicio se muestra sin errores
+✅ La ficha muestra la valoración
+✅ Desde la ficha se puede poner o cambiar el cliente
+✅ Filtrar el historial por cliente
+✅ Repetir un servicio crea uno nuevo pendiente con los mismos datos
+
+--- Métricas y guardado ---
+✅ Página de métricas (con la pestaña de merma) sin errores
+✅ Dashboard con todos los datos sin errores
+✅ Guardar sesión crea datos/sesion.json
+✅ Al reabrir, se carga la sesión con la limpieza y el producto limpio
+✅ Al reabrir, se cargan también los gastos
+✅ Al reabrir, se carga también el material con sus roturas
+
+RESULTADO: 106/106 comprobaciones correctas
