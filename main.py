@@ -328,6 +328,7 @@ def menu_inventario():
         print("7. Limpiar / despiezar un producto con merma")
         print("8. Historial de limpiezas y rendimiento medio")
         print("9. Ver los lotes de un producto o desechar uno")
+        print("10. Elaboraciones (recetas preparadas por adelantado)")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -480,6 +481,8 @@ def menu_inventario():
             mostrar_historial_limpiezas()
         elif opcion == "9":
             accion_lotes()
+        elif opcion == "10":
+            accion_elaboraciones()
         elif opcion == "0":
             return
         else:
@@ -519,6 +522,44 @@ def accion_lotes() -> None:
     if pedir_si_no("¿Quieres desechar alguno entero (desperdicio)?"):
         lote = pedir_lote(producto, "Número de lote", sugerir=False, mostrar=False)
         inventario.desechar_lote(nombre, lote.id)
+
+
+def accion_elaboraciones() -> None:
+    reg = inventario.elaboraciones
+    print("\n--- Elaboraciones ---")
+    if not reg.tandas:
+        print("No hay elaboraciones preparadas.")
+    for t in sorted(reg.tandas, key=lambda t: (t.receta, t.id)):
+        aviso = "  ⚠️ CADUCADA" if t.esta_caducada() else ""
+        print(f"   {t.receta}: {t.descripcion()}{aviso}")
+    accion = pedir_opcion("¿Qué quieres hacer?", ("preparar", "desechar", "corregir", "nada"))
+    try:
+        if accion == "preparar":
+            if not recetario.recetas:
+                print("No hay recetas.")
+                return
+            nombre = pedir_opcion("Receta", tuple(recetario.recetas))
+            receta = recetario.recetas[nombre]
+            raciones = pedir_numero("Raciones: ")
+            propuesta = receta.caducidad_propuesta(date.today())
+            if propuesta and not pedir_si_no(f"¿Caduca el {propuesta.strftime('%d/%m/%Y')} (según su vida útil)?"):
+                propuesta = None
+            caducidad = propuesta or pedir_fecha("Fecha de caducidad")
+            filas = recetario.previsualizar_elaboracion(nombre, raciones, inventario)
+            elecciones = pedir_lotes_filas(filas)
+            tanda = recetario.preparar_elaboracion(nombre, raciones, inventario, elecciones, caducidad)
+            print(f"✅ Preparadas {raciones:g} raciones ({tanda.coste_por_racion:.2f}€/ración).")
+        elif accion in ("desechar", "corregir") and reg.tandas:
+            tanda_id = pedir_entero("Nº de tanda: ")
+            if accion == "desechar":
+                reg.desechar(tanda_id)
+            else:
+                raciones = pedir_numero_opcional("Raciones que quedan (vacío = no cambiar): ")
+                fecha = pedir_fecha("Nueva caducidad") if pedir_si_no("¿Cambiar la caducidad?") else None
+                reg.corregir(tanda_id, raciones=raciones, fecha_caducidad=fecha)
+                print("✅ Tanda corregida.")
+    except ValueError as e:
+        print(f"❌ {e}")
 
 
 def accion_limpiar_producto() -> None:
@@ -671,10 +712,15 @@ def menu_servicios():
                         pedir_costes_adicionales(servicio)
                         servicio.valoracion = pedir_texto("¿Cómo fue? (opcional, para el historial): ")
                 else:
+                    plan = pedir_tandas_servicio(servicio)
+                    filas = recetario.previsualizar_consumo(servicio, inventario, None, plan)
                     elecciones = pedir_lotes_servicio(servicio, filas)
-                    filas = recetario.previsualizar_consumo(servicio, inventario, elecciones)
+                    filas = recetario.previsualizar_consumo(servicio, inventario, elecciones, plan)
                     # Primero enseñamos qué va a pasar, y solo después se aplica.
                     print(f"\nSe descontará para {servicio.comensales} comensales de '{servicio.menu}':")
+                    for receta_plan, p in recetario.plan_elaboraciones(servicio, inventario, plan).items():
+                        for tanda_id, raciones in p["reparto"]:
+                            print(f"  🥘 {receta_plan}: {raciones:g} raciones ya preparadas (tanda {tanda_id})")
                     for f in filas:
                         if not f["existe"]:
                             print(f"  ⚠️  {f['ingrediente']}: no existe en el inventario, no se descontará")
@@ -689,7 +735,7 @@ def menu_servicios():
                             print(f"       · {round(cantidad, 3)} {f['unidad']} del lote {lote_id}")
                     if pedir_si_no("¿Confirmar y completar el servicio?"):
                         try:
-                            recetario.completar_servicio(servicio, inventario, elecciones)
+                            recetario.completar_servicio(servicio, inventario, elecciones, plan)
                             print(f"✅ Servicio #{id_servicio} completado.")
                             pedir_costes_adicionales(servicio)
                             servicio.valoracion = pedir_texto("¿Cómo fue? (opcional, para el historial): ")
@@ -758,6 +804,45 @@ def pedir_costes_adicionales(servicio: Servicio) -> None:
             ))
         except ValueError as e:
             print(f"❌ {e}")
+
+
+def pedir_tandas_servicio(servicio: Servicio) -> dict[str, list[int]]:
+    """
+    Para cada receta del menú con raciones ya preparadas, pregunta de qué
+    tanda salen (o no usarlas). Si no llega, de qué otra tanda completar o
+    hacer el resto con ingredientes. Devuelve {receta: [tandas en orden]}.
+    """
+    menu = recetario.buscar_menu(servicio.menu)
+    plan: dict[str, list[int]] = {}
+    for receta in (menu.recetas if menu else []):
+        tandas = inventario.elaboraciones.tandas_de(receta.nombre)
+        if not tandas:
+            continue
+        print(f"\n🥘 Hay raciones preparadas de '{receta.nombre}' (hacen falta {servicio.comensales}):")
+        for t in tandas:
+            aviso = "  ⚠️ caducada ese día" if t.esta_caducada(servicio.fecha) else ""
+            print(f"   {t.descripcion()}{aviso}")
+        validas = [t.id for t in tandas if not t.esta_caducada(servicio.fecha)]
+        propuesta = validas[0] if validas else 0
+        valor = pedir_numero_opcional(f"Nº de tanda a usar (Enter = {propuesta or 'no usar'}, 0 = no usar): ")
+        primera = propuesta if valor is None else int(valor)
+        elegidas = [primera] if primera and inventario.elaboraciones.buscar(primera) else []
+        while elegidas:
+            _, faltan = inventario.elaboraciones.repartir(receta.nombre, servicio.comensales, elegidas)
+            otras = [t.id for t in tandas if t.id not in elegidas]
+            if faltan <= 1e-9 or not otras:
+                break
+            valor = pedir_numero_opcional(f"Faltan {faltan:g} raciones. ¿De qué tanda? (Enter = con ingredientes): ")
+            if valor is None or int(valor) not in otras:
+                break
+            elegidas.append(int(valor))
+        plan[receta.nombre] = elegidas
+    return plan
+
+
+def pedir_lotes_filas(filas: list[dict]) -> dict[str, list[int]]:
+    """Como pedir_lotes_servicio(), para cualquier lista de filas (por ejemplo, al preparar una elaboración)."""
+    return pedir_lotes_servicio(None, filas)
 
 
 def pedir_lotes_servicio(servicio: Servicio, filas: list[dict]) -> dict[str, list[int]]:
@@ -904,7 +989,8 @@ def menu_recetario():
                     print(f"⚠️  '{ing}' es un consumible: los consumibles se añaden al menú, no a la receta.")
                     continue
                 ingredientes[producto.nombre] = pedir_cantidad_ingrediente(producto)
-            recetario.agregar_receta(Receta(nombre, categoria, ingredientes))
+            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
+            recetario.agregar_receta(Receta(nombre, categoria, ingredientes, int(vida) if vida else None))
         elif opcion == "4":
             if not recetario.recetas:
                 print("⚠️  Primero crea al menos una receta.")
@@ -1101,7 +1187,7 @@ def accion_cargar_datos_ejemplo():
     registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=16), time(21, 0), 12, "Menú de bodas"))
 
     pan_casero = Receta("Pan casero", "Panadería", {"Harina de trigo": 0.15, "Aceite de oliva": 0.01})
-    ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
+    ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005}, vida_util_dias=3)
     recetario.agregar_receta(pan_casero)
     recetario.agregar_receta(ensalada)
     # Material reutilizable: sale a los servicios y vuelve.
@@ -1114,6 +1200,9 @@ def accion_cargar_datos_ejemplo():
         "Menú del día", [pan_casero, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1},
         {"Plato llano": 2, "Copa de vino": 1, "Tenedor": 1},
     ))
+    # Una elaboración ya preparada: 4 raciones de ensalada hechas hoy.
+    if not inventario.elaboraciones.tandas_de("Ensalada de tomate"):
+        inventario.elaboraciones.nueva_tanda("Ensalada de tomate", 4, 0.24, ensalada.caducidad_propuesta(hoy))
 
     print("✅ Datos de ejemplo cargados en los 4 módulos.")
 

@@ -252,7 +252,7 @@ def cargar_datos_ejemplo() -> None:
     serv.agregar_servicio(Servicio(date.today() + timedelta(days=3), time(21, 0), 8, "Menú del día"))
 
     pan = Receta("Pan casero", "Panadería", {"Harina de trigo": 0.15, "Aceite de oliva": 0.01})
-    ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
+    ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005}, vida_util_dias=3)
     rec.agregar_receta(pan)
     rec.agregar_receta(ensalada)
     # Material reutilizable: sale a los servicios y vuelve.
@@ -266,6 +266,9 @@ def cargar_datos_ejemplo() -> None:
         "Menú del día", [pan, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1},
         {"Plato llano": 2, "Copa de vino": 1, "Tenedor": 1},
     ))
+    # Una elaboración ya preparada: 4 raciones de ensalada hechas hoy.
+    if not inv.elaboraciones.tandas_de("Ensalada de tomate"):
+        inv.elaboraciones.nueva_tanda("Ensalada de tomate", 4, 0.24, ensalada.caducidad_propuesta(date.today()))
 
 
 # ---------- Lotes: piezas de interfaz compartidas ----------
@@ -375,6 +378,8 @@ def pagina_dashboard() -> None:
     bajo_minimo = inv.productos_bajo_minimo()
     caducados = inv.lotes_caducados()
     proximos_caducar = inv.lotes_proximos_a_caducar()
+    tandas_caducadas = inv.elaboraciones.caducadas()
+    tandas_proximas = inv.elaboraciones.proximas_a_caducar()
     pendientes_compra = comp.items_pendientes()
 
     col1, col2, col3, col4 = st.columns(4)
@@ -399,10 +404,15 @@ def pagina_dashboard() -> None:
 
     with col3:
         with st.container(border=True):
-            st.metric("⏳ Lotes caducados o por caducar", len(caducados) + len(proximos_caducar))
+            st.metric("⏳ Caducados o por caducar",
+                      len(caducados) + len(proximos_caducar) + len(tandas_caducadas) + len(tandas_proximas))
             with st.expander("Ver detalles"):
-                if not caducados and not proximos_caducar:
-                    st.caption("Ningún lote caducado ni próximo a caducar.")
+                if not (caducados or proximos_caducar or tandas_caducadas or tandas_proximas):
+                    st.caption("Nada caducado ni próximo a caducar.")
+                for t in tandas_caducadas:
+                    st.write(f"🗑️ **🥘 {t.receta}** — {_num(t.raciones)} raciones, caducada ({t.etiqueta()})")
+                for t in tandas_proximas:
+                    st.write(f"🥘 {t.receta} — {_num(t.raciones)} raciones, caduca en {t.dias_para_caducar()} día(s)")
                 for p, l in caducados:
                     st.write(f"🗑️ **{p.nombre}** — {_num(l.cantidad)} {p.unidad}, caducado ({l.etiqueta()})")
                 for p, l in proximos_caducar:
@@ -470,7 +480,7 @@ def _campo_peso(etiqueta: str, clave: str, valor_kg: float = 0.0) -> Optional[fl
 # avisos y pestañas) trabaja solo con la lista elegida arriba, para que los
 # alimentos y los consumibles no se mezclen.
 VISTAS_PRODUCTOS = {"🍅 Alimentos": "alimento", "🧻 Consumibles": "consumible"}
-VISTAS_INVENTARIO = {**VISTAS_PRODUCTOS, "🍽️ Material": "material"}
+VISTAS_INVENTARIO = {**VISTAS_PRODUCTOS, "🥘 Elaboraciones": "elaboracion", "🍽️ Material": "material"}
 
 
 def pagina_inventario() -> None:
@@ -480,6 +490,9 @@ def pagina_inventario() -> None:
     tipo = VISTAS_INVENTARIO[st.radio("Lista", list(VISTAS_INVENTARIO), horizontal=True, key="inv_tipo")]
     if tipo == "material":
         _seccion_material()
+        return
+    if tipo == "elaboracion":
+        _seccion_elaboraciones()
         return
     productos_tipo = inv.consumibles() if tipo == "consumible" else inv.alimentos()
 
@@ -987,6 +1000,117 @@ def _pestana_limpiezas(inv: Inventario) -> None:
     } for l in reversed(inv.limpiezas)], width="stretch", hide_index=True)
 
 
+# ---------- Inventario: elaboraciones (recetas preparadas por adelantado) ----------
+
+def _seccion_elaboraciones() -> None:
+    inv = st.session_state.inventario
+    rec = st.session_state.recetario
+    reg = inv.elaboraciones
+
+    if reg.tandas:
+        filas = []
+        for t in sorted(reg.tandas, key=lambda t: (t.receta, t.fecha_caducidad or date.max)):
+            dias = t.dias_para_caducar()
+            estado = "—" if dias is None else ("⚠️ Caducada" if dias < 0 else f"Caduca en {dias} día(s)")
+            filas.append({
+                "Receta": t.receta, "Tanda": t.id, "Raciones": f"{_num(t.raciones)} de {_num(t.raciones_iniciales)}",
+                "Preparada": t.fecha_preparacion.strftime("%d/%m/%Y"),
+                "Caducidad": t.fecha_caducidad.strftime("%d/%m/%Y") if t.fecha_caducidad else "—", "Estado": estado,
+                "Coste/ración (€)": f"{t.coste_por_racion:.2f}", "Valor (€)": f"{t.valor():.2f}",
+            })
+        st.dataframe(filas, width="stretch", hide_index=True)
+        st.caption("Recetas preparadas por adelantado. Al completar un servicio se pueden usar en vez de los ingredientes.")
+    else:
+        st.info("No hay elaboraciones. Prepara una receta por adelantado en la pestaña 'Preparar'.")
+
+    for t in reg.caducadas():
+        c1, c2 = st.columns([4, 1])
+        c1.error(f"🗑️ Caducada: **{t.receta}** — {_num(t.raciones)} raciones ({t.etiqueta()})")
+        if c2.button("Desechar", key=f"desechar_tanda_{t.id}"):
+            uso = reg.desechar(t.id)
+            avisar("success", f"Tanda {t.id} de '{t.receta}' desechada ({_num(uso.raciones)} raciones, {uso.coste:.2f} € a desperdicio).")
+            st.rerun()
+    proximas = reg.proximas_a_caducar()
+    if proximas:
+        st.warning("⏳ Próximas a caducar: " + ", ".join(
+            f"{t.receta} tanda {t.id} ({_num(t.raciones)} raciones, {t.dias_para_caducar()}d)" for t in proximas
+        ))
+
+    st.divider()
+    tab_preparar, tab_corregir = st.tabs(["➕ Preparar", "✏️ Corregir o desechar una tanda"])
+
+    with tab_preparar:
+        if not rec.recetas:
+            st.info("No hay recetas. Créalas en el Recetario.")
+        else:
+            _preparar_elaboracion(inv, rec)
+
+    with tab_corregir:
+        if not reg.tandas:
+            st.info("No hay tandas.")
+            return
+        opciones = {f"{t.receta} · {t.descripcion()}": t for t in sorted(reg.tandas, key=lambda t: (t.receta, t.id))}
+        tanda = opciones[st.selectbox("Tanda", list(opciones), key="elab_corregir_select")]
+        k = lambda campo: f"elab_corr_{campo}_{tanda.id}"
+        st.caption("Corregir sirve para arreglar un dato mal apuntado. No cuenta como consumo ni como desperdicio.")
+        c1, c2 = st.columns(2)
+        raciones = c1.number_input("Raciones que quedan", min_value=0.0, step=1.0, value=float(tanda.raciones), key=k("raciones"))
+        caducidad = c2.date_input("Caducidad", value=tanda.fecha_caducidad, key=k("caducidad"))
+        b1, b2 = st.columns(2)
+        if b1.button("Guardar corrección", type="primary", key=k("guardar")):
+            reg.corregir(tanda.id, raciones=raciones, fecha_caducidad=caducidad)
+            avisar("success", f"Tanda {tanda.id} de '{tanda.receta}' corregida.")
+            st.rerun()
+        if b2.button("🗑️ Desechar la tanda entera (desperdicio)", key=k("desechar")):
+            uso = reg.desechar(tanda.id)
+            avisar("success", f"Tanda {tanda.id} de '{tanda.receta}' desechada ({_num(uso.raciones)} raciones, {uso.coste:.2f} €).")
+            st.rerun()
+
+
+def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
+    v = st.session_state.setdefault("elab_version", 0)
+    nombre = st.selectbox("Receta", list(rec.recetas), key=f"elab_receta_{v}")
+    receta = rec.recetas[nombre]
+    k = lambda campo: f"elab_{campo}_{nombre}_{v}"
+    c1, c2, c3 = st.columns(3)
+    raciones = c1.number_input("Raciones", min_value=0.0, step=1.0, value=None, placeholder="0", key=k("raciones")) or 0.0
+    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"))
+    propuesta = receta.caducidad_propuesta(fecha_prep)
+    # La key lleva la fecha de preparación: si se cambia, se vuelve a proponer la caducidad.
+    caducidad = c3.date_input("Caduca el", value=propuesta, key=k(f"caducidad_{fecha_prep.isoformat()}"))
+    if receta.vida_util_dias is not None:
+        st.caption(f"'{nombre}' dura {receta.vida_util_dias} día(s) una vez hecha: se propone la caducidad según eso.")
+    else:
+        st.caption(f"'{nombre}' no tiene vida útil: indica la caducidad a mano (puedes ponérsela a la receta en el Recetario).")
+
+    if raciones <= 0:
+        return
+    filas = rec.previsualizar_elaboracion(nombre, raciones, inv)
+    elecciones = _elegir_lotes(filas, inv, k("lote"))
+    filas = rec.previsualizar_elaboracion(nombre, raciones, inv, elecciones)
+    st.dataframe([{
+        "Ingrediente": f["ingrediente"], "Necesario": f"{_num(f['necesario'])} {f['unidad']}",
+        "En stock": f"{_num(f['en_stock'])} {f['unidad']}" if f["existe"] else "no existe",
+        "De qué lotes": _texto_reparto(f),
+        "Falta": f"{_num(f['faltante'])} {f['unidad']}" if f["faltante"] > 0 else "—",
+    } for f in filas], width="stretch", hide_index=True)
+    if any(f["faltante"] > 1e-9 or not f["existe"] for f in filas):
+        st.warning("No hay ingredientes suficientes para tantas raciones.")
+
+    if st.button("Preparar", type="primary", key=k("boton")):
+        if caducidad is None:
+            st.error("Indica la fecha de caducidad de esta tanda.")
+            return
+        try:
+            tanda = rec.preparar_elaboracion(nombre, raciones, inv, elecciones, caducidad, fecha_prep)
+            avisar("success", f"Preparadas {_num(raciones)} raciones de '{nombre}' ({tanda.etiqueta()}, "
+                              f"{tanda.coste_por_racion:.2f} €/ración).")
+            st.session_state.elab_version = v + 1
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+
 # ---------- Inventario: material reutilizable ----------
 
 def _seccion_material() -> None:
@@ -1185,15 +1309,22 @@ def _pestana_material_servicio(serv: RegistroServicios, rec: Recetario) -> None:
 
 # ---------- Página: Servicios ----------
 
-def _elegir_lotes_servicio(servicio: Servicio, inv: Inventario, rec: Recetario) -> dict[str, list[int]]:
+def _elegir_lotes_servicio(
+    servicio: Servicio, inv: Inventario, rec: Recetario, plan: Optional[dict] = None,
+) -> dict[str, list[int]]:
+    """Elegir los lotes de los ingredientes de un servicio (ver _elegir_lotes)."""
+    return _elegir_lotes(rec.previsualizar_consumo(servicio, inv, None, plan) or [], inv, f"completar_lote_{servicio.id}")
+
+
+def _elegir_lotes(filas: list[dict], inv: Inventario, prefijo: str) -> dict[str, list[int]]:
     """
     Para cada ingrediente con varios lotes, el usuario elige de qué lote
     sale (se propone el que caduca antes). Si ese lote no llega, aparece
     otro desplegable, VACÍO, para que elija con qué lote completar lo que
     falta... y así hasta cubrirlo todo. Devuelve {ingrediente: [lotes en orden]}.
+    Lo usan completar un servicio y preparar una elaboración.
     """
     elecciones: dict[str, list[int]] = {}
-    filas = rec.previsualizar_consumo(servicio, inv) or []
     for fila in filas:
         producto = inv.buscar_producto(fila["ingrediente"])
         # Sin nada que elegir: no existe, no hay stock, solo tiene un lote,
@@ -1202,7 +1333,7 @@ def _elegir_lotes_servicio(servicio: Servicio, inv: Inventario, rec: Recetario) 
                 or fila["necesario"] >= fila["en_stock"] - 1e-9):
             continue
         ingrediente = fila["ingrediente"]
-        base = f"completar_lote_{servicio.id}_{ingrediente}"
+        base = f"{prefijo}_{ingrediente}"
         elegidos: list[int] = []
         primero = _elegir_lote(
             producto, f"{ingrediente}: ¿de qué lote sale? (hacen falta {_num(fila['necesario'])} {producto.unidad})",
@@ -1224,6 +1355,58 @@ def _elegir_lotes_servicio(servicio: Servicio, inv: Inventario, rec: Recetario) 
             elegidos.append(siguiente)
         elecciones[ingrediente] = elegidos
     return elecciones
+
+
+def _elegir_tandas_servicio(servicio: Servicio, inv: Inventario, rec: Recetario) -> dict[str, list[int]]:
+    """
+    Para cada receta del menú de la que haya raciones PREPARADAS, el usuario
+    elige de qué tanda salen (se propone la que caduca antes y no habrá
+    caducado el día del servicio), o no usarlas. Si la tanda no llega, puede
+    completar con otra tanda o hacer el resto con ingredientes en crudo.
+    Devuelve {receta: [tandas en orden]} (lista vacía = no usar).
+    """
+    menu = rec.buscar_menu(servicio.menu)
+    if menu is None:
+        return {}
+    plan: dict[str, list[int]] = {}
+    NO_USAR = "No usar raciones preparadas"
+    CRUDO = "El resto, con ingredientes en crudo"
+    titulo_puesto = False
+    for receta in menu.recetas:
+        tandas = inv.elaboraciones.tandas_de(receta.nombre)
+        if not tandas:
+            continue
+        if not titulo_puesto:
+            st.markdown("**🥘 Raciones ya preparadas**")
+            titulo_puesto = True
+
+        def texto(t) -> str:
+            aviso = " · ⚠️ caducada ese día" if t.esta_caducada(servicio.fecha) else ""
+            return t.descripcion() + aviso
+
+        opciones = {texto(t): t.id for t in tandas}
+        validas = [texto(t) for t in tandas if not t.esta_caducada(servicio.fecha)]
+        lista = [NO_USAR] + list(opciones)
+        base = f"completar_tanda_{servicio.id}_{receta.nombre}"
+        primera = st.selectbox(
+            f"{receta.nombre}: ¿usar raciones preparadas? (hacen falta {servicio.comensales})", lista,
+            index=lista.index(validas[0]) if validas else 0, key=f"{base}_0",
+        )
+        elegidas: list[int] = [] if primera == NO_USAR else [opciones[primera]]
+        while elegidas:
+            _, faltan = inv.elaboraciones.repartir(receta.nombre, servicio.comensales, elegidas)
+            otras = [t for t in tandas if t.id not in elegidas]
+            if faltan <= 1e-9 or not otras:
+                break
+            siguiente = st.selectbox(
+                f"Esa tanda no llega: faltan {_num(faltan)} raciones de {receta.nombre}. ¿Cómo las completas?",
+                [CRUDO] + [texto(t) for t in otras], key=f"{base}_{len(elegidas)}",
+            )
+            if siguiente == CRUDO:
+                break
+            elegidas.append(opciones[siguiente])
+        plan[receta.nombre] = elegidas
+    return plan
 
 
 def _costes_adicionales(servicio: Servicio) -> list[dict]:
@@ -1545,8 +1728,9 @@ def pagina_servicios() -> None:
 
             # Primero se eligen los lotes; después, la vista previa muestra
             # exactamente qué saldrá de cada uno ANTES de pulsar el botón.
-            elecciones = _elegir_lotes_servicio(servicio, inv, rec)
-            filas = rec.previsualizar_consumo(servicio, inv, elecciones)
+            plan = _elegir_tandas_servicio(servicio, inv, rec)
+            elecciones = _elegir_lotes_servicio(servicio, inv, rec, plan)
+            filas = rec.previsualizar_consumo(servicio, inv, elecciones, plan)
 
             if filas is None:
                 st.warning(
@@ -1554,6 +1738,11 @@ def pagina_servicios() -> None:
                     "no se descontará nada del inventario."
                 )
             else:
+                for receta_plan, p in rec.plan_elaboraciones(servicio, inv, plan).items():
+                    if p["reparto"]:
+                        detalle = " + ".join(f"{_num(r)} de la tanda {t}" for t, r in p["reparto"])
+                        st.write(f"🥘 **{receta_plan}**: {detalle} raciones ya preparadas"
+                                 + (f"; las otras {_num(p['restantes'])} con ingredientes." if p["restantes"] > 0 else "."))
                 st.caption(f"Se descontará para {servicio.comensales} comensales (motivo: consumo). 🧻 = consumible:")
                 st.dataframe([{
                     "Ingrediente": ("🧻 " if f["tipo"] == "consumible" else "") + f["ingrediente"],
@@ -1586,7 +1775,7 @@ def pagina_servicios() -> None:
                     avisar("warning", f"Servicio #{servicio.id} completado sin descontar stock (menú no encontrado).")
                     st.rerun()
                 try:
-                    rec.completar_servicio(servicio, inv, elecciones)
+                    rec.completar_servicio(servicio, inv, elecciones, plan)
                 except ValueError as e:
                     st.error(str(e))
                 else:
@@ -1910,7 +2099,20 @@ def pagina_recetario() -> None:
         if not rec.recetas:
             st.info("No hay recetas todavía.")
         for r in rec.recetas.values():
-            st.write(f"{r}  💶 {r.costo_por_comensal(inv)}€/comensal")
+            vida = f" · ⏳ dura {r.vida_util_dias} día(s) una vez hecha" if r.vida_util_dias is not None else ""
+            st.write(f"{r}  💶 {r.costo_por_comensal(inv)}€/comensal{vida}")
+        if rec.recetas:
+            st.markdown("**⏳ Vida útil de una receta**")
+            st.caption("Cuántos días dura el plato una vez preparado. Sirve para proponer la caducidad de cada elaboración.")
+            c1, c2, c3 = st.columns([2, 1, 1])
+            nombre_vida = c1.selectbox("Receta", list(rec.recetas), key="vida_receta")
+            receta_vida = rec.recetas[nombre_vida]
+            dias_vida = c2.number_input("Días (0 = sin vida útil)", min_value=0, step=1,
+                                        value=receta_vida.vida_util_dias or 0, key=f"vida_dias_{nombre_vida}")
+            if c3.button("Guardar", key=f"vida_guardar_{nombre_vida}"):
+                receta_vida.vida_util_dias = int(dias_vida) or None
+                avisar("success", f"Vida útil de '{nombre_vida}' guardada.")
+                st.rerun()
 
     with tab_menus:
         if not rec.menus:
@@ -1965,6 +2167,10 @@ def pagina_recetario() -> None:
             with st.form("form_finalizar_receta", clear_on_submit=True):
                 nombre_receta = st.text_input("Nombre de la receta")
                 categoria_receta = st.text_input("Categoría")
+                vida_util = st.number_input(
+                    "Vida útil una vez hecha, en días (opcional, 0 = sin indicar)", min_value=0, step=1,
+                    help="Cuántos días dura el plato preparado. Sirve para proponer la caducidad de las elaboraciones.",
+                )
                 crear = st.form_submit_button("Guardar receta", type="primary")
                 if crear:
                     if not st.session_state.receta_ingredientes:
@@ -1972,7 +2178,8 @@ def pagina_recetario() -> None:
                     elif not nombre_receta:
                         st.error("Ponle un nombre a la receta.")
                     else:
-                        rec.agregar_receta(Receta(nombre_receta, categoria_receta, dict(st.session_state.receta_ingredientes)))
+                        rec.agregar_receta(Receta(nombre_receta, categoria_receta, dict(st.session_state.receta_ingredientes),
+                                                  vida_util_dias=int(vida_util) or None))
                         st.session_state.receta_ingredientes = {}
                         avisar("success", f"Receta '{nombre_receta}' creada.")
                         st.rerun()

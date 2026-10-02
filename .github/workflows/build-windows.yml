@@ -69,6 +69,7 @@ jobs:
           --hidden-import gastos
           --hidden-import materiales
           --hidden-import historial
+          --hidden-import elaboraciones
           --hidden-import google_drive_backup
           --collect-all google_auth_oauthlib
           --collect-all googleapiclient

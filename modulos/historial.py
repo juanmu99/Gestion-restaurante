@@ -59,19 +59,34 @@ def clientes(registro: RegistroServicios) -> list[str]:
     return sorted({s.cliente for s in registro.servicios if s.cliente})
 
 
-def previsto(servicio: Servicio) -> dict[str, float]:
+def _nombre_elaboracion(receta: str) -> str:
+    return f"{receta} (preparada)"
+
+
+def previsto(servicio: Servicio, inventario: Optional[Inventario] = None) -> dict[str, float]:
     """
     Lo que pedía el menú (tal y como era al completar el servicio) para
     sus comensales: ingredientes y consumibles. Vacío si no hay copia del
     menú (servicios completados antes de existir el historial).
+
+    Si se usaron raciones ya preparadas (elaboraciones), esas raciones no
+    gastan ingredientes: aparecen como "<receta> (preparada)", en raciones.
     """
     foto = servicio.menu_completado
     if not foto:
         return {}
+    preparadas: dict[str, float] = {}
+    if inventario is not None:
+        for uso in inventario.elaboraciones.usos_de_servicio(servicio.id):
+            preparadas[uso.receta] = preparadas.get(uso.receta, 0) + uso.raciones
     totales: dict[str, float] = {}
     for receta in foto.get("recetas", []):
+        hechas = preparadas.get(receta["nombre"], 0)
+        if hechas:
+            totales[_nombre_elaboracion(receta["nombre"])] = round(hechas, 3)
+        restantes = max(0.0, servicio.comensales - hechas)
         for nombre, cantidad in receta["ingredientes_por_comensal"].items():
-            totales[nombre] = round(totales.get(nombre, 0) + cantidad * servicio.comensales, 3)
+            totales[nombre] = round(totales.get(nombre, 0) + cantidad * restantes, 3)
     for nombre, cantidad in foto.get("consumibles_por_comensal", {}).items():
         totales[nombre] = round(totales.get(nombre, 0) + cantidad * servicio.comensales, 3)
     return totales
@@ -82,7 +97,15 @@ def consumos(servicio: Servicio, inventario: Inventario) -> list[dict]:
     Todo lo que salió del inventario para este servicio, movimiento a
     movimiento: producto, tipo, cantidad, unidad, lote y coste real.
     """
-    return [{
+    filas = [{
+        "producto": _nombre_elaboracion(u.receta),
+        "tipo": "elaboración",
+        "cantidad": u.raciones,
+        "unidad": "raciones",
+        "lote": f"Tanda {u.tanda_id}",
+        "coste": u.coste,
+    } for u in inventario.elaboraciones.usos_de_servicio(servicio.id)]
+    return filas + [{
         "producto": m.producto_nombre,
         "tipo": m.tipo_producto,
         "cantidad": m.cantidad,
@@ -98,7 +121,7 @@ def previsto_frente_a_real(servicio: Servicio, inventario: Inventario) -> list[d
     inventario y la diferencia (negativa = salió menos de lo previsto,
     normalmente porque faltaba stock).
     """
-    plan = previsto(servicio)
+    plan = previsto(servicio, inventario)
     real: dict[str, float] = {}
     unidades: dict[str, str] = {}
     for c in consumos(servicio, inventario):
@@ -107,9 +130,12 @@ def previsto_frente_a_real(servicio: Servicio, inventario: Inventario) -> list[d
     filas = []
     for nombre in list(plan) + [n for n in real if n not in plan]:
         producto = inventario.buscar_producto(nombre)
+        unidad = unidades.get(nombre) or (producto.unidad if producto else "")
+        if not unidad and nombre.endswith(" (preparada)"):
+            unidad = "raciones"
         filas.append({
             "producto": nombre,
-            "unidad": unidades.get(nombre) or (producto.unidad if producto else ""),
+            "unidad": unidad,
             "previsto": plan.get(nombre, 0.0),
             "real": real.get(nombre, 0.0),
             "diferencia": round(real.get(nombre, 0.0) - plan.get(nombre, 0.0), 3),

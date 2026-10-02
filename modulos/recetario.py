@@ -18,6 +18,7 @@ Conceptos de Python nuevos en este módulo:
 """
 
 import copy
+from datetime import date, timedelta
 from typing import Optional
 
 from inventario import Inventario
@@ -30,7 +31,10 @@ class Receta:
     poder escalar la receta a cualquier número de comensales.
     """
 
-    def __init__(self, nombre: str, categoria: str, ingredientes_por_comensal: dict[str, float]):
+    def __init__(
+        self, nombre: str, categoria: str, ingredientes_por_comensal: dict[str, float],
+        vida_util_dias: Optional[int] = None,
+    ):
         # ingredientes_por_comensal, ejemplo:
         # {"Harina de trigo": 0.15, "Aceite de oliva": 0.01}
         # -> significa: 0.15 kg de harina y 0.01 litros de aceite POR CADA comensal.
@@ -40,6 +44,17 @@ class Receta:
         self.nombre = nombre
         self.categoria = categoria
         self.ingredientes_por_comensal = ingredientes_por_comensal
+        # Cuántos días dura este plato una vez preparado (opcional). Sirve
+        # para proponer la caducidad de cada tanda que se prepare.
+        if vida_util_dias is not None and vida_util_dias < 0:
+            raise ValueError("La vida útil no puede ser negativa.")
+        self.vida_util_dias = vida_util_dias
+
+    def caducidad_propuesta(self, fecha_preparacion: date) -> Optional[date]:
+        """Fecha de preparación + vida útil (None si la receta no tiene vida útil)."""
+        if self.vida_util_dias is None:
+            return None
+        return fecha_preparacion + timedelta(days=self.vida_util_dias)
 
     def calcular_ingredientes(self, comensales: int) -> dict[str, float]:
         """Escala los ingredientes de la receta al número de comensales dado."""
@@ -72,11 +87,14 @@ class Receta:
             "nombre": self.nombre,
             "categoria": self.categoria,
             "ingredientes_por_comensal": self.ingredientes_por_comensal,
+            "vida_util_dias": self.vida_util_dias,
         }
 
     @classmethod
     def from_dict(cls, datos: dict) -> "Receta":
-        return cls(datos["nombre"], datos["categoria"], datos["ingredientes_por_comensal"])
+        return cls(
+            datos["nombre"], datos["categoria"], datos["ingredientes_por_comensal"], datos.get("vida_util_dias"),
+        )
 
     def urgencia_caducidad(self, inventario: Inventario, dias: int = 7) -> float:
         """
@@ -340,22 +358,25 @@ class Recetario:
     def buscar_menu(self, nombre: str) -> Optional[Menu]:
         return self.menus.get(nombre)
 
-    def previsualizar_consumo(
-        self, servicio: Servicio, inventario: Inventario, elecciones: Optional[dict[str, list[int]]] = None
-    ) -> Optional[list[dict]]:
+    # ---------- Qué se gasta: filas por ingrediente, con sus lotes ----------
+
+    @staticmethod
+    def filas_necesidades(
+        necesidades: dict[str, float], inventario: Inventario, elecciones: Optional[dict[str, list[int]]] = None,
+    ) -> list[dict]:
         """
-        Calcula, SIN tocar nada todavía, qué se descontaría del inventario
-        al completar este servicio. Devuelve None si el menú del servicio
-        no existe en el recetario.
+        Para cada ingrediente de `necesidades` ({nombre: cantidad}), calcula
+        SIN tocar nada de qué lotes saldría. Lo usan tanto completar un
+        servicio como preparar una elaboración.
 
         `elecciones` dice, para cada ingrediente, de qué lotes sale y en qué
         orden: {"Secreto": [2, 1]} = "primero del lote 2 y, lo que no llegue,
         del lote 1". Lo decide quien usa el programa. Si un ingrediente no
         aparece, se propone su lote que caduca antes (solo como sugerencia).
 
-        Para cada ingrediente se devuelve un diccionario con:
+        Cada fila es un diccionario con:
         - necesario, en_stock, a_descontar, faltante (lo que no había en
-          ningún lote), unidad, existe: como hasta ahora.
+          ningún lote), unidad, existe, tipo.
         - lotes_elegidos: los lotes que se usarán, en orden.
         - reparto: lista de (lote_id, cantidad) que se sacaría.
         - sin_asignar: cantidad que SÍ hay en stock pero que los lotes
@@ -363,19 +384,13 @@ class Recetario:
           (de lotes_restantes) para completarla.
         - lotes_restantes: lotes todavía no elegidos que tienen stock.
 
-        Si en TOTAL no hay stock suficiente, se descuenta todo lo que hay (se
-        dejan los lotes a 0) en vez de no descontar nada: si el servicio se
-        hizo, lo que había se gastó -- y lo que faltaba tuvo que salir de
-        algún sitio que no estaba registrado. En ese caso no hay nada que
-        elegir: se usan todos los lotes.
+        Si en TOTAL no hay stock suficiente, se usan todos los lotes.
         """
-        menu = self.buscar_menu(servicio.menu)
-        if menu is None:
-            return None
         elecciones = elecciones or {}
-
         filas = []
-        for ingrediente, necesario in menu.calcular_necesidades_totales(servicio.comensales).items():
+        for ingrediente, necesario in necesidades.items():
+            if necesario <= 1e-9:
+                continue
             producto = inventario.buscar_producto(ingrediente)
             en_stock = producto.stock if producto else 0
             # Sin round() a propósito: redondear podría dar un número
@@ -410,16 +425,153 @@ class Recetario:
             filas.append(fila)
         return filas
 
-    def completar_servicio(
-        self, servicio: Servicio, inventario: Inventario, elecciones: Optional[dict[str, list[int]]] = None
+    # ---------- Elaboraciones (recetas preparadas por adelantado) ----------
+
+    def plan_elaboraciones(
+        self, servicio: Servicio, inventario: Inventario, plan: Optional[dict[str, list[int]]] = None,
+    ) -> dict[str, dict]:
+        """
+        Para cada receta del menú de la que haya raciones preparadas, qué
+        tandas se usarían en este servicio. `plan` dice, para cada receta, de
+        qué tandas sale y en qué orden ({"Ensalada": [3, 1]}); una lista
+        vacía = no usar raciones preparadas. Si una receta no aparece en
+        `plan`, se proponen todas sus tandas que no habrán caducado el día
+        del servicio, primero las que caducan antes.
+
+        Devuelve {receta: {"tandas": [ids disponibles en orden], "elegidas",
+        "reparto": [(tanda_id, raciones)], "raciones": cubiertas,
+        "restantes": raciones que se hacen con ingredientes en crudo}}.
+        """
+        menu = self.buscar_menu(servicio.menu)
+        resultado: dict[str, dict] = {}
+        if menu is None:
+            return resultado
+        plan = plan or {}
+        for receta in menu.recetas:
+            disponibles = [t.id for t in inventario.elaboraciones.tandas_de(receta.nombre)]
+            if not disponibles:
+                continue
+            if receta.nombre in plan:
+                elegidas = [t for t in plan[receta.nombre] if t in disponibles]
+            else:
+                elegidas = [t.id for t in inventario.elaboraciones.tandas_de(receta.nombre, servicio.fecha)]
+            reparto, restantes = inventario.elaboraciones.repartir(receta.nombre, servicio.comensales, elegidas)
+            resultado[receta.nombre] = {
+                "tandas": disponibles, "elegidas": elegidas, "reparto": reparto,
+                "raciones": round(servicio.comensales - restantes, 6), "restantes": restantes,
+            }
+        return resultado
+
+    def necesidades_servicio(
+        self, servicio: Servicio, raciones_preparadas: Optional[dict[str, float]] = None,
+    ) -> dict[str, float]:
+        """
+        Lo que hay que sacar del inventario para un servicio: los ingredientes
+        de las raciones que NO salen de elaboraciones ya preparadas
+        (`raciones_preparadas` = {receta: raciones}), más los consumibles.
+        """
+        menu = self.buscar_menu(servicio.menu)
+        if menu is None:
+            return {}
+        raciones_preparadas = raciones_preparadas or {}
+        totales: dict[str, float] = {}
+        for receta in menu.recetas:
+            restantes = max(0.0, servicio.comensales - raciones_preparadas.get(receta.nombre, 0.0))
+            if restantes <= 0:
+                continue
+            for ingrediente, cantidad in receta.ingredientes_por_comensal.items():
+                totales[ingrediente] = round(totales.get(ingrediente, 0) + round(cantidad * restantes, 3), 3)
+        for nombre, cantidad in menu.calcular_consumibles(servicio.comensales).items():
+            totales[nombre] = round(totales.get(nombre, 0) + cantidad, 3)
+        return totales
+
+    def previsualizar_elaboracion(
+        self, nombre_receta: str, raciones: float, inventario: Inventario,
+        elecciones: Optional[dict[str, list[int]]] = None,
+    ) -> list[dict]:
+        """Qué ingredientes (y de qué lotes) se gastarían al preparar `raciones` de una receta."""
+        receta = self.recetas.get(nombre_receta)
+        if receta is None:
+            raise ValueError(f"No existe la receta '{nombre_receta}'.")
+        necesidades = {i: round(c * raciones, 3) for i, c in receta.ingredientes_por_comensal.items()}
+        return self.filas_necesidades(necesidades, inventario, elecciones)
+
+    def preparar_elaboracion(
+        self, nombre_receta: str, raciones: float, inventario: Inventario,
+        elecciones: Optional[dict[str, list[int]]] = None, fecha_caducidad: Optional[date] = None,
+        fecha_preparacion: Optional[date] = None,
+    ):
+        """
+        Prepara `raciones` de una receta por adelantado:
+        1. Saca los ingredientes del inventario, de los lotes elegidos
+           (motivo "elaboración").
+        2. Crea una tanda con su caducidad y su coste real por ración.
+        Comprueba todo antes de tocar nada. Si no hay ingredientes
+        suficientes, no se prepara nada (lanza ValueError diciendo qué falta).
+        Devuelve la tanda creada.
+        """
+        if raciones <= 0:
+            raise ValueError("Las raciones deben ser más de 0.")
+        filas = self.previsualizar_elaboracion(nombre_receta, raciones, inventario, elecciones)
+        faltan = [f"{f['ingrediente']} ({f['faltante']:g} {f['unidad']})" if f["existe"] else f"{f['ingrediente']} (no existe)"
+                  for f in filas if f["faltante"] > 1e-9 or not f["existe"]]
+        if faltan:
+            raise ValueError("No hay ingredientes suficientes. Falta: " + ", ".join(faltan))
+        pendientes = [f["ingrediente"] for f in filas if f["sin_asignar"] > 1e-9]
+        if pendientes:
+            raise ValueError(
+                "Los lotes elegidos no cubren lo que hace falta de: " + ", ".join(pendientes)
+                + ". Elige de qué otro lote sale lo que falta."
+            )
+        coste = 0.0
+        for f in filas:
+            producto = inventario.buscar_producto(f["ingrediente"])
+            coste += sum(producto.buscar_lote(lote_id).precio_unitario * cantidad for lote_id, cantidad in f["reparto"])
+        for f in filas:
+            inventario.salida_repartida(f["ingrediente"], f["reparto"], "elaboración")
+        return inventario.elaboraciones.nueva_tanda(
+            nombre_receta, raciones, round(coste / raciones, 4), fecha_caducidad, fecha_preparacion,
+        )
+
+    # ---------- Completar un servicio ----------
+
+    def previsualizar_consumo(
+        self, servicio: Servicio, inventario: Inventario, elecciones: Optional[dict[str, list[int]]] = None,
+        plan_elaboraciones: Optional[dict[str, list[int]]] = None,
     ) -> Optional[list[dict]]:
         """
-        Marca el servicio como completado y descuenta del inventario los
-        ingredientes de su menú (motivo "consumo", así cuenta en Métricas),
-        de los lotes indicados en `elecciones` (ver previsualizar_consumo).
-        Devuelve el mismo detalle que previsualizar_consumo(), para poder
-        informar de lo que faltaba. Devuelve None si el menú no existe (en
-        ese caso NO toca ni el servicio ni el inventario: decide quien llama).
+        Calcula, SIN tocar nada todavía, qué se descontaría del inventario
+        al completar este servicio. Devuelve None si el menú del servicio
+        no existe en el recetario.
+
+        Las raciones que salen de elaboraciones ya preparadas (ver
+        plan_elaboraciones) no gastan ingredientes: solo se descuentan los
+        ingredientes de las raciones restantes, y los consumibles.
+
+        Devuelve las filas de filas_necesidades() (ver allí). Si en TOTAL no
+        hay stock suficiente de algo, se descuenta todo lo que hay (se dejan
+        los lotes a 0) en vez de no descontar nada: si el servicio se hizo,
+        lo que había se gastó -- y lo que faltaba tuvo que salir de algún
+        sitio que no estaba registrado.
+        """
+        if self.buscar_menu(servicio.menu) is None:
+            return None
+        plan = self.plan_elaboraciones(servicio, inventario, plan_elaboraciones)
+        preparadas = {receta: p["raciones"] for receta, p in plan.items()}
+        return self.filas_necesidades(self.necesidades_servicio(servicio, preparadas), inventario, elecciones)
+
+    def completar_servicio(
+        self, servicio: Servicio, inventario: Inventario, elecciones: Optional[dict[str, list[int]]] = None,
+        plan_elaboraciones: Optional[dict[str, list[int]]] = None,
+    ) -> Optional[list[dict]]:
+        """
+        Marca el servicio como completado y descuenta del inventario lo que
+        se gastó (motivo "consumo", así cuenta en Métricas): las raciones de
+        las elaboraciones elegidas (`plan_elaboraciones`) y los ingredientes
+        del resto, de los lotes indicados en `elecciones` (ver
+        previsualizar_consumo). Devuelve el mismo detalle que
+        previsualizar_consumo(). Devuelve None si el menú no existe (en ese
+        caso NO toca ni el servicio ni el inventario: decide quien llama).
 
         Lanza ValueError, sin tocar nada, si para algún ingrediente los
         lotes elegidos no cubren lo que hace falta y hay otros lotes con
@@ -433,7 +585,7 @@ class Recetario:
             # el stock dos veces.
             raise ValueError(f"El servicio #{servicio.id} ya está {servicio.estado}.")
 
-        filas = self.previsualizar_consumo(servicio, inventario, elecciones)
+        filas = self.previsualizar_consumo(servicio, inventario, elecciones, plan_elaboraciones)
         if filas is None:
             return None
 
@@ -444,6 +596,10 @@ class Recetario:
                 + ". Elige de qué otro lote sale lo que falta."
             )
 
+        plan = self.plan_elaboraciones(servicio, inventario, plan_elaboraciones)
+        for p in plan.values():
+            if p["reparto"]:
+                inventario.elaboraciones.usar(p["reparto"], servicio.id)
         for fila in filas:
             if fila["reparto"]:
                 inventario.salida_repartida(fila["ingrediente"], fila["reparto"], "consumo", servicio.id)

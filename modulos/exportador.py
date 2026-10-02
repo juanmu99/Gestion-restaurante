@@ -105,6 +105,22 @@ def _hoja_lotes(wb: Workbook, inventario: Inventario) -> None:
     _ajustar_ancho_columnas(hoja)
 
 
+def _hoja_elaboraciones(wb: Workbook, inventario: Inventario) -> None:
+    """Las tandas preparadas por adelantado que quedan, con su caducidad y su valor."""
+    hoja = wb.create_sheet("Elaboraciones")
+    _escribir_cabecera(hoja, ["Receta", "Tanda", "Raciones que quedan", "Raciones preparadas", "Preparada",
+                              "Caducidad", "Coste por ración (€)", "Valor (€)"])
+    fila = 2
+    for t in sorted(inventario.elaboraciones.tandas, key=lambda t: (t.receta, t.id)):
+        valores = [t.receta, t.id, t.raciones, t.raciones_iniciales, t.fecha_preparacion.strftime("%d/%m/%Y"),
+                   t.fecha_caducidad.strftime("%d/%m/%Y") if t.fecha_caducidad else "—", t.coste_por_racion,
+                   f"=C{fila}*G{fila}"]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+    _ajustar_ancho_columnas(hoja)
+
+
 def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
     """Historial de limpiezas/despieces: de dónde sale cada kilo limpio y cuánta merma hubo."""
     hoja = wb.create_sheet("Limpiezas")
@@ -283,6 +299,7 @@ def exportar_todo(
 
     _hoja_inventario(wb, inventario)
     _hoja_lotes(wb, inventario)
+    _hoja_elaboraciones(wb, inventario)
     _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)

@@ -493,6 +493,79 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar(hoja.max_row == 3 and hoja["D2"].value in ("Familia García", "López"),
               "El Excel tiene la hoja 'Historial' con una fila por servicio completado")
 
+print("\n--- Elaboraciones (recetas preparadas por adelantado) ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 2, "kg", 2, "Huerta", fecha_caducidad=HOY + timedelta(days=5)))
+silencio(inv.entrada_stock, "Tomate", 3, precio_unitario=3, fecha_caducidad=HOY + timedelta(days=9))
+silencio(inv.agregar_producto, Producto("Aceite", "Despensa", 5, "litros", 4, "Mayorista"))
+recetario = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1, "Aceite": 0.01}, vida_util_dias=3)
+silencio(recetario.agregar_receta, ensalada)
+silencio(recetario.agregar_menu, Menu("Menú ensalada", [ensalada]))
+comprobar(ensalada.caducidad_propuesta(HOY) == HOY + timedelta(days=3), "La vida útil propone la caducidad (hoy + 3 días)")
+comprobar(Recetario.from_dict(recetario.to_dict()).recetas["Ensalada"].vida_util_dias == 3, "La vida útil se guarda y se carga")
+
+try:
+    recetario.preparar_elaboracion("Ensalada", 100, inv)  # 10 kg de tomate: solo hay 5
+    comprobar(False, "Sin ingredientes suficientes no se prepara")
+except ValueError as e:
+    comprobar("Tomate" in str(e) and inv.buscar_producto("Tomate").stock == 5 and not inv.elaboraciones.tandas,
+              "Sin ingredientes suficientes no se prepara (y no toca nada)")
+tanda = silencio(recetario.preparar_elaboracion, "Ensalada", 20, inv, {"Tomate": [2]}, ensalada.caducidad_propuesta(HOY))
+tomate = inv.buscar_producto("Tomate")
+comprobar(abs(tomate.buscar_lote(2).cantidad - 1) < 1e-9 and tomate.buscar_lote(1).cantidad == 2,
+          "Preparar gasta los ingredientes del lote elegido (2 kg del lote 2)")
+comprobar(inv.historial[-1].motivo == "elaboración", "Queda en el historial con el motivo 'elaboración'")
+comprobar(abs(tanda.coste_por_racion - (2 * 3 + 0.2 * 4) / 20) < 1e-9 and tanda.raciones == 20
+          and tanda.fecha_caducidad == HOY + timedelta(days=3),
+          "La tanda tiene 20 raciones, su caducidad y su coste real por ración (0,34 €)")
+
+servicio = Servicio(HOY + timedelta(days=1), time(14, 0), 30, "Menú ensalada")
+servicio.id = 501
+plan = recetario.plan_elaboraciones(servicio, inv)
+comprobar(plan["Ensalada"]["raciones"] == 20 and plan["Ensalada"]["restantes"] == 10,
+          "Por defecto se usan las raciones preparadas (20) y el resto (10) se hace con ingredientes")
+filas = recetario.previsualizar_consumo(servicio, inv, {"Tomate": [1]})
+comprobar(next(f for f in filas if f["ingrediente"] == "Tomate")["necesario"] == 1,
+          "Solo se descuentan los ingredientes de las 10 raciones restantes (1 kg de tomate)")
+sin_usar = recetario.previsualizar_consumo(servicio, inv, {"Tomate": [1]}, {"Ensalada": []})
+comprobar(next(f for f in sin_usar if f["ingrediente"] == "Tomate")["necesario"] == 3,
+          "Se puede elegir no usar las raciones preparadas (todo con ingredientes: 3 kg)")
+
+gestor = GestorCompras()
+avisos = silencio(gestor.generar_lista_desde_servicios,
+                  [Servicio(HOY + timedelta(days=1), time(14, 0), 80, "Menú ensalada")], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate").cantidad == 3 and any("raciones preparadas" in a for a in avisos),
+          "La lista de la compra descuenta lo ya preparado (80 - 20 = 60 raciones: 6 kg, hay 3 -> faltan 3)")
+avisos = silencio(gestor.generar_lista_desde_servicios,
+                  [Servicio(HOY + timedelta(days=10), time(14, 0), 80, "Menú ensalada")], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate").cantidad == 5,
+          "...pero no cuenta una tanda que habrá caducado el día del servicio")
+
+silencio(recetario.completar_servicio, servicio, inv, {"Tomate": [1]})
+comprobar(not inv.elaboraciones.tandas and inv.elaboraciones.coste_servicio(501) == round(20 * tanda.coste_por_racion, 2),
+          "Al completar, la tanda se gasta y su coste queda apuntado en el servicio")
+r = resumen_servicio(servicio, inv, recetario, RegistroGastos())
+comprobar(abs(r["comida"] - (20 * tanda.coste_por_racion + 1 * 2 + 0.1 * 4)) < 0.02,
+          "El coste del servicio = raciones preparadas + ingredientes del resto")
+f = historial.ficha(servicio, inv, recetario, RegistroGastos(), RegistroMaterial())
+comprobar(any(c["producto"] == "Ensalada (preparada)" and c["cantidad"] == 20 for c in f["consumos"])
+          and any(p["producto"] == "Tomate" and p["previsto"] == 1 and abs(p["diferencia"]) < 1e-9
+                  for p in f["previsto_frente_a_real"]),
+          "El historial muestra las raciones preparadas usadas y el previsto ya las descuenta")
+
+vieja = silencio(recetario.preparar_elaboracion, "Ensalada", 5, inv, None, HOY - timedelta(days=1))
+comprobar(inv.elaboraciones.caducadas() == [vieja], "Se detectan las tandas caducadas")
+silencio(inv.elaboraciones.desechar, vieja.id)
+comprobar(not inv.elaboraciones.tandas and Metricas(inv).valor_desperdiciado_total(HOY, HOY) == round(5 * vieja.coste_por_racion, 2),
+          "Desechar una tanda cuenta como desperdicio, con su coste")
+comprobar(Metricas(inv).cantidad_consumida("Tomate", HOY, HOY) > 0, "Lo gastado al preparar cuenta como consumo en Métricas")
+silencio(recetario.preparar_elaboracion, "Ensalada", 4, inv, None, HOY + timedelta(days=2))
+copia = Inventario.from_dict(inv.to_dict())
+comprobar(len(copia.elaboraciones.tandas) == 1 and copia.elaboraciones.tandas[0].raciones == 4
+          and len(copia.elaboraciones.usos) == len(inv.elaboraciones.usos),
+          "Las tandas y sus usos se guardan y se cargan")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

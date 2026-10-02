@@ -15,6 +15,8 @@ Conceptos de Python nuevos que usamos aquí:
 from datetime import date
 from typing import Optional
 
+from elaboraciones import RegistroElaboraciones
+
 
 def _es_numero(texto: str) -> bool:
     """True si `texto` se puede interpretar como un número (ej: '123', '45.6')."""
@@ -76,7 +78,9 @@ class MovimientoStock:
     # "limpieza" NO se elige a mano: solo lo usa Inventario.limpiar_producto().
     # Marca tanto la salida del producto en bruto como la entrada del limpio
     # y sus derivados, para que no se confundan con consumo ni con compras.
-    MOTIVOS_SALIDA_VALIDOS = MOTIVOS_SALIDA + ("limpieza",)
+    # "elaboración" tampoco: son los ingredientes que se gastan al preparar
+    # una receta por adelantado (ver elaboraciones.py).
+    MOTIVOS_SALIDA_VALIDOS = MOTIVOS_SALIDA + ("limpieza", "elaboración")
     MOTIVOS_ENTRADA = ("compra", "limpieza")
 
     def __init__(
@@ -703,6 +707,8 @@ class Inventario:
         self.historial: list[MovimientoStock] = []
         # Registro de todas las limpiezas/despieces (base del rendimiento medio).
         self.limpiezas: list[Limpieza] = []
+        # Recetas preparadas por adelantado (tandas con raciones y caducidad).
+        self.elaboraciones = RegistroElaboraciones()
 
     def agregar_producto(self, producto: Producto) -> None:
         if producto.nombre in self.productos:
@@ -1392,6 +1398,7 @@ class Inventario:
             "productos": [p.to_dict() for p in self.productos.values()],
             "historial": [m.to_dict() for m in self.historial],
             "limpiezas": [l.to_dict() for l in self.limpiezas],
+            "elaboraciones": self.elaboraciones.to_dict(),
         }
 
     @classmethod
@@ -1407,6 +1414,7 @@ class Inventario:
             inventario.historial.append(MovimientoStock.from_dict(datos_mov))
         for datos_limpieza in datos.get("limpiezas", []):
             inventario.limpiezas.append(Limpieza.from_dict(datos_limpieza))
+        inventario.elaboraciones = RegistroElaboraciones.from_dict(datos.get("elaboraciones", {}))
         return inventario
 
 

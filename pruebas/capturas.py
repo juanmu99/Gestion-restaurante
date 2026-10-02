@@ -86,6 +86,11 @@ def main() -> int:
                     page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario consumibles")), full_page=True)
                     print("📸 Inventario > Consumibles")
                     numero += 1
+                    page.get_by_text("🥘 Elaboraciones", exact=True).first.click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario elaboraciones")), full_page=True)
+                    print("📸 Inventario > Elaboraciones")
+                    numero += 1
                     page.get_by_text("🍽️ Material", exact=True).first.click()
                     esperar(page)
                     page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario material")), full_page=True)

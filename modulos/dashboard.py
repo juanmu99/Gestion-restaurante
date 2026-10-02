@@ -52,6 +52,11 @@ class Dashboard:
                 f"⏳ Caduca en {lote.dias_para_caducar()} día(s): {p.nombre} ({lote.cantidad} {p.unidad}, {lote.etiqueta()})"
             )
 
+        for t in self.inventario.elaboraciones.caducadas():
+            alertas.append(f"🗑️  Elaboración caducada: {t.receta} ({t.raciones:g} raciones, {t.etiqueta()})")
+        for t in self.inventario.elaboraciones.proximas_a_caducar(dias_caducidad):
+            alertas.append(f"⏳ Elaboración que caduca en {t.dias_para_caducar()} día(s): {t.receta} ({t.raciones:g} raciones)")
+
         pendientes = self.gestor_compras.items_pendientes()
         if pendientes:
             costo = self.gestor_compras.costo_total_pendiente()

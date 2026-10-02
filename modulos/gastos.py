@@ -163,6 +163,7 @@ def resumen_servicio(
                     consumibles += m.valor()
                 else:
                     comida += m.valor()
+        comida += inventario.elaboraciones.coste_servicio(servicio.id)  # raciones ya preparadas
 
     gastos_por_categoria: dict[str, float] = {}
     for g in registro_gastos.gastos_de_servicio(servicio.id):

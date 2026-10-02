@@ -104,13 +104,29 @@ class GestorCompras:
         avisos: list[str] = []
         necesidades_acumuladas: dict[str, float] = {}
 
-        for servicio in servicios:
+        # Raciones ya PREPARADAS (elaboraciones): se reparten entre los
+        # servicios por orden de fecha, y solo se compra para el resto. Una
+        # tanda que habrá caducado el día del servicio no cuenta.
+        ya_asignadas: dict[str, float] = {}
+        for servicio in sorted(servicios, key=lambda s: (s.fecha, s.hora)):
             menu = recetario.buscar_menu(servicio.menu)
             if menu is None:
                 print(f"⚠️  Menú '{servicio.menu}' no encontrado, se omite el servicio #{servicio.id}")
                 continue
+            preparadas: dict[str, float] = {}
+            for receta in menu.recetas:
+                libres = inventario.elaboraciones.raciones_disponibles(receta.nombre, servicio.fecha) \
+                    - ya_asignadas.get(receta.nombre, 0)
+                usar = min(servicio.comensales, max(0.0, libres))
+                if usar > 0:
+                    preparadas[receta.nombre] = usar
+                    ya_asignadas[receta.nombre] = ya_asignadas.get(receta.nombre, 0) + usar
+                    avisos.append(
+                        f"Servicio #{servicio.id}: hay {usar:g} raciones preparadas de '{receta.nombre}'; "
+                        f"solo se compra para las {servicio.comensales - usar:g} restantes."
+                    )
             # Ingredientes Y consumibles: los dos se compran.
-            necesidades = menu.calcular_necesidades_totales(servicio.comensales)
+            necesidades = recetario.necesidades_servicio(servicio, preparadas)
             for ingrediente, cantidad in necesidades.items():
                 necesidades_acumuladas[ingrediente] = round(
                     necesidades_acumuladas.get(ingrediente, 0) + cantidad, 3

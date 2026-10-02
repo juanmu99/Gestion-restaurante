@@ -88,10 +88,13 @@ class Metricas:
         ]
 
     def cantidad_consumida(self, producto_nombre: str, fecha_inicio: date, fecha_fin: date) -> float:
-        """Cuánto se ha CONSUMIDO (no desperdiciado) de un producto en el rango dado."""
+        """
+        Cuánto se ha CONSUMIDO (no desperdiciado) de un producto en el rango
+        dado. Cuenta también lo gastado al preparar elaboraciones.
+        """
         return round(sum(
             m.cantidad for m in self._en_rango(fecha_inicio, fecha_fin)
-            if m.producto_nombre == producto_nombre and m.tipo == "salida" and m.motivo == "consumo"
+            if m.producto_nombre == producto_nombre and m.tipo == "salida" and m.motivo in ("consumo", "elaboración")
         ), 3)
 
     def cantidad_desperdiciada(self, producto_nombre: str, fecha_inicio: date, fecha_fin: date) -> float:
@@ -107,7 +110,7 @@ class Metricas:
         """Ranking de productos por cantidad CONSUMIDA (no desperdiciada), de mayor a menor."""
         acumulado: dict[str, float] = {}
         for m in self._en_rango(fecha_inicio, fecha_fin, tipo):
-            if m.tipo == "salida" and m.motivo == "consumo":
+            if m.tipo == "salida" and m.motivo in ("consumo", "elaboración"):
                 acumulado[m.producto_nombre] = round(acumulado.get(m.producto_nombre, 0) + m.cantidad, 3)
         return sorted(acumulado.items(), key=lambda par: par[1], reverse=True)[:top]
 
@@ -160,11 +163,17 @@ class Metricas:
         }
 
     def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> float:
-        """Valor económico estimado de TODO lo desperdiciado (todas las categorías) en el rango dado."""
-        return round(sum(
+        """
+        Valor económico estimado de TODO lo desperdiciado en el rango dado:
+        productos tirados y, en los alimentos, también las elaboraciones
+        (tandas preparadas) desechadas.
+        """
+        productos = sum(
             m.valor() for m in self._en_rango(fecha_inicio, fecha_fin, tipo)
             if m.tipo == "salida" and m.motivo == "desperdicio"
-        ), 2)
+        )
+        tandas = self.inventario.elaboraciones.desperdicio_en_rango(fecha_inicio, fecha_fin) if tipo != "consumible" else 0
+        return round(productos + tandas, 2)
 
     def dias_estimados_para_agotarse(self, producto_nombre: str, dias_historial: int = 30) -> Optional[float]:
         """
@@ -188,7 +197,8 @@ class Metricas:
         # limpiarlo. Por eso aquí cuentan las dos cosas.
         consumido = sum(
             m.cantidad for m in self._en_rango(desde, hoy)
-            if m.producto_nombre == producto_nombre and m.tipo == "salida" and m.motivo in ("consumo", "limpieza")
+            if m.producto_nombre == producto_nombre and m.tipo == "salida"
+            and m.motivo in ("consumo", "limpieza", "elaboración")
         )
 
         if consumido <= 0:

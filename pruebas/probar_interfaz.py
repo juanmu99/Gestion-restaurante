@@ -405,6 +405,46 @@ def prueba_consumibles(at: AppTest) -> None:
     comprobar(sin_excepciones(at, "métricas de consumibles") and not at.error, "Métricas de consumibles sin errores")
 
 
+@prueba("Elaboraciones")
+def prueba_elaboraciones(at: AppTest) -> None:
+    inv = at.session_state["inventario"]
+    rec = at.session_state["recetario"]
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🥘 Elaboraciones").run()
+    comprobar(sin_excepciones(at, "lista de elaboraciones") and len(inv.elaboraciones.tandas) == 1,
+              "La lista de elaboraciones se muestra (con la tanda de ejemplo)")
+
+    # Preparar 2 raciones de pan (no tiene vida útil: la caducidad se pide a mano)
+    v = at.session_state["elab_version"]
+    harina_antes = inv.buscar_producto("Harina de trigo").stock
+    at.selectbox(key=f"elab_receta_{v}").select("Pan casero").run()
+    at.number_input(key=f"elab_raciones_Pan casero_{v}").set_value(2.0).run()
+    clave_cad = f"elab_caducidad_{date.today().isoformat()}_Pan casero_{v}"
+    comprobar(at.date_input(key=clave_cad).value is None, "Sin vida útil, la caducidad empieza vacía")
+    at.button(key=f"elab_boton_Pan casero_{v}").click().run()
+    comprobar(len(inv.elaboraciones.tandas) == 1 and any("caducidad" in t for t in textos(at.error)),
+              "Sin caducidad no se prepara")
+    at.date_input(key=clave_cad).set_value(date.today() + timedelta(days=5))
+    at.button(key=f"elab_boton_Pan casero_{v}").click().run()
+    pan = inv.elaboraciones.tandas_de("Pan casero")
+    comprobar(sin_excepciones(at, "preparar") and len(pan) == 1 and pan[0].raciones == 2
+              and abs(inv.buscar_producto("Harina de trigo").stock - (harina_antes - 0.3)) < 1e-9,
+              "Preparar 2 raciones de pan gasta 0,3 kg de harina y crea la tanda")
+
+    # Vida útil: con ella, la caducidad se propone sola
+    ir_a(at, "Recetario")
+    at.selectbox(key="vida_receta").select("Pan casero").run()
+    at.number_input(key="vida_dias_Pan casero").set_value(4)
+    at.button(key="vida_guardar_Pan casero").click().run()
+    comprobar(rec.recetas["Pan casero"].vida_util_dias == 4, "Se puede poner la vida útil a una receta")
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🥘 Elaboraciones").run()
+    v = at.session_state["elab_version"]
+    at.selectbox(key=f"elab_receta_{v}").select("Pan casero").run()
+    comprobar(at.date_input(key=f"elab_caducidad_{date.today().isoformat()}_Pan casero_{v}").value
+              == date.today() + timedelta(days=4), "Con vida útil, la caducidad se propone (hoy + 4 días)")
+
+
 @prueba("Completar servicio")
 def prueba_completar(at: AppTest) -> None:
     ir_a(at, "Servicios")
@@ -420,6 +460,9 @@ def prueba_completar(at: AppTest) -> None:
               "Servicio completado desde la interfaz")
     comprobar(servilletas.stock == 500 - 3 * pendiente.comensales,
               f"También descuenta los consumibles del menú (quedan {servilletas.stock} servilletas)")
+    usos = at.session_state["inventario"].elaboraciones.usos_de_servicio(pendiente.id)
+    comprobar(sorted((u.receta, u.raciones) for u in usos) == [("Ensalada de tomate", 4), ("Pan casero", 2)],
+              "Al completar se usan por defecto las raciones ya preparadas (4 de ensalada y 2 de pan)")
     comprobar(pendiente.valoracion == "Todo bien; sobró pan" and pendiente.menu_completado is not None,
               "Al completar se guardan la valoración y la copia del menú")
 
@@ -770,6 +813,7 @@ def main() -> int:
     prueba_editar(at)
     prueba_lotes(at)
     prueba_consumibles(at)
+    prueba_elaboraciones(at)
     prueba_completar(at)
     prueba_completar_lotes(at)
     prueba_gastos(at)
