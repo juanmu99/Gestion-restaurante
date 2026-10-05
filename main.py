@@ -1271,11 +1271,14 @@ def accion_cargar_datos_ejemplo():
         {"Plato llano": 2, "Copa de vino": 1, "Tenedor": 1},
     ))
     # Una elaboración BASE (sofrito) y una preparación: se esperaba 1 kg y salieron 0,9.
-    if "Cebolla" not in inventario.productos:
-        inventario.agregar_producto(Producto("Cebolla", "Verduras", 5, "kg", 1.3, "Huerta Local",
+    if "Cebolla dulce" not in inventario.productos:
+        inventario.agregar_producto(Producto("Cebolla dulce", "Verduras", 5, "kg", 1.3, "Huerta Local",
                                              fecha_caducidad=hoy + timedelta(days=12)))
+    if "Pimiento rojo" not in inventario.productos:
+        inventario.agregar_producto(Producto("Pimiento rojo", "Verduras", 2, "kg", 2.4, "Huerta Local",
+                                         fecha_caducidad=hoy + timedelta(days=8)))
     if "Sofrito" not in inventario.productos:
-        inventario.definir_base("Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 1.5, "Aceite de oliva": 0.1},
+        inventario.definir_base("Sofrito", "Elaboraciones", "kg", 1, {"Cebolla dulce": 1.5, "Pimiento rojo": 0.3},
                                 vida_util_dias=4)
         recetario.preparar_base("Sofrito", 1, 0.9, inventario)
     # Una elaboración ya preparada: 4 raciones de ensalada hechas hoy.

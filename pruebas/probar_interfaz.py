@@ -497,7 +497,7 @@ def prueba_bases(at: AppTest) -> None:
     kb = lambda campo: f"base_{campo}_Sofrito_{vb}"
     comprobar(at.date_input(key=kb(f"caducidad_{date.today().isoformat()}")).value == date.today() + timedelta(days=5),
               "La caducidad se propone con la vida útil de la base (hoy + 5)")
-    cebolla_antes = inv.buscar_producto("Cebolla").stock
+    cebolla_antes = inv.buscar_producto("Cebolla dulce").stock
     stock_antes = sofrito.stock
     at.number_input(key=kb("prevista")).set_value(2.0).run()
     at.button(key=kb("boton")).click().run()
@@ -507,9 +507,9 @@ def prueba_bases(at: AppTest) -> None:
     at.button(key=kb("boton")).click().run()
     prep = inv.elaboraciones.preparaciones_base[-1]
     comprobar(sin_excepciones(at, "preparar base") and abs(sofrito.stock - (stock_antes + 1.7)) < 1e-9
-              and abs(inv.buscar_producto("Cebolla").stock - (cebolla_antes - 3)) < 1e-9
+              and abs(inv.buscar_producto("Cebolla dulce").stock - (cebolla_antes - 3)) < 1e-9
               and prep.prevista == 2 and prep.obtenida == 1.7 and abs(prep.diferencia + 0.3) < 1e-9,
-              "Preparar 2 kg gasta 3 kg de cebolla, entra lo obtenido (1,7 kg) y queda apuntada la diferencia")
+              "Preparar 2 kg gasta 3 kg de cebolla dulce, entra lo obtenido (1,7 kg) y queda apuntada la diferencia")
     comprobar(sin_excepciones(at, "preparaciones de bases") and not at.error,
               "El historial de preparaciones de bases se muestra")
 

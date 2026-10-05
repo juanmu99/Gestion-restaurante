@@ -268,11 +268,14 @@ def cargar_datos_ejemplo() -> None:
     ))
     # Una elaboración BASE (sofrito) con su fórmula, y una preparación hecha:
     # se pensaba sacar 1 kg y salieron 0,9 kg.
-    if "Cebolla" not in inv.productos:
-        inv.agregar_producto(Producto("Cebolla", "Verduras", 5, "kg", 1.3, "Huerta Local",
+    if "Cebolla dulce" not in inv.productos:
+        inv.agregar_producto(Producto("Cebolla dulce", "Verduras", 5, "kg", 1.3, "Huerta Local",
                                       fecha_caducidad=date.today() + timedelta(days=12)))
+    if "Pimiento rojo" not in inv.productos:
+        inv.agregar_producto(Producto("Pimiento rojo", "Verduras", 2, "kg", 2.4, "Huerta Local",
+                                         fecha_caducidad=date.today() + timedelta(days=8)))
     if "Sofrito" not in inv.productos:
-        inv.definir_base("Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 1.5, "Aceite de oliva": 0.1}, vida_util_dias=4)
+        inv.definir_base("Sofrito", "Elaboraciones", "kg", 1, {"Cebolla dulce": 1.5, "Pimiento rojo": 0.3}, vida_util_dias=4)
         rec.preparar_base("Sofrito", 1, 0.9, inv)
     # Una elaboración ya preparada: 4 raciones de ensalada hechas hoy.
     if not inv.elaboraciones.tandas_de("Ensalada de tomate"):
