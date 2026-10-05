@@ -445,6 +445,75 @@ def prueba_elaboraciones(at: AppTest) -> None:
               == date.today() + timedelta(days=4), "Con vida útil, la caducidad se propone (hoy + 4 días)")
 
 
+@prueba("Elaboraciones base")
+def prueba_bases(at: AppTest) -> None:
+    inv = at.session_state["inventario"]
+    sofrito = inv.buscar_producto("Sofrito")
+    comprobar(sofrito is not None and sofrito.es_base() and abs(sofrito.stock - 0.9) < 1e-9
+              and len(inv.elaboraciones.preparaciones_base) == 1,
+              "Los datos de ejemplo traen el sofrito (base) con una preparación: previsto 1 kg, salió 0,9")
+
+    # Crear una base nueva desde el Recetario
+    ir_a(at, "Recetario")
+    comprobar(sin_excepciones(at, "pestaña de bases") and not at.error, "La pestaña 'Elaboraciones base' se muestra")
+    v = at.session_state["base_nueva_version"]
+    k = lambda campo: f"base_nueva_{campo}_{v}"
+    at.text_input(key=k("nombre")).input("Salsa de tomate")
+    at.selectbox(key=k("unidad")).select("litros")
+    at.number_input(key=k("cantidad")).set_value(2.0).run()
+    at.button(key=k("crear")).click().run()
+    comprobar("Salsa de tomate" not in inv.productos and any("ingrediente" in t for t in textos(at.error)),
+              "Sin ingredientes no se crea la base")
+    at.multiselect(key=f"{k('formula')}_ingredientes").select("Sofrito").select("Aceite de oliva").run()
+    at.number_input(key=f"{k('formula')}_cant_Sofrito").set_value(0.5)
+    at.number_input(key=f"{k('formula')}_cant_Aceite de oliva").set_value(0.1).run()
+    at.button(key=k("crear")).click().run()
+    salsa = inv.buscar_producto("Salsa de tomate")
+    comprobar(sin_excepciones(at, "crear base") and salsa is not None and salsa.es_base() and salsa.unidad == "litros"
+              and salsa.formula == {"cantidad": 2.0, "ingredientes": {"Sofrito": 0.5, "Aceite de oliva": 0.1}},
+              "Se crea una base que lleva otra base (salsa con sofrito)")
+
+    # Editar: el sofrito no puede llevar la salsa (que ya lleva sofrito)
+    at.radio(key="base_modo").set_value("✏️ Editar una fórmula").run()
+    at.selectbox(key="base_editar_select").select("Sofrito").run()
+    ve = at.session_state["base_editar_version"]
+    clave = f"base_editar_formula_Sofrito_{ve}"
+    at.multiselect(key=f"{clave}_ingredientes").select("Salsa de tomate").run()
+    at.number_input(key=f"{clave}_cant_Salsa de tomate").set_value(0.2).run()
+    at.button(key=f"base_editar_guardar_Sofrito_{ve}").click().run()
+    comprobar("Salsa de tomate" not in sofrito.formula["ingredientes"] and any("círculo" in t for t in textos(at.error)),
+              "Las fórmulas no pueden ir en círculo")
+    at.multiselect(key=f"{clave}_ingredientes").unselect("Salsa de tomate").run()
+    at.number_input(key=f"base_editar_vida_Sofrito_{ve}").set_value(5)
+    at.button(key=f"base_editar_guardar_Sofrito_{ve}").click().run()
+    comprobar(sofrito.vida_util_dias == 5, "Se puede cambiar la vida útil de una base")
+
+    # Preparar sofrito desde Inventario > Elaboraciones
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🥘 Elaboraciones").run()
+    at.radio(key="elab_que").set_value("Una elaboración base (kg / litros)").run()
+    vb = at.session_state["base_version"]
+    at.selectbox(key=f"base_preparar_{vb}").select("Sofrito").run()
+    kb = lambda campo: f"base_{campo}_Sofrito_{vb}"
+    comprobar(at.date_input(key=kb(f"caducidad_{date.today().isoformat()}")).value == date.today() + timedelta(days=5),
+              "La caducidad se propone con la vida útil de la base (hoy + 5)")
+    cebolla_antes = inv.buscar_producto("Cebolla").stock
+    stock_antes = sofrito.stock
+    at.number_input(key=kb("prevista")).set_value(2.0).run()
+    at.button(key=kb("boton")).click().run()
+    comprobar(sofrito.stock == stock_antes and any("de verdad" in t for t in textos(at.error)),
+              "Sin indicar cuánto salió de verdad no se prepara")
+    at.number_input(key=kb("obtenida")).set_value(1.7).run()
+    at.button(key=kb("boton")).click().run()
+    prep = inv.elaboraciones.preparaciones_base[-1]
+    comprobar(sin_excepciones(at, "preparar base") and abs(sofrito.stock - (stock_antes + 1.7)) < 1e-9
+              and abs(inv.buscar_producto("Cebolla").stock - (cebolla_antes - 3)) < 1e-9
+              and prep.prevista == 2 and prep.obtenida == 1.7 and abs(prep.diferencia + 0.3) < 1e-9,
+              "Preparar 2 kg gasta 3 kg de cebolla, entra lo obtenido (1,7 kg) y queda apuntada la diferencia")
+    comprobar(sin_excepciones(at, "preparaciones de bases") and not at.error,
+              "El historial de preparaciones de bases se muestra")
+
+
 @prueba("Completar servicio")
 def prueba_completar(at: AppTest) -> None:
     ir_a(at, "Servicios")
@@ -814,6 +883,7 @@ def main() -> int:
     prueba_lotes(at)
     prueba_consumibles(at)
     prueba_elaboraciones(at)
+    prueba_bases(at)
     prueba_completar(at)
     prueba_completar_lotes(at)
     prueba_gastos(at)

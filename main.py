@@ -532,9 +532,30 @@ def accion_elaboraciones() -> None:
     for t in sorted(reg.tandas, key=lambda t: (t.receta, t.id)):
         aviso = "  ⚠️ CADUCADA" if t.esta_caducada() else ""
         print(f"   {t.receta}: {t.descripcion()}{aviso}")
+    if reg.preparaciones_base:
+        print("Últimas preparaciones de elaboraciones base (previsto -> obtenido):")
+        for p in reg.preparaciones_base[-5:]:
+            print(f"   {p.fecha.strftime('%d/%m/%Y')} {p.producto}: {p.prevista:g} -> {p.obtenida:g} {p.unidad} "
+                  f"(diferencia {p.diferencia:+g}, {p.coste:.2f}€)")
     accion = pedir_opcion("¿Qué quieres hacer?", ("preparar", "desechar", "corregir", "nada"))
     try:
-        if accion == "preparar":
+        if accion == "preparar" and inventario.bases() and pedir_opcion(
+            "¿Qué preparas?", ("plato", "base")
+        ) == "base":
+            nombre = pedir_opcion("Elaboración base", tuple(b.nombre for b in inventario.bases()))
+            producto = inventario.buscar_producto(nombre)
+            prevista = pedir_numero(f"Cantidad a preparar ({producto.unidad}): ")
+            filas = recetario.previsualizar_base(nombre, prevista, inventario)
+            elecciones = pedir_lotes_filas(filas)
+            obtenida = pedir_numero(f"¿Cuánto ha salido de verdad? ({producto.unidad}): ")
+            propuesta = producto.caducidad_propuesta(date.today())
+            if propuesta and not pedir_si_no(f"¿Caduca el {propuesta.strftime('%d/%m/%Y')} (según su vida útil)?"):
+                propuesta = None
+            caducidad = propuesta or pedir_fecha("Fecha de caducidad")
+            prep = recetario.preparar_base(nombre, prevista, obtenida, inventario, elecciones, caducidad)
+            print(f"✅ '{nombre}': previsto {prevista:g}, obtenido {obtenida:g} {producto.unidad} "
+                  f"(diferencia {prep.diferencia:+g}). Coste {prep.coste:.2f}€.")
+        elif accion == "preparar":
             if not recetario.recetas:
                 print("No hay recetas.")
                 return
@@ -944,6 +965,52 @@ def mostrar_detalle_menu(nombre_menu: str) -> None:
         menu.materiales_por_comensal = pedir_material_menu(menu.materiales_por_comensal)
 
 
+def pedir_formula(excluir: str = "") -> dict[str, float]:
+    """Ingredientes de una elaboración base, uno a uno (nombre vacío para terminar)."""
+    ingredientes = {}
+    print("Añade ingredientes uno a uno (nombre vacío para terminar). Pueden ser otras elaboraciones base.")
+    while True:
+        ing = pedir_texto("  Ingrediente: ")
+        if ing == "":
+            return ingredientes
+        producto = inventario.buscar_producto(ing)
+        if producto is None or producto.es_consumible() or producto.nombre == excluir:
+            print(f"⚠️  '{ing}' no vale: debe ser un alimento del inventario (nombre exacto).")
+            continue
+        ingredientes[producto.nombre] = pedir_numero(f"  Cantidad de {producto.nombre} ({producto.unidad}): ")
+
+
+def accion_bases_recetario() -> None:
+    bases = inventario.bases()
+    print("\n--- Elaboraciones base ---")
+    for b in bases:
+        ingredientes = ", ".join(f"{c:g} {i}" for i, c in b.formula["ingredientes"].items())
+        vida = f" | dura {b.vida_util_dias} día(s)" if b.vida_util_dias is not None else ""
+        print(f"   {b.nombre}: para {b.formula['cantidad']:g} {b.unidad} -> {ingredientes} | stock {b.stock:g}{vida}")
+    if not bases:
+        print("Todavía no hay elaboraciones base.")
+    accion = pedir_opcion("¿Qué quieres hacer?", ("crear", "editar", "nada"))
+    try:
+        if accion == "crear":
+            nombre = pedir_texto("Nombre (ej: Sofrito): ")
+            categoria = pedir_texto("Categoría (ej: Elaboraciones): ") or "Elaboraciones"
+            unidad = pedir_opcion("Unidad", ("kg", "g", "litros", "ml"))
+            cantidad = pedir_numero(f"¿Cuánto da la fórmula? (en {unidad}): ")
+            ingredientes = pedir_formula(nombre)
+            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
+            inventario.definir_base(nombre, categoria, unidad, cantidad, ingredientes, int(vida) if vida else None)
+            print(f"✅ Elaboración base '{nombre}' creada. Prepárala en Inventario > Elaboraciones.")
+        elif accion == "editar" and bases:
+            nombre = pedir_opcion("Elaboración base", tuple(b.nombre for b in bases))
+            producto = inventario.buscar_producto(nombre)
+            cantidad = pedir_numero(f"¿Cuánto da la fórmula? (en {producto.unidad}): ")
+            ingredientes = pedir_formula(nombre)
+            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
+            inventario.editar_formula(nombre, cantidad, ingredientes, int(vida) if vida else None)
+    except ValueError as e:
+        print(f"❌ {e}")
+
+
 def menu_recetario():
     while True:
         print("\n--- RECETARIO ---")
@@ -953,6 +1020,7 @@ def menu_recetario():
         print("4. Crear menú (combinando recetas existentes)")
         print("5. Cargar recetas y menú de ejemplo")
         print("6. Recomendar menú (según caducidad)")
+        print("7. Elaboraciones base (sofritos, fondos, salsas...)")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1013,6 +1081,8 @@ def menu_recetario():
             recetario.agregar_receta(pan_casero)
             recetario.agregar_receta(ensalada)
             recetario.agregar_menu(Menu("Menú del día", [pan_casero, ensalada]))
+        elif opcion == "7":
+            accion_bases_recetario()
         elif opcion == "6":
             if not recetario.menus:
                 print("No hay menús registrados todavía.")
@@ -1200,6 +1270,14 @@ def accion_cargar_datos_ejemplo():
         "Menú del día", [pan_casero, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1},
         {"Plato llano": 2, "Copa de vino": 1, "Tenedor": 1},
     ))
+    # Una elaboración BASE (sofrito) y una preparación: se esperaba 1 kg y salieron 0,9.
+    if "Cebolla" not in inventario.productos:
+        inventario.agregar_producto(Producto("Cebolla", "Verduras", 5, "kg", 1.3, "Huerta Local",
+                                             fecha_caducidad=hoy + timedelta(days=12)))
+    if "Sofrito" not in inventario.productos:
+        inventario.definir_base("Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 1.5, "Aceite de oliva": 0.1},
+                                vida_util_dias=4)
+        recetario.preparar_base("Sofrito", 1, 0.9, inventario)
     # Una elaboración ya preparada: 4 raciones de ensalada hechas hoy.
     if not inventario.elaboraciones.tandas_de("Ensalada de tomate"):
         inventario.elaboraciones.nueva_tanda("Ensalada de tomate", 4, 0.24, ensalada.caducidad_propuesta(hoy))

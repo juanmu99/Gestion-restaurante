@@ -640,6 +640,13 @@ comprobar("Salsa" not in pedidos and "Sofrito" not in pedidos and pedidos.get("H
           and abs(pedidos.get(nombre_cebolla, 0) - (3.4 * 1.5 - 1)) < 1e-6,
           "Bases dentro de bases: no se compran salsa ni sofrito, sino huesos (7 kg) y la cebolla que falta (4,1 kg)")
 
+with tempfile.TemporaryDirectory() as carpeta:
+    from openpyxl import load_workbook
+    hoja = load_workbook(silencio(exportar_todo, inv, RegistroServicios(), GestorCompras(), carpeta))["Elaboraciones base"]
+    valores = [c.value for fila in hoja.iter_rows() for c in fila]
+    comprobar("Sofrito" in valores and "Salsa" in valores and 1.6 in valores and "Obtenida" in valores,
+              "El Excel tiene la hoja 'Elaboraciones base' con fórmulas y preparaciones")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

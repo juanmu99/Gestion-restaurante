@@ -266,6 +266,14 @@ def cargar_datos_ejemplo() -> None:
         "Menú del día", [pan, ensalada], {"Servilletas de papel": 2, "Vasos desechables": 1},
         {"Plato llano": 2, "Copa de vino": 1, "Tenedor": 1},
     ))
+    # Una elaboración BASE (sofrito) con su fórmula, y una preparación hecha:
+    # se pensaba sacar 1 kg y salieron 0,9 kg.
+    if "Cebolla" not in inv.productos:
+        inv.agregar_producto(Producto("Cebolla", "Verduras", 5, "kg", 1.3, "Huerta Local",
+                                      fecha_caducidad=date.today() + timedelta(days=12)))
+    if "Sofrito" not in inv.productos:
+        inv.definir_base("Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 1.5, "Aceite de oliva": 0.1}, vida_util_dias=4)
+        rec.preparar_base("Sofrito", 1, 0.9, inv)
     # Una elaboración ya preparada: 4 raciones de ensalada hechas hoy.
     if not inv.elaboraciones.tandas_de("Ensalada de tomate"):
         inv.elaboraciones.nueva_tanda("Ensalada de tomate", 4, 0.24, ensalada.caducidad_propuesta(date.today()))
@@ -1037,13 +1045,40 @@ def _seccion_elaboraciones() -> None:
         ))
 
     st.divider()
-    tab_preparar, tab_corregir = st.tabs(["➕ Preparar", "✏️ Corregir o desechar una tanda"])
+    tab_preparar, tab_bases, tab_corregir = st.tabs(
+        ["➕ Preparar", "🧪 Preparaciones de bases", "✏️ Corregir o desechar una tanda"]
+    )
 
     with tab_preparar:
-        if not rec.recetas:
-            st.info("No hay recetas. Créalas en el Recetario.")
+        que = st.radio(
+            "¿Qué preparas?", ("Un plato (raciones)", "Una elaboración base (kg / litros)"),
+            horizontal=True, key="elab_que",
+            help="Un plato se guarda como una tanda de raciones. Una elaboración base (sofrito, fondo, salsa...) "
+                 "entra en el inventario como un alimento más, y las recetas la usan como ingrediente.",
+        )
+        if que.startswith("Un plato"):
+            if not rec.recetas:
+                st.info("No hay recetas. Créalas en el Recetario.")
+            else:
+                _preparar_elaboracion(inv, rec)
+        elif not inv.bases():
+            st.info("No hay elaboraciones base. Créalas en Recetario > 🧪 Elaboraciones base.")
         else:
-            _preparar_elaboracion(inv, rec)
+            _preparar_base(inv, rec)
+
+    with tab_bases:
+        preparaciones = sorted(reg.preparaciones_base, key=lambda p: p.fecha, reverse=True)
+        if not preparaciones:
+            st.info("Todavía no se ha preparado ninguna elaboración base.")
+        else:
+            st.dataframe([{
+                "Fecha": p.fecha.strftime("%d/%m/%Y"), "Elaboración": p.producto,
+                "Prevista": f"{_num(p.prevista)} {p.unidad}", "Obtenida": f"{_num(p.obtenida)} {p.unidad}",
+                "Diferencia": f"{p.diferencia:+g} {p.unidad}",
+                "Coste (€)": f"{p.coste:.2f}", "Coste/unidad (€)": f"{p.coste_por_unidad:.2f}",
+                "Lote": p.lote_id or "—",
+            } for p in preparaciones], width="stretch", hide_index=True)
+            st.caption("Prevista = lo que debía salir según la fórmula. Obtenida = lo que salió de verdad.")
 
     with tab_corregir:
         if not reg.tandas:
@@ -1106,6 +1141,62 @@ def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
             avisar("success", f"Preparadas {_num(raciones)} raciones de '{nombre}' ({tanda.etiqueta()}, "
                               f"{tanda.coste_por_racion:.2f} €/ración).")
             st.session_state.elab_version = v + 1
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+
+def _preparar_base(inv: Inventario, rec: Recetario) -> None:
+    v = st.session_state.setdefault("base_version", 0)
+    nombre = st.selectbox("Elaboración base", [p.nombre for p in inv.bases()], key=f"base_preparar_{v}")
+    producto = inv.buscar_producto(nombre)
+    k = lambda campo: f"base_{campo}_{nombre}_{v}"
+    f = producto.formula
+    st.caption(
+        f"Fórmula: para {_num(f['cantidad'])} {producto.unidad} → "
+        + ", ".join(f"{_num(c)} {inv.buscar_producto(i).unidad if inv.buscar_producto(i) else ''} de {i}"
+                    for i, c in f["ingredientes"].items())
+    )
+    c1, c2, c3 = st.columns(3)
+    prevista = c1.number_input(f"Cantidad a preparar ({producto.unidad})", min_value=0.0, step=0.5, value=None,
+                               placeholder="0", key=k("prevista")) or 0.0
+    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"))
+    caducidad = c3.date_input("Caduca el", value=producto.caducidad_propuesta(fecha_prep),
+                              key=k(f"caducidad_{fecha_prep.isoformat()}"))
+    if producto.vida_util_dias is None:
+        st.caption(f"'{nombre}' no tiene vida útil: indica la caducidad a mano (puedes ponérsela en el Recetario).")
+    if prevista <= 0:
+        return
+    filas = rec.previsualizar_base(nombre, prevista, inv)
+    elecciones = _elegir_lotes(filas, inv, k("lote"))
+    filas = rec.previsualizar_base(nombre, prevista, inv, elecciones)
+    st.dataframe([{
+        "Ingrediente": fi["ingrediente"], "Necesario": f"{_num(fi['necesario'])} {fi['unidad']}",
+        "En stock": f"{_num(fi['en_stock'])} {fi['unidad']}" if fi["existe"] else "no existe",
+        "De qué lotes": _texto_reparto(fi),
+        "Falta": f"{_num(fi['faltante'])} {fi['unidad']}" if fi["faltante"] > 0 else "—",
+    } for fi in filas], width="stretch", hide_index=True)
+    if any(fi["faltante"] > 1e-9 or not fi["existe"] for fi in filas):
+        st.warning("No hay ingredientes suficientes para preparar tanto.")
+
+    obtenida = st.number_input(
+        f"¿Cuánto ha salido de verdad? ({producto.unidad})", min_value=0.0, step=0.1, value=None,
+        placeholder=_num(prevista), key=k("obtenida"),
+        help="Lo que ha salido realmente. Puede ser más o menos de lo previsto: queda apuntada la diferencia.",
+    )
+    if st.button("Preparar", type="primary", key=k("boton")):
+        if not obtenida:
+            st.error("Indica cuánto ha salido de verdad.")
+            return
+        if caducidad is None:
+            st.error("Indica la fecha de caducidad.")
+            return
+        try:
+            prep = rec.preparar_base(nombre, prevista, obtenida, inv, elecciones, caducidad, fecha_prep)
+            avisar("success", f"Preparado '{nombre}': previsto {_num(prevista)}, obtenido {_num(obtenida)} "
+                              f"{producto.unidad} (diferencia {prep.diferencia:+g}). Coste {prep.coste:.2f} € "
+                              f"({prep.coste_por_unidad:.2f} €/{producto.unidad}).")
+            st.session_state.base_version = v + 1
             st.rerun()
         except ValueError as e:
             st.error(str(e))
@@ -2091,9 +2182,12 @@ def pagina_recetario() -> None:
     inv = st.session_state.inventario
     rec = st.session_state.recetario
 
-    tab_recetas, tab_menus, tab_crear_receta, tab_crear_menu, tab_recomendar = st.tabs(
-        ["Recetas", "Menús", "➕ Crear receta", "➕ Crear menú", "🔥 Recomendador"]
+    tab_recetas, tab_menus, tab_crear_receta, tab_crear_menu, tab_bases, tab_recomendar = st.tabs(
+        ["Recetas", "Menús", "➕ Crear receta", "➕ Crear menú", "🧪 Elaboraciones base", "🔥 Recomendador"]
     )
+
+    with tab_bases:
+        _pestana_bases(inv)
 
     with tab_recetas:
         if not rec.recetas:
@@ -2232,6 +2326,95 @@ def pagina_recetario() -> None:
                     if exceso:
                         detalle = ", ".join(f"{p.nombre} ({p.stock} sobre mínimo {p.stock_minimo})" for p in exceso)
                         st.caption(f"📦 Por exceso de stock: {detalle}")
+
+
+def _editor_formula(inv: Inventario, clave: str, actuales: dict[str, float], excluir: str = "") -> dict[str, float]:
+    """Elegir los ingredientes de una elaboración base y cuánto lleva de cada uno (en su unidad)."""
+    disponibles = [p.nombre for p in inv.alimentos() if p.nombre != excluir]
+    elegidos = st.multiselect(
+        "Ingredientes", disponibles, default=[n for n in actuales if n in disponibles], key=f"{clave}_ingredientes",
+        help="Pueden ser otras elaboraciones base (un fondo dentro de una salsa).",
+    )
+    resultado = {}
+    for nombre in elegidos:
+        unidad = inv.buscar_producto(nombre).unidad
+        cantidad = st.number_input(
+            f"{nombre} ({unidad})", min_value=0.0, step=0.1,
+            value=float(actuales[nombre]) if nombre in actuales else None, placeholder="0",
+            key=f"{clave}_cant_{nombre}",
+        )
+        if cantidad:
+            resultado[nombre] = cantidad
+    return resultado
+
+
+def _pestana_bases(inv: Inventario) -> None:
+    st.caption(
+        "Sofritos, fondos, salsas, masas... Se preparan con una fórmula y entran en el inventario como un "
+        "alimento más (en Alimentos aparecen como 'Elaboración base'), así que las recetas pueden usarlas "
+        "como ingrediente. Se preparan en Inventario > 🥘 Elaboraciones."
+    )
+    bases = inv.bases()
+    if bases:
+        st.dataframe([{
+            "Elaboración": b.nombre, "Fórmula": f"para {_num(b.formula['cantidad'])} {b.unidad}",
+            "Ingredientes": ", ".join(f"{_num(c)} {inv.buscar_producto(i).unidad if inv.buscar_producto(i) else ''} {i}"
+                                      for i, c in b.formula["ingredientes"].items()),
+            "Vida útil": f"{b.vida_util_dias} día(s)" if b.vida_util_dias is not None else "—",
+            "En stock": f"{_num(b.stock)} {b.unidad}",
+            "Coste estimado (€/unidad)": f"{inv.coste_estimado_base(b.nombre):.2f}",
+        } for b in bases], width="stretch", hide_index=True)
+
+    modo = st.radio("¿Qué quieres hacer?", ("➕ Crear una nueva", "✏️ Editar una fórmula"), horizontal=True, key="base_modo",
+                    label_visibility="collapsed")
+    if modo.startswith("➕"):
+        if not inv.alimentos():
+            st.warning("No hay alimentos en el inventario. Añade productos primero.")
+            return
+        v = st.session_state.setdefault("base_nueva_version", 0)
+        k = lambda campo: f"base_nueva_{campo}_{v}"
+        c1, c2 = st.columns(2)
+        nombre = c1.text_input("Nombre (ej: Sofrito, Fondo oscuro)", key=k("nombre"))
+        categoria = c2.text_input("Categoría", value="Elaboraciones", key=k("categoria"))
+        c1, c2, c3, c4 = st.columns(4)
+        unidad = c1.selectbox("Unidad", ("kg", "g", "litros", "ml"), key=k("unidad"))
+        cantidad = c2.number_input(f"La fórmula da (en {unidad})", min_value=0.0, step=0.5, value=None,
+                                   placeholder="0", key=k("cantidad"),
+                                   help="Para cuánta cantidad son los ingredientes de abajo.")
+        vida = c3.number_input("Vida útil (días, 0 = sin indicar)", min_value=0, step=1, key=k("vida"))
+        minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.5, key=k("minimo"))
+        st.markdown("**Ingredientes** para esa cantidad")
+        ingredientes = _editor_formula(inv, k("formula"), {})
+        if st.button("Crear elaboración base", type="primary", key=k("crear")):
+            try:
+                inv.definir_base(nombre, categoria, unidad, cantidad or 0, ingredientes, int(vida) or None, minimo)
+                avisar("success", f"Elaboración base '{nombre.strip()}' creada. Prepárala en Inventario > 🥘 Elaboraciones.")
+                st.session_state.base_nueva_version = v + 1
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+    else:
+        if not bases:
+            st.info("Todavía no hay elaboraciones base.")
+            return
+        nombre = st.selectbox("Elaboración base", [b.nombre for b in bases], key="base_editar_select")
+        producto = inv.buscar_producto(nombre)
+        v = st.session_state.setdefault("base_editar_version", 0)
+        k = lambda campo: f"base_editar_{campo}_{nombre}_{v}"
+        c1, c2 = st.columns(2)
+        cantidad = c1.number_input(f"La fórmula da (en {producto.unidad})", min_value=0.0, step=0.5,
+                                   value=float(producto.formula["cantidad"]), key=k("cantidad"))
+        vida = c2.number_input("Vida útil (días, 0 = sin indicar)", min_value=0, step=1,
+                               value=producto.vida_util_dias or 0, key=k("vida"))
+        ingredientes = _editor_formula(inv, k("formula"), producto.formula["ingredientes"], excluir=nombre)
+        if st.button("Guardar fórmula", type="primary", key=k("guardar")):
+            try:
+                inv.editar_formula(nombre, cantidad, ingredientes, int(vida) or None)
+                avisar("success", f"Fórmula de '{nombre}' guardada.")
+                st.session_state.base_editar_version = v + 1
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
 
 
 # ---------- Página: Compras ----------

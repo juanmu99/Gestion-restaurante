@@ -91,6 +91,16 @@ def main() -> int:
                     page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario elaboraciones")), full_page=True)
                     print("📸 Inventario > Elaboraciones")
                     numero += 1
+                    page.get_by_text("Una elaboración base (kg / litros)", exact=True).first.click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario preparar base")), full_page=True)
+                    print("📸 Inventario > Elaboraciones > Preparar base")
+                    numero += 1
+                    page.get_by_role("tab", name="🧪 Preparaciones de bases").click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario preparaciones bases")), full_page=True)
+                    print("📸 Inventario > Preparaciones de bases")
+                    numero += 1
                     page.get_by_text("🍽️ Material", exact=True).first.click()
                     esperar(page)
                     page.screenshot(path=str(CARPETA / nombre_archivo(numero, "inventario material")), full_page=True)
@@ -122,6 +132,14 @@ def main() -> int:
                     print("📸 Recetario > Detalle de menú")
                 except Exception as e:  # noqa: BLE001
                     errores.append(f"Recetario > Detalle de menú: {e}")
+                numero += 1
+                try:
+                    page.get_by_role("tab", name="🧪 Elaboraciones base").click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "recetario bases")), full_page=True)
+                    print("📸 Recetario > Elaboraciones base")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Recetario > Elaboraciones base: {e}")
                 numero += 1
 
         navegador.close()

@@ -121,6 +121,33 @@ def _hoja_elaboraciones(wb: Workbook, inventario: Inventario) -> None:
     _ajustar_ancho_columnas(hoja)
 
 
+def _hoja_bases(wb: Workbook, inventario: Inventario) -> None:
+    """Elaboraciones base (sofritos, fondos...): su fórmula y cada preparación (prevista frente a obtenida)."""
+    hoja = wb.create_sheet("Elaboraciones base")
+    _escribir_cabecera(hoja, ["Elaboración", "Fórmula para", "Unidad", "Ingredientes", "Vida útil (días)", "En stock"])
+    fila = 2
+    for b in sorted(inventario.bases(), key=lambda b: b.nombre):
+        ingredientes = ", ".join(f"{c:g} {i}" for i, c in b.formula["ingredientes"].items())
+        valores = [b.nombre, b.formula["cantidad"], b.unidad, ingredientes,
+                   b.vida_util_dias if b.vida_util_dias is not None else "—", b.stock]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+
+    fila += 1
+    cabecera = ["Fecha", "Elaboración", "Unidad", "Prevista", "Obtenida", "Diferencia", "Coste (€)", "Coste/unidad (€)", "Lote"]
+    for columna, texto in enumerate(cabecera, start=1):
+        hoja.cell(row=fila, column=columna, value=texto).font = Font(name=FUENTE, bold=True)
+    fila += 1
+    for p in sorted(inventario.elaboraciones.preparaciones_base, key=lambda p: p.fecha):
+        valores = [p.fecha.strftime("%d/%m/%Y"), p.producto, p.unidad, p.prevista, p.obtenida, f"=E{fila}-D{fila}",
+                   p.coste, f"=IF(E{fila}=0,0,G{fila}/E{fila})", p.lote_id or "—"]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+    _ajustar_ancho_columnas(hoja)
+
+
 def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
     """Historial de limpiezas/despieces: de dónde sale cada kilo limpio y cuánta merma hubo."""
     hoja = wb.create_sheet("Limpiezas")
@@ -300,6 +327,7 @@ def exportar_todo(
     _hoja_inventario(wb, inventario)
     _hoja_lotes(wb, inventario)
     _hoja_elaboraciones(wb, inventario)
+    _hoja_bases(wb, inventario)
     _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)
