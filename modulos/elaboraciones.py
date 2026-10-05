@@ -117,6 +117,46 @@ class UsoTanda:
         )
 
 
+class PreparacionBase:
+    """
+    Registro de UNA preparación de una elaboración base: cuánto se pensaba
+    sacar con la fórmula, cuánto salió de verdad y cuánto costó.
+    """
+
+    def __init__(
+        self, producto: str, unidad: str, prevista: float, obtenida: float, coste: float,
+        lote_id: Optional[int] = None, fecha: Optional[date] = None,
+    ):
+        self.producto = producto
+        self.unidad = unidad
+        self.prevista = prevista
+        self.obtenida = obtenida
+        self.coste = round(coste, 2)
+        self.lote_id = lote_id
+        self.fecha = fecha or date.today()
+
+    @property
+    def diferencia(self) -> float:
+        return round(self.obtenida - self.prevista, 3)
+
+    @property
+    def coste_por_unidad(self) -> float:
+        return round(self.coste / self.obtenida, 4) if self.obtenida else 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "producto": self.producto, "unidad": self.unidad, "prevista": self.prevista, "obtenida": self.obtenida,
+            "coste": self.coste, "lote_id": self.lote_id, "fecha": self.fecha.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, datos: dict) -> "PreparacionBase":
+        return cls(
+            datos["producto"], datos["unidad"], datos["prevista"], datos["obtenida"], datos["coste"],
+            datos.get("lote_id"), date.fromisoformat(datos["fecha"]),
+        )
+
+
 def _clave_caducidad(tanda: Tanda) -> tuple:
     """Lo que caduca antes, primero; sin caducidad, al final."""
     return (tanda.fecha_caducidad is None, tanda.fecha_caducidad or date.max, tanda.id)
@@ -129,6 +169,8 @@ class RegistroElaboraciones:
         self.tandas: list[Tanda] = []  # solo las que tienen raciones
         self.usos: list[UsoTanda] = []
         self.siguiente_id = 1
+        # Historial de preparaciones de elaboraciones BASE (previsto/obtenido).
+        self.preparaciones_base: list[PreparacionBase] = []
 
     def nueva_tanda(
         self, receta: str, raciones: float, coste_por_racion: float,
@@ -248,6 +290,7 @@ class RegistroElaboraciones:
             "tandas": [t.to_dict() for t in self.tandas],
             "usos": [u.to_dict() for u in self.usos],
             "siguiente_id": self.siguiente_id,
+            "preparaciones_base": [p.to_dict() for p in self.preparaciones_base],
         }
 
     @classmethod
@@ -256,4 +299,5 @@ class RegistroElaboraciones:
         registro.tandas = [Tanda.from_dict(d) for d in datos.get("tandas", [])]
         registro.usos = [UsoTanda.from_dict(d) for d in datos.get("usos", [])]
         registro.siguiente_id = datos.get("siguiente_id", 1)
+        registro.preparaciones_base = [PreparacionBase.from_dict(d) for d in datos.get("preparaciones_base", [])]
         return registro

@@ -132,14 +132,44 @@ class GestorCompras:
                     necesidades_acumuladas.get(ingrediente, 0) + cantidad, 3
                 )
 
-        # --- Paso 2: productos limpios y subproductos ---
+        # --- Paso 1b: elaboraciones BASE (sofritos, fondos...) ---
+        # Lo que falta de una base no se compra: se prepara. Se compran sus
+        # ingredientes. Se repite hasta que no cambie nada, porque una base
+        # puede llevar otra base dentro (un fondo dentro de una salsa).
         no_se_compran: set[str] = set()
+        expandido: dict[str, float] = {}  # cuánto de cada base ya se ha convertido en ingredientes
+        for _ in range(50):  # las fórmulas no pueden ir en círculo; esto es solo un seguro
+            cambio = False
+            for ingrediente in list(necesidades_acumuladas):
+                producto = inventario.buscar_producto(ingrediente)
+                if producto is None or not producto.es_base():
+                    continue
+                faltante = round(
+                    necesidades_acumuladas[ingrediente] - producto.stock - expandido.get(ingrediente, 0), 3
+                )
+                if faltante <= 1e-9:
+                    continue
+                no_se_compran.add(ingrediente)
+                expandido[ingrediente] = round(expandido.get(ingrediente, 0) + faltante, 3)
+                for otro, cantidad in producto.ingredientes_para(faltante).items():
+                    necesidades_acumuladas[otro] = round(necesidades_acumuladas.get(otro, 0) + cantidad, 3)
+                cambio = True
+            if not cambio:
+                break
+        for base, cantidad in expandido.items():
+            producto = inventario.buscar_producto(base)
+            avisos.append(
+                f"Faltan {cantidad:g} {producto.unidad} de '{base}' (elaboración base): hay que prepararlo, "
+                f"así que se compran sus ingredientes ({', '.join(producto.formula['ingredientes'])})."
+            )
+
+        # --- Paso 2: productos limpios y subproductos ---
         for ingrediente in list(necesidades_acumuladas):
             producto = inventario.buscar_producto(ingrediente)
             if producto is None:
                 continue
             faltante = necesidades_acumuladas[ingrediente] - producto.stock
-            if faltante <= 1e-9:
+            if faltante <= 1e-9 or ingrediente in no_se_compran:
                 continue
 
             if producto.es_subproducto:

@@ -12,7 +12,7 @@ Conceptos de Python nuevos que usamos aquí:
 - `typing.Optional` para indicar que un dato puede ser None
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from elaboraciones import RegistroElaboraciones
@@ -81,7 +81,9 @@ class MovimientoStock:
     # "elaboración" tampoco: son los ingredientes que se gastan al preparar
     # una receta por adelantado (ver elaboraciones.py).
     MOTIVOS_SALIDA_VALIDOS = MOTIVOS_SALIDA + ("limpieza", "elaboración")
-    MOTIVOS_ENTRADA = ("compra", "limpieza")
+    # "elaboración" (entrada): lo que sale de preparar una elaboración base
+    # (un sofrito, un fondo...). No es una compra: no cuenta como gasto.
+    MOTIVOS_ENTRADA = ("compra", "limpieza", "elaboración")
 
     def __init__(
         self,
@@ -196,7 +198,7 @@ class Lote:
 
     # De dónde vino el lote: una compra, una limpieza, o el stock con el
     # que se dio de alta el producto (o que ya había antes de existir los lotes).
-    PROCEDENCIAS = ("compra", "limpieza", "inicial")
+    PROCEDENCIAS = ("compra", "limpieza", "inicial", "elaboración")
 
     def __init__(
         self,
@@ -331,6 +333,8 @@ class Producto:
         lotes: Optional[list[Lote]] = None,
         siguiente_lote: int = 1,
         tipo: str = "alimento",
+        formula: Optional[dict] = None,
+        vida_util_dias: Optional[int] = None,
     ):
         """
         `stock`, `precio_unitario`, `fecha_caducidad` y `peso_unitario` son
@@ -378,6 +382,12 @@ class Producto:
         _validar_merma(unidad, tiene_merma, peso_unitario)
         if (origen or es_subproducto) and unidad not in UNIDADES_PESO:
             raise ValueError("Un producto obtenido de una limpieza debe medirse en kg o g.")
+        if formula is not None:
+            _validar_formula(nombre, unidad, formula)
+            if tipo != "alimento" or tiene_merma or origen or es_subproducto:
+                raise ValueError("Una elaboración base es un alimento sin merma que no sale de una limpieza.")
+        if vida_util_dias is not None and vida_util_dias < 0:
+            raise ValueError("La vida útil no puede ser negativa.")
 
         self.nombre = nombre
         self.tipo = tipo
@@ -394,6 +404,13 @@ class Producto:
         self.es_subproducto = es_subproducto
         self.lotes: list[Lote] = lotes if lotes is not None else []
         self.siguiente_lote = siguiente_lote
+        # ELABORACIÓN BASE (sofrito, fondo, salsa, masa...): en vez de
+        # comprarse, se prepara a partir de otros productos. `formula` dice
+        # con qué: {"cantidad": 2, "ingredientes": {"Cebolla": 2.5, ...}} =
+        # "para 2 kg de sofrito hacen falta 2,5 kg de cebolla...".
+        self.formula = formula
+        # Días que dura una vez preparada (para proponer su caducidad).
+        self.vida_util_dias = vida_util_dias
 
         if lotes is None and stock > 0:
             self.nuevo_lote(stock, precio_unitario, proveedor, fecha_caducidad, peso_unitario, "inicial")
@@ -483,10 +500,29 @@ class Producto:
             return cantidad * peso
         return convertir(cantidad, self.unidad, "kg")
 
+    def es_base(self) -> bool:
+        """True si es una elaboración base (se prepara con una fórmula, no se compra)."""
+        return self.formula is not None
+
+    def ingredientes_para(self, cantidad: float) -> dict[str, float]:
+        """Los ingredientes de la fórmula para preparar `cantidad` (en la unidad de este producto)."""
+        if not self.es_base():
+            return {}
+        factor = cantidad / self.formula["cantidad"]
+        return {i: round(c * factor, 3) for i, c in self.formula["ingredientes"].items()}
+
+    def caducidad_propuesta(self, fecha_preparacion: Optional[date] = None) -> Optional[date]:
+        """Para una elaboración base: la fecha de preparación + su vida útil (None si no se sabe)."""
+        if self.vida_util_dias is None:
+            return None
+        return (fecha_preparacion or date.today()) + timedelta(days=self.vida_util_dias)
+
     def tipo_descripcion(self) -> str:
         """Etiqueta corta para listados: qué papel tiene este producto respecto a la merma."""
         if self.es_consumible():
             return ""
+        if self.es_base():
+            return "Elaboración base"
         if self.es_subproducto:
             return "Subproducto"
         if self.origen:
@@ -553,6 +589,8 @@ class Producto:
             "es_subproducto": self.es_subproducto,
             "lotes": [l.to_dict() for l in self.lotes],
             "siguiente_lote": self.siguiente_lote,
+            "formula": self.formula,
+            "vida_util_dias": self.vida_util_dias,
         }
 
     @classmethod
@@ -582,6 +620,8 @@ class Producto:
             es_subproducto=datos.get("es_subproducto", False),
             # Las sesiones anteriores a los consumibles solo tenían alimentos.
             tipo=datos.get("tipo", "alimento"),
+            formula=datos.get("formula"),
+            vida_util_dias=datos.get("vida_util_dias"),
         )
         if "lotes" in datos:
             return cls(
@@ -598,6 +638,20 @@ class Producto:
             fecha_caducidad=date.fromisoformat(fecha) if fecha else None,
             **comun,
         )
+
+
+def _validar_formula(nombre: str, unidad: str, formula: dict) -> None:
+    """Reglas de la fórmula de una elaboración base."""
+    if unidad not in ("kg", "g", "litros", "ml"):
+        raise ValueError("Una elaboración base se mide en kg, g, litros o ml.")
+    if not isinstance(formula, dict) or formula.get("cantidad", 0) <= 0:
+        raise ValueError("Indica cuánto sale con la fórmula (más de 0).")
+    ingredientes = {n: c for n, c in formula.get("ingredientes", {}).items() if c > 0}
+    if not ingredientes:
+        raise ValueError("La fórmula necesita al menos un ingrediente.")
+    if nombre in ingredientes:
+        raise ValueError("Una elaboración base no puede llevarse a sí misma.")
+    formula["ingredientes"] = ingredientes
 
 
 def _validar_merma(unidad: str, tiene_merma: bool, peso_unitario: Optional[float]) -> None:
@@ -1281,6 +1335,10 @@ class Inventario:
             if producto.origen or producto.es_subproducto:
                 raise ValueError("Este producto sale de una limpieza: no puede ser un consumible.")
             merma_final = False
+        if producto.es_base() and (tipo_final == "consumible" or merma_final):
+            raise ValueError("Una elaboración base es un alimento sin merma.")
+        if tipo_final == "consumible" and any(nombre_actual in b.formula["ingredientes"] for b in self.bases()):
+            raise ValueError("Este producto es ingrediente de una elaboración base: no puede ser un consumible.")
         peso_final = peso_unitario if peso_unitario is not None else producto.peso_unitario
         _validar_merma(producto.unidad, merma_final, peso_final)
 
@@ -1336,6 +1394,99 @@ class Inventario:
         for m in self.historial:
             if m.producto_nombre == antiguo:
                 m.producto_nombre = nuevo
+        for p in self.productos.values():
+            if p.es_base() and antiguo in p.formula["ingredientes"]:
+                p.formula["ingredientes"] = {(nuevo if n == antiguo else n): c for n, c in p.formula["ingredientes"].items()}
+        for prep in self.elaboraciones.preparaciones_base:
+            if prep.producto == antiguo:
+                prep.producto = nuevo
+
+    # ---------- Elaboraciones base (sofritos, fondos, salsas...) ----------
+
+    def bases(self) -> list[Producto]:
+        return [p for p in self.productos.values() if p.es_base()]
+
+    def _lleva(self, nombre_base: str, buscado: str, vistos: Optional[set] = None) -> bool:
+        """True si la fórmula de `nombre_base` lleva `buscado`, directamente o dentro de otra base."""
+        vistos = vistos or set()
+        producto = self.productos.get(nombre_base)
+        if producto is None or not producto.es_base() or nombre_base in vistos:
+            return False
+        vistos.add(nombre_base)
+        for ingrediente in producto.formula["ingredientes"]:
+            if ingrediente == buscado or self._lleva(ingrediente, buscado, vistos):
+                return True
+        return False
+
+    def _comprobar_formula(self, nombre: str, formula: dict) -> None:
+        for ingrediente in formula["ingredientes"]:
+            producto = self.productos.get(ingrediente)
+            if producto is None:
+                raise ValueError(f"'{ingrediente}' no existe en el inventario.")
+            if producto.es_consumible():
+                raise ValueError(f"'{ingrediente}' es un consumible: no puede ser ingrediente.")
+            if ingrediente == nombre or self._lleva(ingrediente, nombre):
+                raise ValueError(f"'{ingrediente}' ya lleva '{nombre}': las fórmulas no pueden ir en círculo.")
+
+    def definir_base(
+        self, nombre: str, categoria: str, unidad: str, cantidad: float, ingredientes: dict[str, float],
+        vida_util_dias: Optional[int] = None, stock_minimo: float = 0,
+    ) -> Producto:
+        """
+        Da de alta una elaboración base nueva (con stock 0): un producto que
+        se prepara con una fórmula ("para `cantidad` hacen falta estos
+        `ingredientes`"). Las recetas pueden usarla como cualquier ingrediente.
+        """
+        nombre = nombre.strip()
+        if not nombre:
+            raise ValueError("Ponle un nombre a la elaboración base.")
+        if nombre in self.productos:
+            raise ValueError(f"Ya existe un producto llamado '{nombre}'.")
+        formula = {"cantidad": cantidad, "ingredientes": dict(ingredientes)}
+        producto = Producto(
+            nombre, categoria, 0, unidad, 0, "Elaboración propia", stock_minimo,
+            formula=formula, vida_util_dias=vida_util_dias,
+        )
+        self._comprobar_formula(nombre, producto.formula)
+        self.agregar_producto(producto)
+        return producto
+
+    def editar_formula(
+        self, nombre: str, cantidad: float, ingredientes: dict[str, float], vida_util_dias: Optional[int] = None,
+    ) -> None:
+        """Cambia la fórmula (y la vida útil) de una elaboración base."""
+        producto = self.productos.get(nombre)
+        if producto is None or not producto.es_base():
+            raise ValueError(f"'{nombre}' no es una elaboración base.")
+        formula = {"cantidad": cantidad, "ingredientes": dict(ingredientes)}
+        _validar_formula(nombre, producto.unidad, formula)
+        self._comprobar_formula(nombre, formula)
+        if vida_util_dias is not None and vida_util_dias < 0:
+            raise ValueError("La vida útil no puede ser negativa.")
+        producto.formula = formula
+        producto.vida_util_dias = vida_util_dias
+        print(f"✏️  Fórmula de '{nombre}' actualizada.")
+
+    def coste_estimado_base(self, nombre: str, cantidad: float = 1, vistos: Optional[set] = None) -> float:
+        """
+        Lo que costaría preparar `cantidad` de una elaboración base con los
+        precios actuales. Si un ingrediente es otra base sin stock, se estima
+        con SU fórmula.
+        """
+        vistos = vistos or set()
+        producto = self.productos.get(nombre)
+        if producto is None or not producto.es_base() or nombre in vistos:
+            return 0.0
+        total = 0.0
+        for ingrediente, c in producto.ingredientes_para(cantidad).items():
+            otro = self.productos.get(ingrediente)
+            if otro is None:
+                continue
+            if otro.es_base() and otro.stock <= 0:
+                total += self.coste_estimado_base(ingrediente, c, vistos | {nombre})
+            else:
+                total += c * otro.precio_unitario
+        return round(total, 4)
 
     def buscar_producto(self, nombre: str) -> Optional[Producto]:
         return self.productos.get(nombre)

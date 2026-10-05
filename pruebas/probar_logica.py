@@ -566,6 +566,80 @@ comprobar(len(copia.elaboraciones.tandas) == 1 and copia.elaboraciones.tandas[0]
           and len(copia.elaboraciones.usos) == len(inv.elaboraciones.usos),
           "Las tandas y sus usos se guardan y se cargan")
 
+print("\n--- Elaboraciones base (sofritos, fondos, salsas...) ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Cebolla", "Verduras", 4, "kg", 1.5, "Huerta", fecha_caducidad=HOY + timedelta(days=10)))
+silencio(inv.agregar_producto, Producto("Aceite", "Despensa", 5, "litros", 4, "Mayorista"))
+silencio(inv.agregar_producto, Producto("Huesos", "Carnes", 3, "kg", 2, "Carnicería", fecha_caducidad=HOY + timedelta(days=4)))
+silencio(inv.agregar_producto, Producto("Servilletas", "Mesa", 100, "unidades", 0.05, "Mayorista", tipo="consumible"))
+sofrito = silencio(inv.definir_base, "Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 1.5, "Aceite": 0.1}, vida_util_dias=4)
+comprobar(sofrito.es_base() and sofrito.stock == 0 and sofrito.tipo_descripcion() == "Elaboración base"
+          and sofrito in inv.alimentos(), "Una elaboración base es un alimento más, con su fórmula y stock 0")
+comprobar(sofrito.ingredientes_para(2) == {"Cebolla": 3, "Aceite": 0.2}, "La fórmula se escala a la cantidad que se prepara")
+for malos, motivo in (
+    ({"Patata": 1}, "un ingrediente que no existe"),
+    ({"Servilletas": 1}, "un consumible"),
+    ({"Sofrito": 1}, "a sí misma"),
+):
+    try:
+        silencio(inv.editar_formula, "Sofrito", 1, malos)
+        comprobar(False, f"La fórmula no admite {motivo}")
+    except ValueError:
+        comprobar(inv.buscar_producto("Sofrito").formula["ingredientes"] == {"Cebolla": 1.5, "Aceite": 0.1},
+                  f"La fórmula no admite {motivo} (y no cambia nada)")
+salsa = silencio(inv.definir_base, "Salsa", "Elaboraciones", "litros", 2, {"Sofrito": 0.5, "Huesos": 1})
+try:
+    silencio(inv.editar_formula, "Sofrito", 1, {"Cebolla": 1.5, "Salsa": 0.2})
+    comprobar(False, "Las fórmulas no pueden ir en círculo")
+except ValueError:
+    comprobar(True, "Las fórmulas no pueden ir en círculo (Sofrito lleva Salsa, que lleva Sofrito)")
+
+try:
+    recetario = Recetario()
+    recetario.preparar_base("Sofrito", 10, 9, inv)  # 15 kg de cebolla: solo hay 4
+    comprobar(False, "Sin ingredientes suficientes no se prepara la base")
+except ValueError as e:
+    comprobar("Cebolla" in str(e) and sofrito.stock == 0, "Sin ingredientes suficientes no se prepara la base")
+prep = silencio(recetario.preparar_base, "Sofrito", 2, 1.6, inv, {"Cebolla": [1], "Aceite": [1]})
+comprobar(inv.buscar_producto("Cebolla").stock == 1 and abs(inv.buscar_producto("Aceite").stock - 4.8) < 1e-9,
+          "Preparar 2 kg gasta lo que pide la fórmula (3 kg de cebolla, 0,2 l de aceite)")
+comprobar(sofrito.stock == 1.6 and prep.prevista == 2 and prep.obtenida == 1.6 and prep.diferencia == -0.4,
+          "Entra lo que salió DE VERDAD (1,6 kg) y queda apuntado: previsto 2, obtenido 1,6, diferencia -0,4")
+lote = sofrito.lotes[0]
+comprobar(lote.procedencia == "elaboración" and lote.fecha_caducidad == HOY + timedelta(days=4)
+          and abs(lote.precio_unitario - (3 * 1.5 + 0.2 * 4) / 1.6) < 1e-3 and prep.coste == 5.3,
+          "El lote del sofrito tiene su caducidad (vida útil 4 días) y su coste real (5,30 € / 1,6 kg)")
+comprobar(Metricas(inv).gasto_por_categoria(HOY, HOY).get("Elaboraciones", 0) == 0,
+          "Preparar una base no cuenta como compra (no es dinero gastado)")
+silencio(inv.editar_producto, "Cebolla", "Cebolla blanca")
+comprobar(sofrito.formula["ingredientes"] == {"Cebolla blanca": 1.5, "Aceite": 0.1},
+          "Al renombrar un ingrediente, la fórmula de la base se actualiza")
+copia = Inventario.from_dict(inv.to_dict())
+comprobar(copia.buscar_producto("Sofrito").es_base() and copia.buscar_producto("Sofrito").vida_util_dias == 4
+          and len(copia.elaboraciones.preparaciones_base) == 1
+          and copia.elaboraciones.preparaciones_base[0].obtenida == 1.6,
+          "Las bases, sus fórmulas y sus preparaciones se guardan y se cargan")
+
+# Lista de la compra: un plato con salsa (que lleva sofrito, que lleva cebolla)
+rec = Recetario()
+guiso = Receta("Guiso", "Principales", {"Salsa": 0.1})
+silencio(rec.agregar_receta, guiso)
+silencio(rec.agregar_menu, Menu("Menú guiso", [guiso]))
+serv = Servicio(HOY + timedelta(days=2), time(14, 0), 40, "Menú guiso")
+compras = GestorCompras()
+avisos = silencio(compras.generar_lista_desde_servicios, [serv], rec, inv)
+pedidos = {i.ingrediente: i.cantidad for i in compras.items_pendientes()}
+# 4 l de salsa -> 1 kg de sofrito (hay 1,6: no falta) + 2 kg de huesos (hay 3: no falta)
+comprobar(pedidos == {} and any("Salsa" in a for a in avisos),
+          "Si falta una base, la lista pide sus ingredientes (aquí hay de todo: no se compra nada)")
+serv.comensales = 200  # 20 l de salsa -> 5 kg de sofrito (faltan 3,4) y 10 kg de huesos
+silencio(compras.generar_lista_desde_servicios, [serv], rec, inv)
+pedidos = {i.ingrediente: i.cantidad for i in compras.items_pendientes()}
+nombre_cebolla = "Cebolla blanca"
+comprobar("Salsa" not in pedidos and "Sofrito" not in pedidos and pedidos.get("Huesos") == 7
+          and abs(pedidos.get(nombre_cebolla, 0) - (3.4 * 1.5 - 1)) < 1e-6,
+          "Bases dentro de bases: no se compran salsa ni sofrito, sino huesos (7 kg) y la cebolla que falta (4,1 kg)")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

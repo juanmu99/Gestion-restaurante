@@ -21,6 +21,7 @@ import copy
 from datetime import date, timedelta
 from typing import Optional
 
+from elaboraciones import PreparacionBase
 from inventario import Inventario
 from servicios import Servicio
 
@@ -532,6 +533,69 @@ class Recetario:
         return inventario.elaboraciones.nueva_tanda(
             nombre_receta, raciones, round(coste / raciones, 4), fecha_caducidad, fecha_preparacion,
         )
+
+    # ---------- Elaboraciones BASE (sofritos, fondos, salsas, masas...) ----------
+
+    def previsualizar_base(
+        self, nombre_base: str, cantidad: float, inventario: Inventario,
+        elecciones: Optional[dict[str, list[int]]] = None,
+    ) -> list[dict]:
+        """Qué ingredientes (y de qué lotes) se gastarían al preparar `cantidad` de una elaboración base."""
+        producto = inventario.buscar_producto(nombre_base)
+        if producto is None or not producto.es_base():
+            raise ValueError(f"'{nombre_base}' no es una elaboración base.")
+        return self.filas_necesidades(producto.ingredientes_para(cantidad), inventario, elecciones)
+
+    def preparar_base(
+        self, nombre_base: str, cantidad_prevista: float, cantidad_obtenida: float, inventario: Inventario,
+        elecciones: Optional[dict[str, list[int]]] = None, fecha_caducidad: Optional[date] = None,
+        fecha_preparacion: Optional[date] = None,
+    ):
+        """
+        Prepara una elaboración base (un sofrito, un fondo...):
+        1. Saca de los lotes elegidos los ingredientes que pide la fórmula
+           para `cantidad_prevista` (motivo "elaboración").
+        2. Mete en el inventario lo que salió DE VERDAD (`cantidad_obtenida`)
+           como un lote nuevo de la base, con su caducidad y su coste real
+           (lo que costaron los ingredientes / lo obtenido).
+        3. Apunta la preparación (prevista, obtenida, diferencia y coste).
+        Comprueba todo antes de tocar nada. Devuelve el registro creado.
+        """
+        if cantidad_prevista <= 0:
+            raise ValueError("La cantidad a preparar debe ser más de 0.")
+        if cantidad_obtenida is None or cantidad_obtenida <= 0:
+            raise ValueError("Indica cuánto ha salido de verdad (más de 0).")
+        producto = inventario.buscar_producto(nombre_base)
+        filas = self.previsualizar_base(nombre_base, cantidad_prevista, inventario, elecciones)
+        faltan = [f"{f['ingrediente']} ({f['faltante']:g} {f['unidad']})" if f["existe"] else f"{f['ingrediente']} (no existe)"
+                  for f in filas if f["faltante"] > 1e-9 or not f["existe"]]
+        if faltan:
+            raise ValueError("No hay ingredientes suficientes. Falta: " + ", ".join(faltan))
+        pendientes = [f["ingrediente"] for f in filas if f["sin_asignar"] > 1e-9]
+        if pendientes:
+            raise ValueError(
+                "Los lotes elegidos no cubren lo que hace falta de: " + ", ".join(pendientes)
+                + ". Elige de qué otro lote sale lo que falta."
+            )
+        coste = 0.0
+        for f in filas:
+            ingrediente = inventario.buscar_producto(f["ingrediente"])
+            coste += sum(ingrediente.buscar_lote(lote_id).precio_unitario * c for lote_id, c in f["reparto"])
+        for f in filas:
+            inventario.salida_repartida(f["ingrediente"], f["reparto"], "elaboración")
+        fecha_preparacion = fecha_preparacion or date.today()
+        if fecha_caducidad is None:
+            fecha_caducidad = producto.caducidad_propuesta(fecha_preparacion)
+        lote = inventario.entrada_stock(
+            nombre_base, cantidad_obtenida, round(coste / cantidad_obtenida, 4), "Elaboración propia",
+            fecha_caducidad, motivo="elaboración",
+        )
+        registro = PreparacionBase(
+            nombre_base, producto.unidad, cantidad_prevista, cantidad_obtenida, coste,
+            lote.id if lote else None, fecha_preparacion,
+        )
+        inventario.elaboraciones.preparaciones_base.append(registro)
+        return registro
 
     # ---------- Completar un servicio ----------
 
