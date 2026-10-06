@@ -283,8 +283,9 @@ def pedir_lote(producto, mensaje: str, lotes: Optional[list] = None, sugerir: bo
 
 
 def listar_inventario() -> None:
-    """Lista el inventario en dos bloques separados: alimentos y consumibles."""
-    for titulo, productos in (("🍅 ALIMENTOS", inventario.alimentos()), ("🧻 CONSUMIBLES", inventario.consumibles())):
+    """Lista el inventario en bloques separados: alimentos, consumibles y limpieza y mantenimiento."""
+    for titulo, productos in (("🍅 ALIMENTOS", inventario.alimentos()), ("🧻 CONSUMIBLES", inventario.consumibles()),
+                              ("🧽 LIMPIEZA Y MANTENIMIENTO", inventario.mantenimiento())):
         print(f"\n{titulo}")
         if not productos:
             print("   (ninguno)")
@@ -350,7 +351,7 @@ def menu_inventario():
             proveedor = pedir_texto_no_numerico("Proveedor habitual: ")
             stock_minimo = pedir_numero("Stock mínimo: ")
             fecha_caducidad = None
-            if tipo == "alimento" and stock > 0 and pedir_si_no("¿Este primer lote tiene fecha de caducidad?"):
+            if tipo != "consumible" and stock > 0 and pedir_si_no("¿Este primer lote tiene fecha de caducidad?"):
                 fecha_caducidad = pedir_fecha("Fecha de caducidad")
             try:
                 inventario.agregar_producto(Producto(
@@ -380,7 +381,15 @@ def menu_inventario():
                 lote = pedir_lote(producto, "¿De qué lote sale?")
                 cantidad = pedir_numero(f"Cantidad (hay {lote.cantidad} {producto.unidad} en el lote {lote.id}): ")
                 motivo = pedir_opcion("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA)
-                inventario.salida_stock(nombre, cantidad, motivo, lote.id)
+                servicio_id = None
+                if producto.es_mantenimiento() and motivo == "consumo" and pedir_si_no(
+                    "¿Es para un servicio concreto? (si no, cuenta como gasto general)"
+                ):
+                    servicio_id = pedir_entero("Nº de servicio: ")
+                    if registro_servicios.buscar_por_id(servicio_id) is None:
+                        print("⚠️  No existe ese servicio: se apunta como gasto general.")
+                        servicio_id = None
+                inventario.salida_stock(nombre, cantidad, motivo, lote.id, servicio_id=servicio_id)
         elif opcion == "4":
             productos = inventario.productos_bajo_minimo()
             print("✅ Ningún producto bajo mínimo." if not productos else "")
@@ -414,7 +423,7 @@ def menu_inventario():
                 # de verdad más abajo, pero solo si el renombrado en el
                 # inventario tiene éxito (podría abortarse, por ejemplo,
                 # si el nombre nuevo ya lo usa otro producto).
-                tipo = pedir_texto(f"Tipo (alimento/consumible) [{producto.tipo}]: ").lower() or None
+                tipo = pedir_texto(f"Tipo (alimento/consumible/mantenimiento) [{producto.tipo}]: ").lower() or None
                 if tipo is not None and tipo not in Producto.TIPOS:
                     print("⚠️  Tipo no válido, se mantiene el actual.")
                     tipo = None
@@ -425,7 +434,7 @@ def menu_inventario():
 
                 tiene_merma = None
                 peso_unitario = None
-                if producto.unidad in UNIDADES_PESO + ("unidades",) and not es_consumible:
+                if producto.unidad in UNIDADES_PESO + ("unidades",) and (tipo or producto.tipo) == "alimento":
                     actual = "sí" if producto.tiene_merma else "no"
                     tiene_merma = pedir_si_no_opcional(f"¿Producto con merma? [actual: {actual}]")
                     merma_final = producto.tiene_merma if tiene_merma is None else tiene_merma
@@ -976,7 +985,7 @@ def pedir_formula(excluir: str = "") -> dict[str, float]:
         if ing == "":
             return ingredientes
         producto = inventario.buscar_producto(ing)
-        if producto is None or producto.es_consumible() or producto.nombre == excluir:
+        if producto is None or not producto.es_alimento() or producto.nombre == excluir:
             print(f"⚠️  '{ing}' no vale: debe ser un alimento del inventario (nombre exacto).")
             continue
         ingredientes[producto.nombre] = pedir_numero(f"  Cantidad de {producto.nombre} ({producto.unidad}): ")
@@ -1099,8 +1108,8 @@ def menu_recetario():
                 if producto is None:
                     print(f"⚠️  '{ing}' no existe en el inventario. Revisa el nombre exacto o añádelo primero.")
                     continue
-                if producto.es_consumible():
-                    print(f"⚠️  '{ing}' es un consumible: los consumibles se añaden al menú, no a la receta.")
+                if not producto.es_alimento():
+                    print(f"⚠️  '{ing}' no es un alimento: los consumibles se añaden al menú, no a la receta.")
                     continue
                 ingredientes[producto.nombre] = pedir_cantidad_ingrediente(producto)
             vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
@@ -1181,9 +1190,8 @@ def menu_compras():
             dias = pedir_entero("¿Servicios de cuántos días hacia adelante? ")
             servicios = registro_servicios.servicios_proximos(dias)
             if not servicios:
-                print("No hay servicios próximos en ese rango.")
-            else:
-                gestor_compras.generar_lista_desde_servicios(servicios, recetario, inventario)
+                print("No hay servicios próximos en ese rango (se revisa igualmente la limpieza y el mantenimiento).")
+            gestor_compras.generar_lista_desde_servicios(servicios, recetario, inventario)
         elif opcion == "2":
             gestor_compras.mostrar_lista_por_proveedor()
         elif opcion == "3":
@@ -1301,6 +1309,14 @@ def accion_cargar_datos_ejemplo():
         tipo="consumible",
     ))
 
+    # Limpieza y mantenimiento (las bayetas, por debajo del mínimo).
+    inventario.agregar_producto(Producto(
+        "Lejía", "Limpieza", 4, "litros", 1.1, "Droguería Central", stock_minimo=2, tipo="mantenimiento",
+        fecha_caducidad=hoy + timedelta(days=180),
+    ))
+    inventario.agregar_producto(Producto(
+        "Bayetas", "Limpieza", 6, "unidades", 0.6, "Droguería Central", stock_minimo=10, tipo="mantenimiento",
+    ))
     registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=3), time(21, 0), 8, "Menú del día"))
     registro_servicios.agregar_servicio(Servicio(hoy + timedelta(days=16), time(21, 0), 12, "Menú de bodas"))
 
@@ -1508,7 +1524,8 @@ def menu_gastos():
                 porcentaje = f" ({r['margen_porcentaje']:.0%})" if r["margen_porcentaje"] is not None else ""
                 print(
                     f"#{s.id} {s.fecha.strftime('%d/%m/%Y')} {s.menu}: coste {texto_euros(r['coste_total'])}{estimado} "
-                    f"[comida {r['comida']:.2f} + consumibles {r['consumibles']:.2f} + gastos {r['gastos']:.2f} "
+                    f"[comida {r['comida']:.2f} + consumibles {r['consumibles']:.2f} + limpieza y mant. "
+                    f"{r['mantenimiento']:.2f} + gastos {r['gastos']:.2f} "
                     f"+ material roto/perdido {r['material']:.2f}] | "
                     f"cobro {texto_euros(r['cobrado'])} | margen {texto_euros(r['margen'])}{porcentaje}"
                 )

@@ -229,7 +229,7 @@ comprobar(inv.historial[-1].tipo_producto in ("alimento", "consumible")
           and any(m.tipo_producto == "consumible" and m.motivo == "consumo" for m in inv.historial),
           "El historial sabe qué movimientos son de consumibles")
 gasto = Metricas(inv).gasto_por_tipo(HOY, HOY)
-comprobar(gasto == {"alimento": 0, "consumible": 2.0}, f"El gasto se separa en alimentos y consumibles ({gasto})")
+comprobar(gasto == {"alimento": 0, "consumible": 2.0, "mantenimiento": 0}, f"El gasto se separa en alimentos y consumibles ({gasto})")
 
 gestor = GestorCompras()
 grande = Servicio(HOY + timedelta(days=1), time(14, 0), 200, "Picnic")
@@ -686,6 +686,63 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar("Croquetas" in valores and "Bechamel del día anterior." in valores and "Para eventos de pie." in valores
               and "Pochar sin dorar." in bases,
               "El Excel tiene la hoja 'Recetario' con recetas, menús y notas, y las notas de las bases")
+
+print("\n--- Limpieza y mantenimiento ---")
+from gastos import RegistroGastos as _RG, resumen_servicio as _resumen  # noqa: E402
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Cebolla", "Verduras", 5, "kg", 1, "Huerta"))
+silencio(inv.agregar_producto, Producto("Lejía", "Limpieza", 4, "litros", 1.5, "Droguería", stock_minimo=2,
+                                        tipo="mantenimiento", fecha_caducidad=HOY + timedelta(days=90)))
+silencio(inv.agregar_producto, Producto("Bayetas", "Limpieza", 6, "unidades", 0.5, "Droguería", stock_minimo=10,
+                                        tipo="mantenimiento"))
+lejia = inv.buscar_producto("Lejía")
+comprobar(inv.mantenimiento() == [lejia, inv.buscar_producto("Bayetas")] and lejia not in inv.alimentos()
+          and lejia not in inv.consumibles() and lejia.fecha_caducidad == HOY + timedelta(days=90),
+          "Los productos de limpieza y mantenimiento van en su propia lista y pueden tener caducidad")
+try:
+    Producto("Estropajo", "Limpieza", 1, "kg", 1, "Droguería", tipo="mantenimiento", tiene_merma=True)
+    comprobar(False, "No pueden tener merma")
+except ValueError:
+    comprobar(True, "No pueden tener merma")
+try:
+    silencio(inv.definir_base, "Caldo raro", "Elaboraciones", "litros", 1, {"Lejía": 0.1})
+    comprobar(False, "No pueden ser ingrediente")
+except ValueError:
+    comprobar("Caldo raro" not in inv.productos, "No pueden ser ingrediente de una elaboración base")
+
+servicio = Servicio(HOY, time(20, 0), 10, "Menú inexistente")
+servicio.id = 777
+silencio(inv.salida_stock, "Lejía", 1, "consumo", 1, servicio_id=777)
+silencio(inv.salida_stock, "Lejía", 0.5, "consumo", 1)
+servicio.estado = "completado"
+r = _resumen(servicio, inv, Recetario(), _RG())
+comprobar(r["mantenimiento"] == 1.5 and r["comida"] == 0 and r["coste_total"] == 1.5,
+          "Lo que sale para un servicio cuenta en su rentabilidad (1 l de lejía = 1,50 €); lo general no")
+silencio(inv.entrada_stock, "Lejía", 2, precio_unitario=1.5, proveedor="Droguería")
+silencio(inv.salida_stock, "Lejía", 2, "consumo", 2)  # se gasta lo comprado (para no cambiar el resto)
+comprobar(Metricas(inv).gasto_por_tipo(HOY, HOY) == {"alimento": 0, "consumible": 0, "mantenimiento": 3.0},
+          "Métricas separa el gasto en limpieza y mantenimiento (compra de 2 l de lejía = 3 €)")
+compras = GestorCompras()
+avisos = silencio(compras.generar_lista_desde_servicios, [], Recetario(), inv)
+pedidos = {i.ingrediente: i.cantidad for i in compras.items_pendientes()}
+comprobar(pedidos == {"Bayetas": 4} and any("Bayetas" in a and "mínimo" in a for a in avisos),
+          "La lista de la compra repone hasta el mínimo lo que está por debajo (4 bayetas), aunque no haya servicios")
+silencio(inv.salida_stock, "Lejía", 1, "consumo", 1)  # quedan 1,5 l de lejía (mínimo 2)
+silencio(compras.generar_lista_desde_servicios, [], Recetario(), inv)
+pedidos = {i.ingrediente: i.cantidad for i in compras.items_pendientes()}
+comprobar(pedidos.get("Lejía") == 0.5 and pedidos.get("Bayetas") == 4,
+          "Al volver a generarla no se borran: se mantienen y se añaden los nuevos (0,5 l de lejía)")
+silencio(inv.editar_producto, "Bayetas", tipo="consumible")
+comprobar(inv.buscar_producto("Bayetas").es_consumible() and inv.buscar_producto("Bayetas") in inv.consumibles(),
+          "Se puede corregir el tipo si se dio de alta en la lista equivocada")
+silencio(inv.editar_producto, "Bayetas", tipo="mantenimiento")
+copia = Inventario.from_dict(inv.to_dict())
+comprobar(copia.buscar_producto("Lejía").es_mantenimiento(), "Se guardan y se cargan")
+with tempfile.TemporaryDirectory() as carpeta:
+    from openpyxl import load_workbook
+    hoja = load_workbook(silencio(exportar_todo, inv, RegistroServicios(), GestorCompras(), carpeta))["Inventario"]
+    comprobar("Limpieza y mantenimiento" in [c.value for fila in hoja.iter_rows() for c in fila],
+              "En el Excel aparecen con su clase")
 
 print()
 if fallos:

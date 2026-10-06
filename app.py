@@ -249,6 +249,15 @@ def cargar_datos_ejemplo() -> None:
         tipo="consumible",
     ))
 
+    # Limpieza y mantenimiento: se gastan a mano, no por comensal. Las bayetas
+    # están por debajo del mínimo (la lista de la compra las repone).
+    inv.agregar_producto(Producto(
+        "Lejía", "Limpieza", 4, "litros", 1.1, "Droguería Central", stock_minimo=2, tipo="mantenimiento",
+        fecha_caducidad=date.today() + timedelta(days=180),
+    ))
+    inv.agregar_producto(Producto(
+        "Bayetas", "Limpieza", 6, "unidades", 0.6, "Droguería Central", stock_minimo=10, tipo="mantenimiento",
+    ))
     serv.agregar_servicio(Servicio(date.today() + timedelta(days=3), time(21, 0), 8, "Menú del día"))
 
     pan = Receta("Pan casero", "Panadería", {"Harina de trigo": 0.15, "Aceite de oliva": 0.01})
@@ -512,6 +521,9 @@ def pagina_dashboard() -> None:
 # caducidad, el motivo de salida, el peso por unidad...) no funcionan bien
 # dentro de un st.form. Aquí se usan widgets sueltos + un botón normal.
 
+_ICONO_TIPO = {"consumible": "🧻 ", "mantenimiento": "🧽 "}
+
+
 def _filas_inventario(productos: list, tipo: str = "alimento") -> list[dict]:
     filas = []
     for p in productos:
@@ -520,6 +532,8 @@ def _filas_inventario(productos: list, tipo: str = "alimento") -> list[dict]:
             "Mínimo": p.stock_minimo, "Precio medio (€)": round(p.precio_unitario, 2), "Proveedor habitual": p.proveedor,
             "Lotes": len(p.lotes),
         }
+        if tipo == "mantenimiento":
+            fila["Próxima caducidad"] = p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—"
         if tipo == "alimento":
             fila["Próxima caducidad"] = p.fecha_caducidad.strftime("%d/%m/%Y") if p.fecha_caducidad else "—"
             fila["Tipo"] = p.tipo_descripcion() or "—"
@@ -542,7 +556,7 @@ def _campo_peso(etiqueta: str, clave: str, valor_kg: float = 0.0) -> Optional[fl
 # Las dos "listas" del inventario. Todo lo de la página Inventario (tabla,
 # avisos y pestañas) trabaja solo con la lista elegida arriba, para que los
 # alimentos y los consumibles no se mezclen.
-VISTAS_PRODUCTOS = {"🍅 Alimentos": "alimento", "🧻 Consumibles": "consumible"}
+VISTAS_PRODUCTOS = {"🍅 Alimentos": "alimento", "🧻 Consumibles": "consumible", "🧽 Limpieza y mantenimiento": "mantenimiento"}
 VISTAS_INVENTARIO = {**VISTAS_PRODUCTOS, "🥘 Elaboraciones": "elaboracion", "🍽️ Material": "material"}
 
 
@@ -557,8 +571,11 @@ def pagina_inventario() -> None:
     if tipo == "elaboracion":
         _seccion_elaboraciones()
         return
-    productos_tipo = inv.consumibles() if tipo == "consumible" else inv.alimentos()
+    productos_tipo = inv.productos_de(tipo)
 
+    if tipo == "mantenimiento":
+        st.caption("No van en recetas ni en menús: lo que se gasta se apunta a mano en 'Actualizar stock' (para un "
+                   "servicio o en general). Si bajan del mínimo, la lista de la compra los repone.")
     if productos_tipo:
         productos = productos_tipo
         if tipo == "alimento":
@@ -571,8 +588,13 @@ def pagina_inventario() -> None:
         st.caption("Cada compra es un lote con su precio y proveedor: los verás en la pestaña 'Lotes'.")
     elif tipo == "consumible":
         st.info(
-            "Todavía no hay consumibles: servilletas, vasos y platos desechables, film, productos de limpieza... "
+            "Todavía no hay consumibles: servilletas, vasos y platos desechables, film... "
             "Añádelos en la pestaña 'Añadir producto' de esta lista."
+        )
+    elif tipo == "mantenimiento":
+        st.info(
+            "Todavía no hay productos de limpieza y mantenimiento: lejía, lavavajillas, bayetas, bolsas de basura, "
+            "gas para los hornillos, pilas... Añádelos en la pestaña 'Añadir producto' de esta lista."
         )
     else:
         st.info("El inventario está vacío todavía.")
@@ -615,8 +637,8 @@ def pagina_inventario() -> None:
     with tab_lotes:
         _pestana_lotes(inv, nombres_tipo)
     with tab_limpiar:
-        if tipo == "consumible":
-            st.info("Los consumibles no se limpian: esta pestaña es para alimentos con merma.")
+        if tipo != "alimento":
+            st.info("Esta pestaña es para alimentos con merma (se limpian o despiezan).")
         else:
             _pestana_limpiar(inv)
     with tab_limpiezas:
@@ -628,7 +650,9 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
     # cambian y los campos aparecen vacíos otra vez (lo que hacía clear_on_submit).
     v = st.session_state.setdefault("add_version", 0)
     es_consumible = tipo == "consumible"
-    st.caption("Se añadirá a la lista de **consumibles**." if es_consumible else "Se añadirá a la lista de **alimentos**.")
+    es_alimento = tipo == "alimento"
+    lista = {"alimento": "alimentos", "consumible": "consumibles", "mantenimiento": "limpieza y mantenimiento"}[tipo]
+    st.caption(f"Se añadirá a la lista de **{lista}**.")
 
     nombre = st.text_input("Nombre", key=f"add_nombre_{v}")
     categoria = st.text_input("Categoría", key=f"add_categoria_{v}")
@@ -638,7 +662,7 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
 
     tiene_merma = False
     peso_unitario = None
-    if unidad in UNIDADES_PESO + ("unidades",) and not es_consumible:
+    if unidad in UNIDADES_PESO + ("unidades",) and es_alimento:
         tiene_merma = st.checkbox(
             "Producto con merma (se limpia o despieza antes de usarse)", key=f"add_merma_{v}",
             help="Por ejemplo una pata de cerdo o un pescado entero. Solo de estos productos se pueden obtener derivados.",
@@ -675,7 +699,7 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
                     nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad,
                     tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo,
                 ))
-                avisar("success", f"{'Consumible' if es_consumible else 'Producto'} '{nombre}' añadido.")
+                avisar("success", f"{Producto.NOMBRES_TIPOS[tipo] if not es_alimento else 'Producto'} '{nombre}' añadido.")
                 st.session_state.add_version += 1
                 st.rerun()
             except ValueError as e:
@@ -701,16 +725,18 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
     proveedor = c2.text_input("Proveedor habitual", value=producto.proveedor, key=k("proveedor"))
 
     # El tipo se puede corregir (por si se dio de alta en la lista equivocada).
-    tipos_texto = {"Alimento": "alimento", "Consumible": "consumible"}
+    tipos_texto = {nombre: tipo for tipo, nombre in Producto.NOMBRES_TIPOS.items()}
     nuevo_tipo = tipos_texto[st.radio(
-        "Tipo", list(tipos_texto), index=1 if producto.es_consumible() else 0, horizontal=True, key=k("tipo"),
-        help="Si lo cambias, el producto pasa a la otra lista del inventario.",
+        "Tipo", list(tipos_texto), index=Producto.TIPOS.index(producto.tipo), horizontal=True, key=k("tipo"),
+        help="Si lo cambias, el producto pasa a otra lista del inventario.",
     )]
     es_consumible = nuevo_tipo == "consumible"
 
     tiene_merma = producto.tiene_merma
     peso_unitario = None
-    if producto.unidad in UNIDADES_PESO + ("unidades",) and not es_consumible:
+    if nuevo_tipo != "alimento":
+        tiene_merma = False
+    elif producto.unidad in UNIDADES_PESO + ("unidades",):
         tiene_merma = st.checkbox("Producto con merma (se limpia o despieza)", value=producto.tiene_merma, key=k("merma"))
         if tiene_merma and producto.unidad == "unidades":
             peso_unitario = _campo_peso(
@@ -850,6 +876,20 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
         return
     lote_id = _elegir_lote(producto, "¿De qué lote sale?", k("lote"))
     motivo = st.selectbox("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA, key=k("motivo"))
+    servicio_id = None
+    if producto.es_mantenimiento() and motivo == "consumo":
+        servicios = sorted(
+            (s for s in st.session_state.registro_servicios.servicios if s.estado != "cancelado"),
+            key=lambda s: (s.fecha, s.hora), reverse=True,
+        )
+        opciones = {"General (no es de ningún servicio)": None}
+        opciones.update({f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}" + (f" ({s.cliente})" if s.cliente else ""): s.id
+                         for s in servicios})
+        servicio_id = opciones[st.selectbox(
+            "¿Para qué servicio?", list(opciones), key=k("servicio"),
+            help="Si es para un servicio (lo que te llevas a un evento), su coste cuenta en la rentabilidad de ese "
+                 "servicio. Si no, es un gasto general del negocio.",
+        )]
     if producto.tiene_merma:
         st.caption("Para limpiar o despiezar este producto usa la pestaña 'Limpiar producto': así queda registrado el rendimiento.")
 
@@ -862,8 +902,9 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
                 f"No se ha registrado: en el lote {lote.id} solo hay {_num(lote.cantidad)} {producto.unidad}. "
                 "Si necesitas más, haz otra salida desde otro lote."
             )
-        elif inv.salida_stock(nombre_sel, cantidad, motivo, lote_id):
-            avisar("success", f"Salida registrada: {_num(cantidad)} {producto.unidad} del lote {lote_id} ({motivo}).")
+        elif inv.salida_stock(nombre_sel, cantidad, motivo, lote_id, servicio_id=servicio_id):
+            para = f", servicio #{servicio_id}" if servicio_id else ""
+            avisar("success", f"Salida registrada: {_num(cantidad)} {producto.unidad} del lote {lote_id} ({motivo}{para}).")
             vaciar_campos("stock_", conservar=("stock_select", k("tipo")))
             st.rerun()
         else:
@@ -1665,7 +1706,7 @@ def _ficha_producto_nuevo(k) -> dict:
     al completar el servicio.
     """
     st.caption("Datos del producto nuevo (como en Inventario > Añadir producto):")
-    tipos = {"Alimento": "alimento", "Consumible": "consumible"}
+    tipos = {nombre: tipo for tipo, nombre in Producto.NOMBRES_TIPOS.items()}
     tipo = tipos[st.radio("Tipo", list(tipos), horizontal=True, key=k("nuevo_tipo"))]
     c1, c2 = st.columns(2)
     nombre = c1.text_input("Nombre", key=k("nuevo_nombre"))
@@ -1746,7 +1787,7 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
         return
 
     st.caption(
-        "Coste = comida + consumibles + gastos del servicio (gasolina, personal...) + material roto o perdido. En los servicios completados es "
+        "Coste = comida + consumibles + limpieza y mantenimiento + gastos del servicio (gasolina, personal...) + material roto o perdido. En los servicios completados es "
         "lo que salió de verdad del inventario; en los pendientes, una estimación (*) con los precios actuales."
     )
     filas = []
@@ -1773,6 +1814,7 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
     desglose = [
         {"Concepto": "🍅 Comida", "Importe (€)": f"{r['comida']:.2f}"},
         {"Concepto": "🧻 Consumibles", "Importe (€)": f"{r['consumibles']:.2f}"},
+        {"Concepto": "🧽 Limpieza y mantenimiento", "Importe (€)": f"{r['mantenimiento']:.2f}"},
     ] + [{"Concepto": f"💶 {cat}", "Importe (€)": f"{imp:.2f}"} for cat, imp in r["gastos_por_categoria"].items()]
     if r["material"]:
         desglose.append({"Concepto": "🍽️ Material roto o perdido", "Importe (€)": f"{r['material']:.2f}"})
@@ -2046,10 +2088,11 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
     with tab_gasto:
         if f["consumos"]:
             st.dataframe([{
-                "Producto": ("🧻 " if c["tipo"] == "consumible" else "") + c["producto"],
+                "Producto": _ICONO_TIPO.get(c["tipo"], "") + c["producto"],
                 "Cantidad": f"{_num(c['cantidad'])} {c['unidad']}", "Lote": c["lote"], "Coste (€)": f"{c['coste']:.2f}",
             } for c in f["consumos"]], width="stretch", hide_index=True)
-            st.caption(f"Comida {r['comida']:.2f} € · consumibles {r['consumibles']:.2f} € (a precio real de cada lote)")
+            st.caption(f"Comida {r['comida']:.2f} € · consumibles {r['consumibles']:.2f} € · limpieza y mantenimiento "
+                       f"{r['mantenimiento']:.2f} € (a precio real de cada lote)")
         else:
             st.info("No salió nada del inventario para este servicio.")
     with tab_plan:
@@ -2512,13 +2555,12 @@ def pagina_compras() -> None:
         if generar:
             servicios = serv.servicios_proximos(int(dias))
             if not servicios:
-                st.info("No hay servicios próximos en ese rango.")
-            else:
-                avisos = comp.generar_lista_desde_servicios(servicios, rec, inv)
-                avisar("success", "Lista de compra generada/actualizada.")
-                for aviso in avisos:
-                    avisar("info", aviso)
-                st.rerun()
+                avisar("info", "No hay servicios próximos en ese rango: solo se revisa la limpieza y el mantenimiento.")
+            avisos = comp.generar_lista_desde_servicios(servicios, rec, inv)
+            avisar("success", "Lista de compra generada/actualizada.")
+            for aviso in avisos:
+                avisar("info", aviso)
+            st.rerun()
 
     st.divider()
     pendientes = comp.items_pendientes()
@@ -2700,7 +2742,7 @@ def pagina_metricas() -> None:
     tipo = VISTAS_PRODUCTOS[c2.radio("Productos", list(VISTAS_PRODUCTOS), horizontal=True, key="metricas_tipo")]
     desde, hasta = rango_desde_periodo(periodo)
     st.caption(f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}")
-    nombres_tipo = [p.nombre for p in (inv.consumibles() if tipo == "consumible" else inv.alimentos())]
+    nombres_tipo = [p.nombre for p in inv.productos_de(tipo)]
 
     if not inv.historial:
         st.info(
@@ -2717,8 +2759,8 @@ def pagina_metricas() -> None:
         # La merma va aparte del desperdicio: el hueso es inevitable, lo que
         # caduca en la cámara no.
         resumen = metricas.resumen_limpiezas(desde, hasta)
-        if tipo == "consumible":
-            st.info("Los consumibles no tienen merma.")
+        if tipo != "alimento":
+            st.info("Solo los alimentos tienen merma.")
         elif not resumen:
             st.info("No hay limpiezas registradas en este periodo.")
         else:
@@ -2767,7 +2809,8 @@ def pagina_metricas() -> None:
         gasto = metricas.gasto_por_categoria(desde, hasta, tipo)
         por_tipo = metricas.gasto_por_tipo(desde, hasta)
         st.caption(
-            f"Gasto en compras del periodo: alimentos {por_tipo['alimento']} € · consumibles {por_tipo['consumible']} €"
+            f"Gasto en compras del periodo: alimentos {por_tipo['alimento']} € · consumibles {por_tipo['consumible']} € · "
+            f"limpieza y mantenimiento {por_tipo['mantenimiento']} €"
         )
         if not gasto:
             st.info("No hay compras registradas en este periodo.")

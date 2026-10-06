@@ -145,12 +145,13 @@ def resumen_servicio(
     - Servicio PENDIENTE: es una ESTIMACIÓN con los precios actuales y las
       cantidades del menú ("estimado" = True).
 
-    Devuelve un diccionario con: comida, consumibles, gastos (total) y
+    Devuelve un diccionario con: comida, consumibles, mantenimiento (productos
+    de limpieza y mantenimiento sacados para este servicio), gastos (total) y
     gastos_por_categoria, material (roturas y pérdidas), coste_total, cobrado (None si no se indicó),
     margen y margen_porcentaje (None si no hay cobro), y estimado.
     """
     estimado = servicio.estado != "completado"
-    comida = consumibles = 0.0
+    comida = consumibles = mantenimiento = 0.0
     if estimado:
         menu = recetario.buscar_menu(servicio.menu)
         if menu is not None:
@@ -161,6 +162,8 @@ def resumen_servicio(
             if m.servicio_id == servicio.id and m.tipo == "salida":
                 if m.tipo_producto == "consumible":
                     consumibles += m.valor()
+                elif m.tipo_producto == "mantenimiento":
+                    mantenimiento += m.valor()  # limpieza y mantenimiento gastado en este servicio
                 else:
                     comida += m.valor()
         comida += inventario.elaboraciones.coste_servicio(servicio.id)  # raciones ya preparadas
@@ -171,12 +174,13 @@ def resumen_servicio(
     gastos = round(sum(gastos_por_categoria.values()), 2)
 
     material = registro_material.coste_incidencias_servicio(servicio.id) if registro_material else 0.0
-    coste_total = round(comida + consumibles + gastos + material, 2)
+    coste_total = round(comida + consumibles + mantenimiento + gastos + material, 2)
     cobrado = servicio.precio_cobrado
     margen = round(cobrado - coste_total, 2) if cobrado is not None else None
     return {
         "comida": round(comida, 2),
         "consumibles": round(consumibles, 2),
+        "mantenimiento": round(mantenimiento, 2),
         "gastos": gastos,
         "gastos_por_categoria": gastos_por_categoria,
         "material": material,

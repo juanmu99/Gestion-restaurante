@@ -343,7 +343,12 @@ class Producto(ConNotas):
     # se come (servilletas, vasos desechables, film, productos de
     # limpieza...): se compran y se gastan igual que los alimentos, pero van
     # en su propia lista y no tienen caducidad ni merma.
-    TIPOS = ("alimento", "consumible")
+    # alimento: se cocina (ingredientes de recetas y elaboraciones).
+    # consumible: se gasta por comensal en los menús (servilletas, vasos...).
+    # mantenimiento: limpieza y mantenimiento (lejía, bayetas, gas...). No va
+    #   en recetas ni en menús: se gasta a mano, para un servicio o en general.
+    TIPOS = ("alimento", "consumible", "mantenimiento")
+    NOMBRES_TIPOS = {"alimento": "Alimento", "consumible": "Consumible", "mantenimiento": "Limpieza y mantenimiento"}
 
     def __init__(
         self,
@@ -386,8 +391,9 @@ class Producto(ConNotas):
         - es_subproducto: lo que se aprovecha de la merma (huesos para un
           fondo, grasa...). Su coste es 0: todo el coste lo carga el limpio.
 
-        tipo: "alimento" (por defecto) o "consumible". Un consumible no
-        tiene caducidad ni merma: si se le pasan, se rechazan o se ignoran.
+        tipo: "alimento" (por defecto), "consumible" o "mantenimiento". Solo
+        los alimentos tienen merma. Un consumible no tiene caducidad (si se
+        le pasa, se ignora); uno de mantenimiento puede tenerla o no.
 
         `lotes` y `siguiente_lote` solo se usan al cargar una sesión guardada.
         """
@@ -404,8 +410,8 @@ class Producto(ConNotas):
             raise ValueError("El stock no puede ser negativo.")
         if tipo not in Producto.TIPOS:
             raise ValueError(f"Tipo de producto no válido: '{tipo}'. Debe ser uno de: {', '.join(Producto.TIPOS)}")
-        if tipo == "consumible" and (tiene_merma or origen or es_subproducto):
-            raise ValueError("Un consumible no puede tener merma ni salir de una limpieza.")
+        if tipo != "alimento" and (tiene_merma or origen or es_subproducto):
+            raise ValueError("Solo los alimentos pueden tener merma o salir de una limpieza.")
         if tipo == "consumible":
             fecha_caducidad = None  # los consumibles no caducan
         _validar_merma(unidad, tiene_merma, peso_unitario)
@@ -446,6 +452,12 @@ class Producto(ConNotas):
 
     def es_consumible(self) -> bool:
         return self.tipo == "consumible"
+
+    def es_alimento(self) -> bool:
+        return self.tipo == "alimento"
+
+    def es_mantenimiento(self) -> bool:
+        return self.tipo == "mantenimiento"
 
     # ---------- Datos calculados a partir de los lotes ----------
 
@@ -548,7 +560,7 @@ class Producto(ConNotas):
 
     def tipo_descripcion(self) -> str:
         """Etiqueta corta para listados: qué papel tiene este producto respecto a la merma."""
-        if self.es_consumible():
+        if not self.es_alimento():
             return ""
         if self.es_base():
             return "Elaboración base"
@@ -1205,8 +1217,8 @@ class Inventario:
         principal = self.productos.get(producto_limpio)
         for nombre in [producto_limpio, *derivados_kg]:
             existente = self.productos.get(nombre)
-            if existente is not None and existente.es_consumible():
-                raise ValueError(f"'{nombre}' es un consumible: no puede salir de una limpieza.")
+            if existente is not None and not existente.es_alimento():
+                raise ValueError(f"'{nombre}' no es un alimento: no puede salir de una limpieza.")
         if principal is not None:
             if principal.unidad not in UNIDADES_PESO:
                 raise ValueError(f"'{producto_limpio}' ya existe y no se mide en kg o g.")
@@ -1338,9 +1350,9 @@ class Inventario:
         peso_unitario: peso por unidad de referencia (el que se propone al
         registrar compras nuevas de un producto con merma por unidades).
 
-        tipo: "alimento" o "consumible" (por si se dio de alta en el tipo
-        equivocado). Al pasar a consumible se quitan la merma y la caducidad
-        de sus lotes.
+        tipo: "alimento", "consumible" o "mantenimiento" (por si se dio de alta
+        en el tipo equivocado). Al dejar de ser alimento se quita la merma; al
+        pasar a consumible, también la caducidad de sus lotes.
 
         Devuelve True si el cambio se aplicó, False si se abortó (por
         ejemplo, si el nuevo nombre ya lo usa otro producto) -- así quien
@@ -1364,14 +1376,14 @@ class Inventario:
         if tipo_final not in Producto.TIPOS:
             raise ValueError(f"Tipo de producto no válido: '{tipo_final}'.")
         merma_final = tiene_merma if tiene_merma is not None else producto.tiene_merma
-        if tipo_final == "consumible":
+        if tipo_final != "alimento":
             if producto.origen or producto.es_subproducto:
-                raise ValueError("Este producto sale de una limpieza: no puede ser un consumible.")
+                raise ValueError("Este producto sale de una limpieza: tiene que ser un alimento.")
             merma_final = False
-        if producto.es_base() and (tipo_final == "consumible" or merma_final):
+        if producto.es_base() and (tipo_final != "alimento" or merma_final):
             raise ValueError("Una elaboración base es un alimento sin merma.")
-        if tipo_final == "consumible" and any(nombre_actual in b.formula["ingredientes"] for b in self.bases()):
-            raise ValueError("Este producto es ingrediente de una elaboración base: no puede ser un consumible.")
+        if tipo_final != "alimento" and any(nombre_actual in b.formula["ingredientes"] for b in self.bases()):
+            raise ValueError("Este producto es ingrediente de una elaboración base: tiene que ser un alimento.")
         peso_final = peso_unitario if peso_unitario is not None else producto.peso_unitario
         _validar_merma(producto.unidad, merma_final, peso_final)
 
@@ -1456,8 +1468,8 @@ class Inventario:
             producto = self.productos.get(ingrediente)
             if producto is None:
                 raise ValueError(f"'{ingrediente}' no existe en el inventario.")
-            if producto.es_consumible():
-                raise ValueError(f"'{ingrediente}' es un consumible: no puede ser ingrediente.")
+            if not producto.es_alimento():
+                raise ValueError(f"'{ingrediente}' no es un alimento: no puede ser ingrediente.")
             if ingrediente == nombre or self._lleva(ingrediente, nombre):
                 raise ValueError(f"'{ingrediente}' ya lleva '{nombre}': las fórmulas no pueden ir en círculo.")
 
@@ -1526,10 +1538,17 @@ class Inventario:
         return self.productos.get(nombre)
 
     def alimentos(self) -> list[Producto]:
-        return [p for p in self.productos.values() if not p.es_consumible()]
+        return [p for p in self.productos.values() if p.es_alimento()]
 
     def consumibles(self) -> list[Producto]:
         return [p for p in self.productos.values() if p.es_consumible()]
+
+    def mantenimiento(self) -> list[Producto]:
+        """Productos de limpieza y mantenimiento (lejía, bayetas, gas...)."""
+        return [p for p in self.productos.values() if p.es_mantenimiento()]
+
+    def productos_de(self, tipo: str) -> list[Producto]:
+        return [p for p in self.productos.values() if p.tipo == tipo]
 
     def listar_por_categoria(self, categoria: str) -> list[Producto]:
         return [p for p in self.productos.values() if p.categoria == categoria]

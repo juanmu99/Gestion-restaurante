@@ -67,7 +67,7 @@ def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
         hoja.cell(row=fila, column=10, value=producto.tipo_descripcion() or "—").font = Font(name=FUENTE)
         hoja.cell(row=fila, column=11, value=producto.peso_unitario or "—").font = Font(name=FUENTE)
         hoja.cell(row=fila, column=12, value=len(producto.lotes)).font = Font(name=FUENTE)
-        clase = "Consumible" if producto.es_consumible() else "Alimento"
+        clase = producto.NOMBRES_TIPOS[producto.tipo]
         hoja.cell(row=fila, column=13, value=clase).font = Font(name=FUENTE)
         fila += 1
 
@@ -307,16 +307,18 @@ def _hoja_rentabilidad(
 ) -> None:
     """Coste y margen de cada servicio (con fórmulas: coste total = suma, margen = cobro - coste)."""
     hoja = wb.create_sheet("Rentabilidad")
-    _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", "Comida (€)", "Consumibles (€)", "Gastos (€)",
-                              "Roturas y pérdidas (€)", "Coste total (€)", "Cobro (€)", "Margen (€)", "Coste estimado"])
+    _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", "Comida (€)", "Consumibles (€)",
+                              "Limpieza y mantenimiento (€)", "Gastos (€)", "Roturas y pérdidas (€)", "Coste total (€)",
+                              "Cobro (€)", "Margen (€)", "Coste estimado"])
     fila = 2
     for s in sorted(registro.servicios, key=lambda s: (s.fecha, s.hora)):
         if s.estado == "cancelado":
             continue
         r = resumen_servicio(s, inventario, recetario, registro_gastos, registro_material)
-        valores = [s.id, s.fecha.strftime("%d/%m/%Y"), s.menu, s.estado, r["comida"], r["consumibles"], r["gastos"],
-                   r["material"], f"=E{fila}+F{fila}+G{fila}+H{fila}", r["cobrado"] if r["cobrado"] is not None else "—",
-                   f"=J{fila}-I{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No"]
+        valores = [s.id, s.fecha.strftime("%d/%m/%Y"), s.menu, s.estado, r["comida"], r["consumibles"],
+                   r["mantenimiento"], r["gastos"], r["material"], f"=E{fila}+F{fila}+G{fila}+H{fila}+I{fila}",
+                   r["cobrado"] if r["cobrado"] is not None else "—",
+                   f"=K{fila}-J{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No"]
         for columna, valor in enumerate(valores, start=1):
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
         fila += 1

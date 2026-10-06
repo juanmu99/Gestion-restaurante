@@ -93,6 +93,9 @@ class GestorCompras:
         (Si se comparara servicio por servicio, el mismo stock parecería
         cubrir el déficit de varios servicios a la vez, lo cual es incorrecto.)
 
+        Paso 2b: los productos de limpieza y mantenimiento por debajo de su
+                mínimo se añaden también (no dependen de los servicios).
+
         Paso 4: los productos que estaban PENDIENTES en la lista y que ya no
                 hacen falta (por ejemplo, porque se compraron registrándolos
                 directamente en el inventario) se quitan de la lista.
@@ -203,6 +206,19 @@ class GestorCompras:
                 f"Faltan {round(faltante, 3)} {producto.unidad} de '{ingrediente}': salen de limpiar "
                 f"~{round(cantidad_bruto, 2)} {origen.unidad} de '{origen.nombre}' (rendimiento {rendimiento:.0%})."
             )
+
+        # --- Paso 2b: limpieza y mantenimiento ---
+        # No dependen de los servicios: se reponen cuando bajan del mínimo
+        # (se pide lo que falta para volver a llegar a él).
+        for producto in inventario.mantenimiento():
+            if producto.stock_minimo > 0 and producto.stock < producto.stock_minimo - 1e-9:
+                necesidades_acumuladas[producto.nombre] = max(
+                    necesidades_acumuladas.get(producto.nombre, 0), producto.stock_minimo
+                )
+                avisos.append(
+                    f"'{producto.nombre}' (limpieza y mantenimiento) está por debajo de su mínimo "
+                    f"({producto.stock:g} de {producto.stock_minimo:g} {producto.unidad}): se repone hasta el mínimo."
+                )
 
         # --- Paso 3: comparar contra el stock ---
         hacen_falta: set[str] = set()

@@ -573,6 +573,62 @@ def prueba_notas(at: AppTest) -> None:
         comprobar(False, "Hay un servicio pendiente con el 'Menú del día' para ver sus notas")
 
 
+@prueba("Limpieza y mantenimiento")
+def prueba_mantenimiento(at: AppTest) -> None:
+    inv = at.session_state["inventario"]
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🧽 Limpieza y mantenimiento").run()
+    comprobar(sin_excepciones(at, "lista de mantenimiento") and not at.error
+              and any("Bayetas" in t for t in textos(at.warning)),
+              "La lista de limpieza y mantenimiento se muestra (y avisa de las bayetas bajo mínimo)")
+
+    # Añadir un producto: sin merma, con caducidad opcional
+    v = at.session_state["add_version"]
+    at.text_input(key=f"add_nombre_{v}").input("Lavavajillas")
+    at.text_input(key=f"add_categoria_{v}").input("Limpieza")
+    at.number_input(key=f"add_stock_{v}").set_value(5.0)
+    at.selectbox(key=f"add_unidad_{v}").select("litros").run()
+    comprobar(not any(c.key == f"add_merma_{v}" for c in at.checkbox)
+              and any(c.key == f"add_tiene_caducidad_{v}" for c in at.checkbox),
+              "Al añadir no se pregunta por la merma, pero sí (opcional) por la caducidad")
+    at.number_input(key=f"add_precio_{v}").set_value(2.0)
+    at.number_input(key=f"add_stock_minimo_{v}").set_value(1.0)
+    at.text_input(key=f"add_proveedor_{v}").input("Droguería Central")
+    at.button(key=f"add_boton_{v}").click().run()
+    lavavajillas = inv.buscar_producto("Lavavajillas")
+    comprobar(lavavajillas is not None and lavavajillas.es_mantenimiento() and lavavajillas.stock == 5,
+              "Se añade a la lista de limpieza y mantenimiento")
+
+    # Gastar lejía para un servicio: cuenta en su rentabilidad
+    servicio = next(s for s in at.session_state["registro_servicios"].servicios if s.estado == "pendiente")
+    at.selectbox(key="stock_select").select("Lejía").run()
+    at.radio(key="stock_tipo_Lejía").set_value("Salida").run()
+    at.number_input(key="stock_cantidad_Lejía").set_value(1.0)
+    caja = at.selectbox(key="stock_servicio_Lejía")
+    caja.select(opcion(caja, f"#{servicio.id} -")).run()
+    at.button(key="stock_boton_Lejía").click().run()
+    comprobar(sin_excepciones(at, "salida de lejía") and inv.buscar_producto("Lejía").stock == 3
+              and inv.historial[-1].servicio_id == servicio.id,
+              "Una salida de lejía se puede asociar a un servicio")
+    ir_a(at, "Servicios")
+    comprobar(sin_excepciones(at, "rentabilidad con mantenimiento") and not at.error,
+              "La rentabilidad de los servicios se muestra con la limpieza y el mantenimiento")
+
+    # No aparecen como ingredientes de recetas
+    ir_a(at, "Recetario")
+    comprobar("Lejía" not in at.selectbox(key="ing_select").options, "No se pueden usar como ingrediente de una receta")
+
+    # La lista de la compra repone las bayetas hasta el mínimo
+    ir_a(at, "Compras")
+    boton(at.button, "Generar lista de compra").click().run()
+    item = at.session_state["gestor_compras"].pendiente_de("Bayetas")
+    comprobar(item is not None and item.cantidad == 4, "La lista de la compra repone las bayetas hasta el mínimo (4)")
+
+    ir_a(at, "Métricas")
+    at.radio(key="metricas_tipo").set_value("🧽 Limpieza y mantenimiento").run()
+    comprobar(sin_excepciones(at, "métricas de mantenimiento") and not at.error, "Métricas de limpieza y mantenimiento sin errores")
+
+
 @prueba("Completar servicio")
 def prueba_completar(at: AppTest) -> None:
     ir_a(at, "Servicios")
@@ -944,6 +1000,7 @@ def main() -> int:
     prueba_elaboraciones(at)
     prueba_bases(at)
     prueba_notas(at)
+    prueba_mantenimiento(at)
     prueba_completar(at)
     prueba_completar_lotes(at)
     prueba_gastos(at)

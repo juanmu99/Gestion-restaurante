@@ -156,10 +156,10 @@ class Metricas:
         return round(sum(f["merma_kg"] for f in self.resumen_limpiezas(fecha_inicio, fecha_fin).values()), 3)
 
     def gasto_por_tipo(self, fecha_inicio: date, fecha_fin: date) -> dict[str, float]:
-        """Dinero gastado en compras, separado en alimentos y consumibles."""
+        """Dinero gastado en compras, separado en alimentos, consumibles y limpieza y mantenimiento."""
         return {
             tipo: round(sum(self.gasto_por_categoria(fecha_inicio, fecha_fin, tipo).values()), 2)
-            for tipo in ("alimento", "consumible")
+            for tipo in ("alimento", "consumible", "mantenimiento")
         }
 
     def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> float:
@@ -172,7 +172,7 @@ class Metricas:
             m.valor() for m in self._en_rango(fecha_inicio, fecha_fin, tipo)
             if m.tipo == "salida" and m.motivo == "desperdicio"
         )
-        tandas = self.inventario.elaboraciones.desperdicio_en_rango(fecha_inicio, fecha_fin) if tipo != "consumible" else 0
+        tandas = self.inventario.elaboraciones.desperdicio_en_rango(fecha_inicio, fecha_fin) if tipo in (None, "alimento") else 0
         return round(productos + tandas, 2)
 
     def dias_estimados_para_agotarse(self, producto_nombre: str, dias_historial: int = 30) -> Optional[float]:
