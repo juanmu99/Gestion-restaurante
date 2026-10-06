@@ -22,11 +22,11 @@ from datetime import date, timedelta
 from typing import Optional
 
 from elaboraciones import PreparacionBase
-from inventario import Inventario
+from inventario import ConNotas, Inventario
 from servicios import Servicio
 
 
-class Receta:
+class Receta(ConNotas):
     """
     Representa UN plato. Los ingredientes se guardan "por comensal" para
     poder escalar la receta a cualquier número de comensales.
@@ -89,13 +89,16 @@ class Receta:
             "categoria": self.categoria,
             "ingredientes_por_comensal": self.ingredientes_por_comensal,
             "vida_util_dias": self.vida_util_dias,
+            **self._notas_dict(),
         }
 
     @classmethod
     def from_dict(cls, datos: dict) -> "Receta":
-        return cls(
+        receta = cls(
             datos["nombre"], datos["categoria"], datos["ingredientes_por_comensal"], datos.get("vida_util_dias"),
         )
+        receta._cargar_notas(datos)
+        return receta
 
     def urgencia_caducidad(self, inventario: Inventario, dias: int = 7) -> float:
         """
@@ -139,7 +142,7 @@ class Receta:
         return urgencia_total
 
 
-class Menu:
+class Menu(ConNotas):
     """
     Un menú es una COMPOSICIÓN de recetas: simplemente guarda una lista
     de objetos Receta que lo forman.
@@ -191,6 +194,7 @@ class Menu:
             "recetas": [r.to_dict() for r in self.recetas],
             "consumibles_por_comensal": self.consumibles_por_comensal,
             "materiales_por_comensal": self.materiales_por_comensal,
+            **self._notas_dict(),
         })
 
     def calcular_consumibles(self, comensales: int) -> dict[str, float]:
@@ -233,6 +237,7 @@ class Menu:
             "recetas": [r.nombre for r in self.recetas],
             "consumibles_por_comensal": self.consumibles_por_comensal,
             "materiales_por_comensal": self.materiales_por_comensal,
+            **self._notas_dict(),
         }
 
     @classmethod
@@ -250,9 +255,11 @@ class Menu:
             if nombre in recetas_disponibles
         ]
         # .get(): los menús guardados antes de los consumibles no los tienen.
-        return cls(
+        menu = cls(
             datos["nombre"], recetas, datos.get("consumibles_por_comensal", {}), datos.get("materiales_por_comensal", {}),
         )
+        menu._cargar_notas(datos)
+        return menu
 
     def urgencia_caducidad(self, inventario: Inventario, dias: int = 7) -> float:
         """Suma la urgencia de todas sus recetas -- ver Receta.urgencia_caducidad()."""

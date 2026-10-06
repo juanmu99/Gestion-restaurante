@@ -514,6 +514,65 @@ def prueba_bases(at: AppTest) -> None:
               "El historial de preparaciones de bases se muestra")
 
 
+@prueba("Anotaciones")
+def prueba_notas(at: AppTest) -> None:
+    inv = at.session_state["inventario"]
+    rec = at.session_state["recetario"]
+    ir_a(at, "Recetario")
+    at.text_area(key="nota_receta_Pan casero").input("Amasar 10 minutos.\nReposar 1 hora.")
+    at.button(key="nota_guardar_receta_Pan casero").click().run()
+    pan = rec.recetas["Pan casero"]
+    comprobar(sin_excepciones(at, "nota de receta") and pan.notas == "Amasar 10 minutos.\nReposar 1 hora."
+              and pan.notas_fecha == date.today(), "Se escribe la nota de una receta (con varias líneas y su fecha)")
+    at.text_area(key="nota_menu_Menú del día").input("Servir el pan caliente.")
+    at.button(key="nota_guardar_menu_Menú del día").click().run()
+    comprobar(rec.menus["Menú del día"].notas == "Servir el pan caliente.", "Se escribe la nota de un menú")
+    at.text_area(key="nota_base_Sofrito").input("")
+    at.button(key="nota_guardar_base_Sofrito").click().run()
+    comprobar(inv.buscar_producto("Sofrito").notas == "", "Se puede borrar la nota de una base")
+    at.text_area(key="nota_base_Sofrito").input("Pochar sin dorar.")
+    at.button(key="nota_guardar_base_Sofrito").click().run()
+    comprobar(inv.buscar_producto("Sofrito").notas == "Pochar sin dorar.", "...y volver a escribirla")
+
+    # Crear una base con nota
+    v = at.session_state["base_nueva_version"]
+    k = lambda campo: f"base_nueva_{campo}_{v}"
+    at.text_input(key=k("nombre")).input("Fondo blanco")
+    at.selectbox(key=k("unidad")).select("litros")
+    at.number_input(key=k("cantidad")).set_value(1.0).run()
+    at.multiselect(key=f"{k('formula')}_ingredientes").select("Cebolla dulce").run()
+    at.number_input(key=f"{k('formula')}_cant_Cebolla dulce").set_value(0.2)
+    at.text_area(key=k("notas")).input("Desgrasar en frío.")
+    at.button(key=k("crear")).click().run()
+    fondo = inv.buscar_producto("Fondo blanco")
+    comprobar(fondo is not None and fondo.notas == "Desgrasar en frío.", "Al crear una base se puede escribir su nota")
+
+    # La nota se ve al preparar
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🥘 Elaboraciones").run()
+    at.radio(key="elab_que").set_value("Un plato (raciones)").run()
+    ve = at.session_state["elab_version"]
+    at.selectbox(key=f"elab_receta_{ve}").select("Ensalada de tomate").run()
+    comprobar(any("Aliñar justo antes" in t for t in textos(at.info)), "Al preparar un plato se ve su nota")
+    at.radio(key="elab_que").set_value("Una elaboración base (kg / litros)").run()
+    vb = at.session_state["base_version"]
+    at.selectbox(key=f"base_preparar_{vb}").select("Sofrito").run()
+    comprobar(any("Pochar sin dorar" in t for t in textos(at.info)), "Al preparar una base se ve su nota")
+    at.radio(key="elab_que").set_value("Un plato (raciones)").run()
+
+    # ...y al completar un servicio de ese menú
+    ir_a(at, "Servicios")
+    caja = at.selectbox(key="completar_select")
+    opciones_menu = [o for o in caja.options if o.endswith("Menú del día")]
+    if opciones_menu:
+        caja.select(opciones_menu[0]).run()
+        escrito = " ".join(textos(at.markdown))
+        comprobar("Servir el pan caliente." in escrito and "Aliñar justo antes" in escrito,
+                  "Al completar un servicio se ven las notas del menú y de sus recetas")
+    else:
+        comprobar(False, "Hay un servicio pendiente con el 'Menú del día' para ver sus notas")
+
+
 @prueba("Completar servicio")
 def prueba_completar(at: AppTest) -> None:
     ir_a(at, "Servicios")
@@ -884,6 +943,7 @@ def main() -> int:
     prueba_consumibles(at)
     prueba_elaboraciones(at)
     prueba_bases(at)
+    prueba_notas(at)
     prueba_completar(at)
     prueba_completar_lotes(at)
     prueba_gastos(at)

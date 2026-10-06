@@ -121,17 +121,57 @@ def _hoja_elaboraciones(wb: Workbook, inventario: Inventario) -> None:
     _ajustar_ancho_columnas(hoja)
 
 
+def _fecha_nota(objeto) -> str:
+    return objeto.notas_fecha.strftime("%d/%m/%Y") if objeto.notas_fecha else ""
+
+
+def _celda_texto(hoja, fila: int, columna: int, valor) -> None:
+    """Celda que puede llevar texto largo con saltos de línea (las anotaciones)."""
+    celda = hoja.cell(row=fila, column=columna, value=valor)
+    celda.font = Font(name=FUENTE)
+    celda.alignment = Alignment(wrap_text=True, vertical="top")
+
+
+def _hoja_recetario(wb: Workbook, recetario: Recetario) -> None:
+    """Las recetas y los menús, con sus anotaciones (el 'bloc de notas' de cada uno)."""
+    hoja = wb.create_sheet("Recetario")
+    _escribir_cabecera(hoja, ["Tipo", "Nombre", "Categoría / recetas", "Ingredientes por comensal",
+                              "Vida útil (días)", "Anotaciones", "Nota editada"])
+    fila = 2
+    for r in sorted(recetario.recetas.values(), key=lambda r: r.nombre):
+        valores = ["Receta", r.nombre, r.categoria,
+                   ", ".join(f"{c:g} {i}" for i, c in r.ingredientes_por_comensal.items()),
+                   r.vida_util_dias if r.vida_util_dias is not None else "—", r.notas, _fecha_nota(r)]
+        for columna, valor in enumerate(valores, start=1):
+            _celda_texto(hoja, fila, columna, valor)
+        fila += 1
+    for m in sorted(recetario.menus.values(), key=lambda m: m.nombre):
+        consumibles = ", ".join(f"{c:g} {n}" for n, c in m.consumibles_por_comensal.items())
+        valores = ["Menú", m.nombre, ", ".join(r.nombre for r in m.recetas),
+                   ", ".join(f"{c:g} {i}" for i, c in m.ingredientes_por_comensal().items())
+                   + (f" | Consumibles: {consumibles}" if consumibles else ""),
+                   "—", m.notas, _fecha_nota(m)]
+        for columna, valor in enumerate(valores, start=1):
+            _celda_texto(hoja, fila, columna, valor)
+        fila += 1
+    _ajustar_ancho_columnas(hoja)
+    hoja.column_dimensions["D"].width = 45
+    hoja.column_dimensions["F"].width = 60
+
+
 def _hoja_bases(wb: Workbook, inventario: Inventario) -> None:
     """Elaboraciones base (sofritos, fondos...): su fórmula y cada preparación (prevista frente a obtenida)."""
     hoja = wb.create_sheet("Elaboraciones base")
-    _escribir_cabecera(hoja, ["Elaboración", "Fórmula para", "Unidad", "Ingredientes", "Vida útil (días)", "En stock"])
+    _escribir_cabecera(hoja, ["Elaboración", "Fórmula para", "Unidad", "Ingredientes", "Vida útil (días)", "En stock",
+                              "Anotaciones", "Nota editada"])
     fila = 2
     for b in sorted(inventario.bases(), key=lambda b: b.nombre):
         ingredientes = ", ".join(f"{c:g} {i}" for i, c in b.formula["ingredientes"].items())
         valores = [b.nombre, b.formula["cantidad"], b.unidad, ingredientes,
-                   b.vida_util_dias if b.vida_util_dias is not None else "—", b.stock]
+                   b.vida_util_dias if b.vida_util_dias is not None else "—", b.stock,
+                   b.notas, _fecha_nota(b)]
         for columna, valor in enumerate(valores, start=1):
-            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+            _celda_texto(hoja, fila, columna, valor)
         fila += 1
 
     fila += 1
@@ -146,6 +186,7 @@ def _hoja_bases(wb: Workbook, inventario: Inventario) -> None:
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
         fila += 1
     _ajustar_ancho_columnas(hoja)
+    hoja.column_dimensions["G"].width = 50
 
 
 def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
@@ -328,6 +369,8 @@ def exportar_todo(
     _hoja_lotes(wb, inventario)
     _hoja_elaboraciones(wb, inventario)
     _hoja_bases(wb, inventario)
+    if recetario is not None:
+        _hoja_recetario(wb, recetario)
     _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)

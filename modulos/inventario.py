@@ -180,6 +180,35 @@ class MovimientoStock:
         )
 
 
+class ConNotas:
+    """
+    Una ANOTACIÓN libre (un bloc de notas) para elaboraciones base, recetas y
+    menús: lo que el usuario quiera explicar a sus compañeros ("pochar a
+    fuego lento 40 min, sin dorar"). Una sola nota por elemento, que se
+    reescribe; se guarda también la fecha en que se cambió por última vez.
+    """
+
+    notas: str = ""
+    notas_fecha: Optional[date] = None
+
+    def poner_nota(self, texto: str, fecha: Optional[date] = None) -> None:
+        """Cambia la nota (texto vacío = borrarla)."""
+        texto = (texto or "").strip()
+        if texto == self.notas:
+            return
+        self.notas = texto
+        self.notas_fecha = (fecha or date.today()) if texto else None
+
+    def _notas_dict(self) -> dict:
+        return {"notas": self.notas, "notas_fecha": self.notas_fecha.isoformat() if self.notas_fecha else None}
+
+    def _cargar_notas(self, datos: dict) -> None:
+        # .get(): las sesiones guardadas antes de las anotaciones no las tienen.
+        self.notas = datos.get("notas", "") or ""
+        fecha = datos.get("notas_fecha")
+        self.notas_fecha = date.fromisoformat(fecha) if fecha else None
+
+
 class Lote:
     """
     UNA partida concreta de un producto: lo que entró en una compra (o salió
@@ -291,7 +320,7 @@ def _clave_caducidad(lote: Lote) -> tuple:
     return (lote.fecha_caducidad is None, lote.fecha_caducidad or date.max, lote.id)
 
 
-class Producto:
+class Producto(ConNotas):
     """
     Representa UN producto del inventario (ej: "Harina de trigo").
 
@@ -591,6 +620,7 @@ class Producto:
             "siguiente_lote": self.siguiente_lote,
             "formula": self.formula,
             "vida_util_dias": self.vida_util_dias,
+            **self._notas_dict(),
         }
 
     @classmethod
@@ -624,20 +654,23 @@ class Producto:
             vida_util_dias=datos.get("vida_util_dias"),
         )
         if "lotes" in datos:
-            return cls(
+            producto = cls(
                 stock=0,
                 precio_unitario=datos.get("precio_referencia", 0),
                 lotes=[Lote.from_dict(d) for d in datos["lotes"]],
                 siguiente_lote=datos.get("siguiente_lote", 1),
                 **comun,
             )
-        fecha = datos.get("fecha_caducidad")
-        return cls(
-            stock=datos["stock"],
-            precio_unitario=datos["precio_unitario"],
-            fecha_caducidad=date.fromisoformat(fecha) if fecha else None,
-            **comun,
-        )
+        else:
+            fecha = datos.get("fecha_caducidad")
+            producto = cls(
+                stock=datos["stock"],
+                precio_unitario=datos["precio_unitario"],
+                fecha_caducidad=date.fromisoformat(fecha) if fecha else None,
+                **comun,
+            )
+        producto._cargar_notas(datos)
+        return producto
 
 
 def _validar_formula(nombre: str, unidad: str, formula: dict) -> None:
@@ -1430,7 +1463,7 @@ class Inventario:
 
     def definir_base(
         self, nombre: str, categoria: str, unidad: str, cantidad: float, ingredientes: dict[str, float],
-        vida_util_dias: Optional[int] = None, stock_minimo: float = 0,
+        vida_util_dias: Optional[int] = None, stock_minimo: float = 0, notas: str = "",
     ) -> Producto:
         """
         Da de alta una elaboración base nueva (con stock 0): un producto que
@@ -1448,6 +1481,7 @@ class Inventario:
             formula=formula, vida_util_dias=vida_util_dias,
         )
         self._comprobar_formula(nombre, producto.formula)
+        producto.poner_nota(notas)
         self.agregar_producto(producto)
         return producto
 

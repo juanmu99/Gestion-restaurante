@@ -647,6 +647,46 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar("Sofrito" in valores and "Salsa" in valores and 1.6 in valores and "Obtenida" in valores,
               "El Excel tiene la hoja 'Elaboraciones base' con fórmulas y preparaciones")
 
+print("\n--- Anotaciones (bloc de notas) ---")
+from recetario import Menu as _Menu  # noqa: E402
+r = Receta("Croquetas", "Entrantes", {"Aceite": 0.01})
+comprobar(r.notas == "" and r.notas_fecha is None, "Una receta nueva no tiene notas")
+r.poner_nota("  Bechamel del día anterior.\nFreír a 180 grados.  ")
+comprobar(r.notas == "Bechamel del día anterior.\nFreír a 180 grados." and r.notas_fecha == HOY,
+          "Se guarda la nota (con sus saltos de línea) y la fecha en que se editó")
+r.poner_nota("Bechamel del día anterior.\nFreír a 180 grados.", fecha=HOY + timedelta(days=3))
+comprobar(r.notas_fecha == HOY, "Guardar la misma nota sin cambios no cambia la fecha")
+m = _Menu("Menú croquetas", [r])
+m.poner_nota("Para eventos de pie.")
+sofrito = inv.buscar_producto("Sofrito")
+sofrito.poner_nota("Pochar sin dorar.")
+rec = Recetario()
+silencio(rec.agregar_receta, r)
+silencio(rec.agregar_menu, m)
+copia_rec = Recetario.from_dict(rec.to_dict())
+copia_inv = Inventario.from_dict(inv.to_dict())
+comprobar(copia_rec.recetas["Croquetas"].notas == r.notas and copia_rec.recetas["Croquetas"].notas_fecha == HOY
+          and copia_rec.menus["Menú croquetas"].notas == "Para eventos de pie."
+          and copia_inv.buscar_producto("Sofrito").notas == "Pochar sin dorar.",
+          "Las notas de recetas, menús y bases se guardan y se cargan")
+foto = m.foto()
+comprobar(foto["notas"] == "Para eventos de pie." and foto["recetas"][0]["notas"] == r.notas,
+          "La copia del menú de un servicio completado guarda también sus notas")
+datos_viejos = r.to_dict()
+del datos_viejos["notas"], datos_viejos["notas_fecha"]
+comprobar(Receta.from_dict(datos_viejos).notas == "", "Las sesiones de antes de las notas se cargan sin notas")
+r.poner_nota("")
+comprobar(r.notas == "" and r.notas_fecha is None, "Una nota vacía la borra")
+r.poner_nota("Bechamel del día anterior.")
+with tempfile.TemporaryDirectory() as carpeta:
+    from openpyxl import load_workbook
+    libro = load_workbook(silencio(exportar_todo, inv, RegistroServicios(), GestorCompras(), carpeta, None, rec))
+    valores = [c.value for fila in libro["Recetario"].iter_rows() for c in fila]
+    bases = [c.value for fila in libro["Elaboraciones base"].iter_rows() for c in fila]
+    comprobar("Croquetas" in valores and "Bechamel del día anterior." in valores and "Para eventos de pie." in valores
+              and "Pochar sin dorar." in bases,
+              "El Excel tiene la hoja 'Recetario' con recetas, menús y notas, y las notas de las bases")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

@@ -275,11 +275,58 @@ def cargar_datos_ejemplo() -> None:
         inv.agregar_producto(Producto("Pimiento rojo", "Verduras", 2, "kg", 2.4, "Huerta Local",
                                          fecha_caducidad=date.today() + timedelta(days=8)))
     if "Sofrito" not in inv.productos:
-        inv.definir_base("Sofrito", "Elaboraciones", "kg", 1, {"Cebolla dulce": 1.5, "Pimiento rojo": 0.3}, vida_util_dias=4)
+        inv.definir_base(
+            "Sofrito", "Elaboraciones", "kg", 1, {"Cebolla dulce": 1.5, "Pimiento rojo": 0.3}, vida_util_dias=4,
+            notas="Pochar a fuego lento unos 40 min, sin que llegue a dorarse.\nSe congela bien en raciones de 250 g.",
+        )
         rec.preparar_base("Sofrito", 1, 0.9, inv)
+    ensalada.poner_nota("Aliñar justo antes de servir para que el tomate no suelte agua.")
     # Una elaboración ya preparada: 4 raciones de ensalada hechas hoy.
     if not inv.elaboraciones.tandas_de("Ensalada de tomate"):
         inv.elaboraciones.nueva_tanda("Ensalada de tomate", 4, 0.24, ensalada.caducidad_propuesta(date.today()))
+
+
+# ---------- Anotaciones (bloc de notas de bases, recetas y menús) ----------
+
+def _texto_fecha_nota(fecha: Optional[date]) -> str:
+    return f"Editada el {fecha.strftime('%d/%m/%Y')}" if fecha else ""
+
+
+def _mostrar_nota(objeto, titulo: str = "📝 Anotaciones") -> None:
+    """Enseña la nota (si tiene), en solo lectura."""
+    if objeto.notas:
+        st.info(f"**{titulo}**\n\n{objeto.notas}")
+        st.caption(_texto_fecha_nota(objeto.notas_fecha))
+
+
+def _editor_nota(objeto, clave: str, nombre: str) -> None:
+    """Desplegable para escribir, cambiar o borrar la nota de una base, receta o menú."""
+    etiqueta = "📝 Anotaciones" + (" ✏️" if objeto.notas else "")
+    with st.expander(etiqueta):
+        texto = st.text_area(
+            f"Anotaciones de '{nombre}'", value=objeto.notas, key=f"nota_{clave}", height=120,
+            placeholder="Lo que quieras explicar a tus compañeros: cómo se hace, trucos, alérgenos, emplatado...",
+        )
+        if objeto.notas_fecha:
+            st.caption(_texto_fecha_nota(objeto.notas_fecha))
+        if st.button("Guardar nota", key=f"nota_guardar_{clave}"):
+            objeto.poner_nota(texto)
+            avisar("success", f"Nota de '{nombre}' guardada." if objeto.notas else f"Nota de '{nombre}' borrada.")
+            st.rerun()
+
+
+def _notas_de_menu(nombre: str, notas: str, recetas: list[tuple[str, str]]) -> None:
+    """Las notas de un menú y de sus recetas, juntas (para el servicio)."""
+    if not notas and not any(n for _, n in recetas):
+        return
+    with st.expander("📝 Anotaciones del menú y sus recetas"):
+        if notas:
+            st.markdown(f"**{nombre}**")
+            st.write(notas)
+        for receta, nota in recetas:
+            if nota:
+                st.markdown(f"**{receta}**")
+                st.write(nota)
 
 
 # ---------- Lotes: piezas de interfaz compartidas ----------
@@ -1110,6 +1157,7 @@ def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
     nombre = st.selectbox("Receta", list(rec.recetas), key=f"elab_receta_{v}")
     receta = rec.recetas[nombre]
     k = lambda campo: f"elab_{campo}_{nombre}_{v}"
+    _mostrar_nota(receta)
     c1, c2, c3 = st.columns(3)
     raciones = c1.number_input("Raciones", min_value=0.0, step=1.0, value=None, placeholder="0", key=k("raciones")) or 0.0
     fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"))
@@ -1154,6 +1202,7 @@ def _preparar_base(inv: Inventario, rec: Recetario) -> None:
     nombre = st.selectbox("Elaboración base", [p.nombre for p in inv.bases()], key=f"base_preparar_{v}")
     producto = inv.buscar_producto(nombre)
     k = lambda campo: f"base_{campo}_{nombre}_{v}"
+    _mostrar_nota(producto)
     f = producto.formula
     st.caption(
         f"Fórmula: para {_num(f['cantidad'])} {producto.unidad} → "
@@ -1819,6 +1868,10 @@ def pagina_servicios() -> None:
             opciones2 = {f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}": s.id for s in pendientes}
             elegido2 = st.selectbox("Servicio a completar", list(opciones2.keys()), key="completar_select")
             servicio = serv.buscar_por_id(opciones2[elegido2])
+            menu_servicio = rec.buscar_menu(servicio.menu)
+            if menu_servicio is not None:
+                _notas_de_menu(menu_servicio.nombre, menu_servicio.notas,
+                               [(r.nombre, r.notas) for r in menu_servicio.recetas])
 
             # Primero se eligen los lotes; después, la vista previa muestra
             # exactamente qué saldrá de cada uno ANTES de pulsar el botón.
@@ -2029,6 +2082,8 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
             st.info("No hay copia del menú (el servicio se completó antes de existir el historial, o el menú no existía).")
         else:
             st.caption("Así era el menú cuando se completó el servicio (aunque después se haya cambiado).")
+            _notas_de_menu(foto["nombre"], foto.get("notas", ""),
+                           [(r["nombre"], r.get("notas", "")) for r in foto["recetas"]])
             for receta in foto["recetas"]:
                 st.markdown(f"**{receta['nombre']}** · {receta['categoria']}")
                 st.write(", ".join(f"{n} {_num(c)}/comensal" for n, c in receta["ingredientes_por_comensal"].items()))
@@ -2126,10 +2181,13 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
         c1.caption("Recetas: " + (", ".join(r.nombre for r in menu.recetas) or "—"))
         c2.metric("Comida por comensal", f"{menu.costo_por_comensal(inv)} €")
         st.write("Ingredientes por comensal: " + _texto_cantidades(menu.ingredientes_por_comensal(), inv))
+        _editor_nota(menu, f"menu_{menu.nombre}", menu.nombre)
 
         with st.expander("🔎 Ver detalle del menú"):
             for receta in menu.recetas:
                 st.markdown(f"**{receta.nombre}** · {receta.categoria} · {receta.costo_por_comensal(inv)} €/comensal")
+                if receta.notas:
+                    st.caption(f"📝 {receta.notas}")
                 filas = []
                 for nombre, cantidad in receta.ingredientes_por_comensal.items():
                     producto = inv.buscar_producto(nombre)
@@ -2198,6 +2256,7 @@ def pagina_recetario() -> None:
         for r in rec.recetas.values():
             vida = f" · ⏳ dura {r.vida_util_dias} día(s) una vez hecha" if r.vida_util_dias is not None else ""
             st.write(f"{r}  💶 {r.costo_por_comensal(inv)}€/comensal{vida}")
+            _editor_nota(r, f"receta_{r.nombre}", r.nombre)
         if rec.recetas:
             st.markdown("**⏳ Vida útil de una receta**")
             st.caption("Cuántos días dura el plato una vez preparado. Sirve para proponer la caducidad de cada elaboración.")
@@ -2268,6 +2327,8 @@ def pagina_recetario() -> None:
                     "Vida útil una vez hecha, en días (opcional, 0 = sin indicar)", min_value=0, step=1,
                     help="Cuántos días dura el plato preparado. Sirve para proponer la caducidad de las elaboraciones.",
                 )
+                notas_receta = st.text_area("Anotaciones (opcional)",
+                                            placeholder="Cómo se hace, trucos, emplatado... para tus compañeros")
                 crear = st.form_submit_button("Guardar receta", type="primary")
                 if crear:
                     if not st.session_state.receta_ingredientes:
@@ -2275,8 +2336,10 @@ def pagina_recetario() -> None:
                     elif not nombre_receta:
                         st.error("Ponle un nombre a la receta.")
                     else:
-                        rec.agregar_receta(Receta(nombre_receta, categoria_receta, dict(st.session_state.receta_ingredientes),
-                                                  vida_util_dias=int(vida_util) or None))
+                        nueva = Receta(nombre_receta, categoria_receta, dict(st.session_state.receta_ingredientes),
+                                       vida_util_dias=int(vida_util) or None)
+                        nueva.poner_nota(notas_receta)
+                        rec.agregar_receta(nueva)
                         st.session_state.receta_ingredientes = {}
                         avisar("success", f"Receta '{nombre_receta}' creada.")
                         st.rerun()
@@ -2289,12 +2352,16 @@ def pagina_recetario() -> None:
             recetas_elegidas = st.multiselect("Recetas a incluir", list(rec.recetas.keys()), key="recetas_multiselect")
             consumibles = _editor_consumibles(inv, "nuevo_menu", {})
             materiales = _editor_material("nuevo_menu", {})
+            notas_menu = st.text_area("Anotaciones (opcional)", key="nuevo_menu_notas",
+                                      placeholder="Lo que quieras explicar a tus compañeros sobre este menú")
             if st.button("Crear menú", type="primary"):
                 if not nombre_menu or not recetas_elegidas:
                     st.error("Indica un nombre y al menos una receta.")
                 else:
                     recetas_obj = [rec.recetas[n] for n in recetas_elegidas]
-                    rec.agregar_menu(Menu(nombre_menu, recetas_obj, consumibles, materiales))
+                    nuevo_menu = Menu(nombre_menu, recetas_obj, consumibles, materiales)
+                    nuevo_menu.poner_nota(notas_menu)
+                    rec.agregar_menu(nuevo_menu)
                     avisar("success", f"Menú '{nombre_menu}' creado.")
                     for prefijo in ("nombre_menu_input", "recetas_multiselect", "nuevo_menu_"):
                         vaciar_campos(prefijo)
@@ -2367,6 +2434,9 @@ def _pestana_bases(inv: Inventario) -> None:
             "En stock": f"{_num(b.stock)} {b.unidad}",
             "Coste estimado (€/unidad)": f"{inv.coste_estimado_base(b.nombre):.2f}",
         } for b in bases], width="stretch", hide_index=True)
+        for b in bases:
+            st.markdown(f"**{b.nombre}**")
+            _editor_nota(b, f"base_{b.nombre}", b.nombre)
 
     modo = st.radio("¿Qué quieres hacer?", ("➕ Crear una nueva", "✏️ Editar una fórmula"), horizontal=True, key="base_modo",
                     label_visibility="collapsed")
@@ -2388,9 +2458,11 @@ def _pestana_bases(inv: Inventario) -> None:
         minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.5, key=k("minimo"))
         st.markdown("**Ingredientes** para esa cantidad")
         ingredientes = _editor_formula(inv, k("formula"), {})
+        notas = st.text_area("Anotaciones (opcional)", key=k("notas"),
+                             placeholder="Cómo se hace, trucos, conservación... para tus compañeros")
         if st.button("Crear elaboración base", type="primary", key=k("crear")):
             try:
-                inv.definir_base(nombre, categoria, unidad, cantidad or 0, ingredientes, int(vida) or None, minimo)
+                inv.definir_base(nombre, categoria, unidad, cantidad or 0, ingredientes, int(vida) or None, minimo, notas)
                 avisar("success", f"Elaboración base '{nombre.strip()}' creada. Prepárala en Inventario > 🥘 Elaboraciones.")
                 st.session_state.base_nueva_version = v + 1
                 st.rerun()
