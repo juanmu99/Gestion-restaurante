@@ -288,6 +288,11 @@ def cargar_datos_ejemplo() -> None:
 
 # ---------- Anotaciones (bloc de notas de bases, recetas y menús) ----------
 
+def _saltos(texto: str) -> str:
+    """Respeta los saltos de línea de una nota al mostrarla (en Markdown, un salto simple no cuenta)."""
+    return texto.replace("\n", "  \n")
+
+
 def _texto_fecha_nota(fecha: Optional[date]) -> str:
     return f"Editada el {fecha.strftime('%d/%m/%Y')}" if fecha else ""
 
@@ -295,7 +300,7 @@ def _texto_fecha_nota(fecha: Optional[date]) -> str:
 def _mostrar_nota(objeto, titulo: str = "📝 Anotaciones") -> None:
     """Enseña la nota (si tiene), en solo lectura."""
     if objeto.notas:
-        st.info(f"**{titulo}**\n\n{objeto.notas}")
+        st.info(f"**{titulo}**\n\n{_saltos(objeto.notas)}")
         st.caption(_texto_fecha_nota(objeto.notas_fecha))
 
 
@@ -322,11 +327,11 @@ def _notas_de_menu(nombre: str, notas: str, recetas: list[tuple[str, str]]) -> N
     with st.expander("📝 Anotaciones del menú y sus recetas"):
         if notas:
             st.markdown(f"**{nombre}**")
-            st.write(notas)
+            st.markdown(_saltos(notas))
         for receta, nota in recetas:
             if nota:
                 st.markdown(f"**{receta}**")
-                st.write(nota)
+                st.markdown(_saltos(nota))
 
 
 # ---------- Lotes: piezas de interfaz compartidas ----------
@@ -2187,7 +2192,7 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
             for receta in menu.recetas:
                 st.markdown(f"**{receta.nombre}** · {receta.categoria} · {receta.costo_por_comensal(inv)} €/comensal")
                 if receta.notas:
-                    st.caption(f"📝 {receta.notas}")
+                    st.caption(f"📝 {_saltos(receta.notas)}")
                 filas = []
                 for nombre, cantidad in receta.ingredientes_por_comensal.items():
                     producto = inv.buscar_producto(nombre)
