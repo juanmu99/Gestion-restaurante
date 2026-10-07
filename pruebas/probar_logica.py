@@ -1699,6 +1699,21 @@ copia = GestorCompras.from_dict(compras.to_dict())
 comprobar(copia.pendiente_de("Tomate").a_mano == 1 and copia.pendiente_de("Harina").bajo_minimo,
           "Para qué es cada cosa y lo añadido a mano se guardan y se cargan")
 
+print("\n--- Mejora 3: caducidad al comprar y vida útil 'el mismo día' ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Pescado", "Pescado", 0, "kg", 0, "Lonja"))
+pescado = inv.buscar_producto("Pescado")
+comprobar(pescado.caducidad_propuesta_compra(HOY) == HOY + timedelta(days=7),
+          "Sin compras anteriores con caducidad, se proponen 7 días")
+lote = silencio(inv.entrada_stock, "Pescado", 2, precio_unitario=10, fecha_caducidad=HOY + timedelta(days=3))
+lote.fecha_entrada = HOY - timedelta(days=10)
+lote.fecha_caducidad = HOY - timedelta(days=7)
+comprobar(pescado.caducidad_propuesta_compra(HOY) == HOY + timedelta(days=3),
+          "Si no, se propone lo que duró la última compra (3 días)")
+mismo_dia = Receta("Tartar", "Entrantes", {"Pescado": 0.1}, vida_util_dias=0)
+comprobar(mismo_dia.caducidad_propuesta(HOY) == HOY and Receta.from_dict(mismo_dia.to_dict()).vida_util_dias == 0,
+          "Vida útil 0 = se toma el mismo día (y se guarda como 0, no como 'sin indicar')")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

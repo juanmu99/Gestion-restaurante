@@ -650,8 +650,15 @@ def _campos_entrada(producto: Producto, k, cantidad: Optional[float] = None) -> 
         if producto.peso_unitario:
             st.caption(f"La última vez: {_num(producto.peso_unitario)} kg por unidad.")
     fecha = None
-    if not producto.es_consumible() and st.checkbox("¿Este lote tiene fecha de caducidad?", key=k("tiene_fecha")):
-        fecha = st.date_input("Fecha de caducidad de este lote", key=k("fecha"), format="DD/MM/YYYY")
+    # En los alimentos la caducidad viene MARCADA y con una fecha propuesta (lo
+    # que duró la última compra, o 7 días): sin caducidad no hay avisos. Si de
+    # verdad no caduca (sal, aceite...), se desmarca.
+    if not producto.es_consumible() and st.checkbox(
+        "¿Este lote tiene fecha de caducidad?", value=producto.es_alimento(), key=k("tiene_fecha"),
+        help="Desmárcalo si este producto no caduca.",
+    ):
+        fecha = st.date_input("Fecha de caducidad de este lote", value=producto.caducidad_propuesta_compra(),
+                              key=k("fecha"), format="DD/MM/YYYY")
     return {"precio": precio, "proveedor": proveedor, "peso": peso, "fecha": fecha, "necesita_peso": necesita_peso}
 
 
@@ -1805,7 +1812,7 @@ def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
     # La key lleva la fecha de preparación: si se cambia, se vuelve a proponer la caducidad.
     caducidad = c3.date_input("Caduca el", value=propuesta, min_value=fecha_prep, key=k(f"caducidad_{fecha_prep.isoformat()}"), format="DD/MM/YYYY")
     if receta.vida_util_dias is not None:
-        st.caption(f"'{nombre}' dura {receta.vida_util_dias} día(s) una vez hecha: se propone la caducidad según eso.")
+        st.caption(f"'{nombre}' dura {_texto_vida(receta.vida_util_dias)} una vez hecha: se propone la caducidad según eso.")
     else:
         st.caption(f"'{nombre}' no tiene vida útil: indica la caducidad a mano (puedes ponérsela a la receta en el Recetario).")
 
@@ -2518,14 +2525,33 @@ def _texto_servicio(s: Servicio) -> str:
     return f"#{s.id} · {s.fecha.strftime('%d/%m/%Y')} {s.hora.strftime('%H:%M')} · {s.menu}{cliente}"
 
 
+# Vida útil: vacío = sin indicar (no se propone caducidad); 0 = el mismo día.
+TEXTO_VIDA_UTIL = "días (vacío = sin indicar, 0 = el mismo día)"
+
+
+def _texto_vida(dias: int) -> str:
+    """'3 día(s)', o 'solo el mismo día' si es 0."""
+    return "solo el mismo día" if dias == 0 else f"{dias} día(s)"
+
+
+def _texto_servicio_estado(s: Servicio) -> str:
+    """Como _texto_servicio(), con el estado al final: '#3 · 12/10/2026 21:00 · Menú del día · García · confirmado'."""
+    return f"{_texto_servicio(s)} · {s.estado}"
+
+
+def _cercanos_primero(servicios) -> list:
+    """Los servicios ordenados por cercanía a hoy (hoy, mañana, ayer...), para los desplegables."""
+    hoy = date.today()
+    return sorted(servicios, key=lambda s: (abs((s.fecha - hoy).days), s.fecha, s.hora))
+
+
 def _pestana_editar_servicio(serv: RegistroServicios, rec: Recetario) -> None:
     """Cambiar los datos de un servicio que todavía no se ha hecho (pendiente o confirmado)."""
-    editables = sorted((s for s in serv.servicios if s.estado in ("pendiente", "confirmado")),
-                       key=lambda s: (s.fecha, s.hora))
+    editables = _cercanos_primero(s for s in serv.servicios if s.estado in ("pendiente", "confirmado"))
     if not editables:
         st.info("No hay servicios pendientes que editar. (Uno completado o cancelado ya no se edita.)")
         return
-    opciones = {_texto_servicio(s): s for s in editables}
+    opciones = {_texto_servicio_estado(s): s for s in editables}
     elegido = st.selectbox("Servicio a editar", list(opciones), index=None, placeholder="Elige el servicio...",
                            key="editar_servicio_select")
     if not elegido:
@@ -2665,12 +2691,11 @@ def pagina_servicios() -> None:
 
     with tab_cancel:
         # Solo los que aún no se han hecho: uno completado ya gastó su stock y sus costes son reales.
-        cancelables = sorted((s for s in serv.servicios if s.estado in ("pendiente", "confirmado")),
-                             key=lambda s: (s.fecha, s.hora))
+        cancelables = _cercanos_primero(s for s in serv.servicios if s.estado in ("pendiente", "confirmado"))
         if not cancelables:
             st.info("No hay servicios pendientes que cancelar.")
         else:
-            opciones = {_texto_servicio(s): s.id for s in cancelables}
+            opciones = {_texto_servicio_estado(s): s.id for s in cancelables}
             elegido = st.selectbox("Servicio a cancelar", list(opciones.keys()), key="cancelar_select",
                                    index=None, placeholder="Elige el servicio...")
             confirmar = st.checkbox("Sí, quiero cancelar este servicio (no se puede deshacer)", key="cancelar_confirmar")
@@ -2690,7 +2715,7 @@ def pagina_servicios() -> None:
         if not pendientes:
             st.info("No hay servicios pendientes de completar.")
         else:
-            opciones2 = {f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}": s.id for s in pendientes}
+            opciones2 = {_texto_servicio_estado(s): s.id for s in _cercanos_primero(pendientes)}
             elegido2 = st.selectbox("Servicio a completar", list(opciones2.keys()), key="completar_select")
             servicio = serv.buscar_por_id(opciones2[elegido2])
             menu_servicio = rec.buscar_menu(servicio.menu)
@@ -3216,19 +3241,20 @@ def pagina_recetario() -> None:
         if not rec.recetas:
             st.info("No hay recetas todavía.")
         for r in rec.recetas.values():
-            vida = f" · ⏳ dura {r.vida_util_dias} día(s) una vez hecha" if r.vida_util_dias is not None else ""
+            vida = f" · ⏳ dura {_texto_vida(r.vida_util_dias)} una vez hecha" if r.vida_util_dias is not None else ""
             st.write(f"{_es(str(r))}  💶 {_eur(r.costo_por_comensal(inv))} €/comensal{vida}")
             _editor_nota(r, f"receta_{r.nombre}", r.nombre)
         if rec.recetas:
             st.markdown("**⏳ Vida útil de una receta**")
-            st.caption("Cuántos días dura el plato una vez preparado. Sirve para proponer la caducidad de cada elaboración.")
+            st.caption("Cuántos días dura el plato una vez preparado. Sirve para proponer la caducidad de cada elaboración. "
+                       "Vacío = sin indicar; 0 = se toma el mismo día que se prepara.")
             c1, c2, c3 = st.columns([2, 1, 1])
             nombre_vida = c1.selectbox("Receta", list(rec.recetas), key="vida_receta")
             receta_vida = rec.recetas[nombre_vida]
-            dias_vida = c2.number_input("Días (0 = sin vida útil)", min_value=0, step=1,
-                                        value=receta_vida.vida_util_dias or 0, key=f"vida_dias_{nombre_vida}")
+            dias_vida = c2.number_input(TEXTO_VIDA_UTIL, min_value=0, step=1, value=receta_vida.vida_util_dias,
+                                        placeholder="sin indicar", key=f"vida_dias_{nombre_vida}")
             if c3.button("Guardar", key=f"vida_guardar_{nombre_vida}"):
-                receta_vida.vida_util_dias = int(dias_vida) or None
+                receta_vida.vida_util_dias = None if dias_vida is None else int(dias_vida)
                 avisar("success", f"Vida útil de '{nombre_vida}' guardada.")
                 st.rerun()
 
@@ -3303,7 +3329,8 @@ def pagina_recetario() -> None:
                 nombre_receta = st.text_input("Nombre de la receta", key=f"receta_nombre_{vr}")
                 categoria_receta = st.text_input("Categoría", key=f"receta_categoria_{vr}")
                 vida_util = st.number_input(
-                    "Vida útil una vez hecha, en días (opcional, 0 = sin indicar)", min_value=0, step=1,
+                    f"Vida útil una vez hecha (opcional) — {TEXTO_VIDA_UTIL}", min_value=0, step=1, value=None,
+                    placeholder="sin indicar",
                     help="Cuántos días dura el plato preparado. Sirve para proponer la caducidad de las elaboraciones.",
                     key=f"receta_vida_{vr}",
                 )
@@ -3317,7 +3344,7 @@ def pagina_recetario() -> None:
                         st.error("Ponle un nombre a la receta.")
                     else:
                         nueva = Receta(nombre_receta, categoria_receta, dict(st.session_state.receta_ingredientes),
-                                       vida_util_dias=int(vida_util) or None)
+                                       vida_util_dias=None if vida_util is None else int(vida_util))
                         nueva.poner_nota(notas_receta)
                         try:
                             rec.agregar_receta(nueva)
@@ -3421,7 +3448,7 @@ def _pestana_bases(inv: Inventario) -> None:
             "Elaboración": b.nombre, "Fórmula": f"para {_num(b.formula['cantidad'])} {b.unidad}",
             "Ingredientes": ", ".join(f"{_num(c)} {inv.buscar_producto(i).unidad if inv.buscar_producto(i) else ''} {i}"
                                       for i, c in b.formula["ingredientes"].items()),
-            "Vida útil": f"{b.vida_util_dias} día(s)" if b.vida_util_dias is not None else "—",
+            "Vida útil": _texto_vida(b.vida_util_dias) if b.vida_util_dias is not None else "—",
             "En stock": f"{_num(b.stock)} {b.unidad}",
             "Coste estimado": f"{_precio(inv.coste_estimado_base(b.nombre))} €/{b.unidad}",
         } for b in bases], width="stretch", hide_index=True)
@@ -3445,7 +3472,8 @@ def _pestana_bases(inv: Inventario) -> None:
         cantidad = c2.number_input(f"La fórmula da (en {unidad})", min_value=0.0, step=0.5, value=None,
                                    placeholder="0", key=k("cantidad"),
                                    help="Para cuánta cantidad son los ingredientes de abajo.")
-        vida = c3.number_input("Vida útil (días, 0 = sin indicar)", min_value=0, step=1, key=k("vida"))
+        vida = c3.number_input(f"Vida útil — {TEXTO_VIDA_UTIL}", min_value=0, step=1, value=None,
+                               placeholder="sin indicar", key=k("vida"))
         minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.5, key=k("minimo"))
         st.markdown("**Ingredientes** para esa cantidad")
         ingredientes = _editor_formula(inv, k("formula"), {})
@@ -3453,7 +3481,8 @@ def _pestana_bases(inv: Inventario) -> None:
                              placeholder="Cómo se hace, trucos, conservación... para tus compañeros")
         if st.button("Crear elaboración base", type="primary", key=k("crear")):
             try:
-                inv.definir_base(nombre, categoria, unidad, cantidad or 0, ingredientes, int(vida) or None, minimo, notas)
+                inv.definir_base(nombre, categoria, unidad, cantidad or 0, ingredientes,
+                                 None if vida is None else int(vida), minimo, notas)
                 avisar("success", f"Elaboración base '{nombre.strip()}' creada. Prepárala en Inventario > 🥘 Elaboraciones.")
                 st.session_state.base_nueva_version = v + 1
                 st.rerun()
@@ -3470,12 +3499,12 @@ def _pestana_bases(inv: Inventario) -> None:
         c1, c2 = st.columns(2)
         cantidad = c1.number_input(f"La fórmula da (en {producto.unidad})", min_value=0.0, step=0.5,
                                    value=float(producto.formula["cantidad"]), key=k("cantidad"))
-        vida = c2.number_input("Vida útil (días, 0 = sin indicar)", min_value=0, step=1,
-                               value=producto.vida_util_dias or 0, key=k("vida"))
+        vida = c2.number_input(f"Vida útil — {TEXTO_VIDA_UTIL}", min_value=0, step=1,
+                               value=producto.vida_util_dias, placeholder="sin indicar", key=k("vida"))
         ingredientes = _editor_formula(inv, k("formula"), producto.formula["ingredientes"], excluir=nombre)
         if st.button("Guardar fórmula", type="primary", key=k("guardar")):
             try:
-                inv.editar_formula(nombre, cantidad, ingredientes, int(vida) or None)
+                inv.editar_formula(nombre, cantidad, ingredientes, None if vida is None else int(vida))
                 avisar("success", f"Fórmula de '{nombre}' guardada.")
                 st.session_state.base_editar_version = v + 1
                 st.rerun()

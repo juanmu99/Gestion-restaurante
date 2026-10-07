@@ -711,6 +711,21 @@ class Producto(ConNotas):
             return None
         return (self.fecha_caducidad - date.today()).days
 
+    DIAS_CADUCIDAD_POR_DEFECTO = 7
+
+    def caducidad_propuesta_compra(self, hoy: Optional[date] = None) -> date:
+        """
+        Caducidad que se propone al comprar: lo que duró la compra más
+        reciente que tenía caducidad (de su entrada a su caducidad), contado
+        desde hoy. Si no hay ninguna, dentro de DIAS_CADUCIDAD_POR_DEFECTO días.
+        """
+        hoy = hoy or date.today()
+        con_fecha = [l for l in self.lotes if l.fecha_caducidad is not None]
+        if con_fecha:
+            ultimo = max(con_fecha, key=lambda l: (l.fecha_entrada, l.id))
+            return hoy + timedelta(days=max(0, (ultimo.fecha_caducidad - ultimo.fecha_entrada).days))
+        return hoy + timedelta(days=self.DIAS_CADUCIDAD_POR_DEFECTO)
+
     @property
     def stock_bueno(self) -> float:
         """El stock que NO ha caducado (lo que de verdad se puede usar hoy)."""

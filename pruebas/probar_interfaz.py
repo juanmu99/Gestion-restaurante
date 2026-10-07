@@ -708,7 +708,7 @@ def prueba_notas(at: AppTest) -> None:
     # ...y al completar un servicio de ese menú
     ir_a(at, "Servicios")
     caja = at.selectbox(key="completar_select")
-    opciones_menu = [o for o in caja.options if o.endswith("Menú del día")]
+    opciones_menu = [o for o in caja.options if " · Menú del día" in o]
     if opciones_menu:
         caja.select(opciones_menu[0]).run()
         escrito = " ".join(textos(at.markdown))
@@ -779,9 +779,8 @@ def prueba_completar(at: AppTest) -> None:
     ir_a(at, "Servicios")
     serv = at.session_state["registro_servicios"]
     pendiente = next(s for s in serv.servicios if s.estado == "pendiente")
-    at.selectbox(key="completar_select").select(
-        f"#{pendiente.id} - {pendiente.fecha.strftime('%d/%m/%Y')} - {pendiente.menu}"
-    ).run()
+    caja = at.selectbox(key="completar_select")
+    caja.select(opcion(caja, f"#{pendiente.id} ·")).run()
     at.text_area(key=f"valoracion_{pendiente.id}").input("Todo bien; sobró pan")
     boton(at.button, "Completar servicio").click().run()
     servilletas = at.session_state["inventario"].buscar_producto("Servilletas de papel")
@@ -810,9 +809,8 @@ def prueba_completar_lotes(at: AppTest) -> None:
     serv.agregar_servicio(servicio)
 
     ir_a(at, "Servicios")
-    at.selectbox(key="completar_select").select(
-        f"#{servicio.id} - {servicio.fecha.strftime('%d/%m/%Y')} - {servicio.menu}"
-    ).run()
+    caja = at.selectbox(key="completar_select")
+    caja.select(opcion(caja, f"#{servicio.id} ·")).run()
     base = f"completar_lote_{servicio.id}_Secreto ibérico"
     primero = at.selectbox(key=f"{base}_0")
     primero.select(opcion(primero, "Lote 3 ·")).run()
@@ -1285,9 +1283,8 @@ def prueba_bloque4(at: AppTest) -> None:
     servicio = Servicio(date.today(), time(13, 0), 2, "Menú brasa")  # un solo lote: sin elegir lotes
     serv.agregar_servicio(servicio)
     ir_a(at, "Servicios")
-    at.selectbox(key="completar_select").select(
-        f"#{servicio.id} - {servicio.fecha.strftime('%d/%m/%Y')} - {servicio.menu}"
-    ).run()
+    caja = at.selectbox(key="completar_select")
+    caja.select(opcion(caja, f"#{servicio.id} ·")).run()
     v = at.session_state[f"extras_{servicio.id}_version"]
     at.text_input(key=f"extras_{servicio.id}_concepto_{v}").input("Taxi").run()
     boton(at.button, "Completar servicio").click().run()
@@ -1509,6 +1506,29 @@ def prueba_mejora2(at: AppTest) -> None:
     comprobar(comp.pendiente_de("Papel de horno") is None, "Se puede quitar un artículo de la lista")
 
 
+@prueba("Caducidad al comprar, servicios ordenados y vida útil (mejora 3)")
+def prueba_mejora3(at: AppTest) -> None:
+    rec = at.session_state["recetario"]
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🍅 Alimentos").run()
+    at.selectbox(key="stock_select").select("Tomate").run()
+    at.radio(key="stock_tipo_Tomate").set_value("Entrada (compra)").run()
+    comprobar(at.checkbox(key="stock_tiene_fecha_Tomate").value is True and at.date_input(key="stock_fecha_Tomate").value,
+              "Al comprar un alimento, la caducidad viene marcada y con una fecha propuesta")
+
+    ir_a(at, "Servicios")
+    caja = at.selectbox(key="completar_select")
+    comprobar(caja.options[0].endswith(("pendiente", "confirmado")) and " · " in caja.options[0],
+              "Los desplegables de servicios muestran el estado")
+
+    ir_a(at, "Recetario")
+    at.selectbox(key="vida_receta").select("Pan casero").run()
+    at.number_input(key="vida_dias_Pan casero").set_value(0)
+    at.button(key="vida_guardar_Pan casero").click().run()
+    comprobar(rec.recetas["Pan casero"].vida_util_dias == 0 and any("solo el mismo día" in t for t in textos(at.markdown)),
+              "Se puede poner vida útil 0 (el mismo día), distinta de 'sin indicar'")
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1547,6 +1567,7 @@ def main() -> int:
     prueba_fase3_bloque6(at)
     prueba_mejora1(at)
     prueba_mejora2(at)
+    prueba_mejora3(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

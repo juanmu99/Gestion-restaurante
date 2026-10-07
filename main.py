@@ -17,7 +17,7 @@ futuro que aún no hemos construido (sería un buen Módulo 6).
 import math
 import sys
 from pathlib import Path
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 # Añadimos la carpeta modulos/ al path para poder importar sus archivos
@@ -390,7 +390,20 @@ def pedir_datos_entrada(producto, cantidad: float = 0) -> dict:
     precio = pedir_precio(producto.unidad, cantidad, producto.precio_referencia, producto.iva)
     proveedor = pedir_texto_no_numerico_opcional(f"Proveedor de este lote [{producto.proveedor}]: ")
     fecha = None
-    if not producto.es_consumible() and pedir_si_no("¿Este lote tiene fecha de caducidad?"):
+    if producto.es_alimento():
+        # En los alimentos se propone una fecha (lo que duró la última compra, o 7 días).
+        propuesta = producto.caducidad_propuesta_compra()
+        respuesta = pedir_texto(f"Caducidad de este lote [Enter = {propuesta.strftime('%d/%m/%Y')}, "
+                                "'n' = no caduca, o escribe otra fecha dd/mm/aaaa]: ").lower()
+        if respuesta == "":
+            fecha = propuesta
+        elif respuesta != "n":
+            try:
+                fecha = datetime.strptime(respuesta, "%d/%m/%Y").date()
+            except ValueError:
+                print("⚠️  Fecha no válida.")
+                fecha = pedir_fecha("Fecha de caducidad de este lote")
+    elif not producto.es_consumible() and pedir_si_no("¿Este lote tiene fecha de caducidad?"):
         fecha = pedir_fecha("Fecha de caducidad de este lote")
     return {"precio_unitario": precio, "proveedor": proveedor, "fecha_caducidad": fecha,
             "peso_unitario": pedir_peso_lote(producto)}
@@ -1357,16 +1370,16 @@ def accion_bases_recetario() -> None:
             unidad = pedir_opcion("Unidad", ("kg", "g", "litros", "ml"))
             cantidad = pedir_numero(f"¿Cuánto da la fórmula? (en {unidad}): ")
             ingredientes = pedir_formula(nombre)
-            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
-            inventario.definir_base(nombre, categoria, unidad, cantidad, ingredientes, int(vida) if vida else None)
+            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío = sin indicar, 0 = el mismo día): ")
+            inventario.definir_base(nombre, categoria, unidad, cantidad, ingredientes, int(vida) if vida is not None else None)
             print(f"✅ Elaboración base '{nombre}' creada. Prepárala en Inventario > Elaboraciones.")
         elif accion == "editar" and bases:
             nombre = pedir_opcion("Elaboración base", tuple(b.nombre for b in bases))
             producto = inventario.buscar_producto(nombre)
             cantidad = pedir_numero(f"¿Cuánto da la fórmula? (en {producto.unidad}): ")
             ingredientes = pedir_formula(nombre)
-            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
-            inventario.editar_formula(nombre, cantidad, ingredientes, int(vida) if vida else None)
+            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío = sin indicar, 0 = el mismo día): ")
+            inventario.editar_formula(nombre, cantidad, ingredientes, int(vida) if vida is not None else None)
     except ValueError as e:
         print(f"❌ {e}")
 
@@ -1476,12 +1489,12 @@ def menu_recetario():
                     print(f"⚠️  '{ing}' no es un alimento: los consumibles se añaden al menú, no a la receta.")
                     continue
                 ingredientes[producto.nombre] = pedir_cantidad_ingrediente(producto)
-            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
+            vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío = sin indicar, 0 = el mismo día): ")
             if not ingredientes:
                 print("⚠️  Una receta necesita al menos un ingrediente: no se ha creado.")
             else:
                 try:
-                    recetario.agregar_receta(Receta(nombre, categoria, ingredientes, int(vida) if vida else None))
+                    recetario.agregar_receta(Receta(nombre, categoria, ingredientes, int(vida) if vida is not None else None))
                 except ValueError as e:
                     print(f"❌ {e}")
         elif opcion == "4":
