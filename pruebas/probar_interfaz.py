@@ -160,6 +160,45 @@ def prueba_precios(at: AppTest) -> None:
     comprobar(sin_excepciones(at, "historial de precios") and not at.error,
               "La pestaña 'Historial de precios' se muestra (con la gráfica por proveedor)")
 
+    # (B) Corregir el precio de una compra mal apuntada
+    def lote_2():
+        caja = at.selectbox(key=f"edit_lote_{nombre}")
+        caja.select(opcion(caja, "Lote 2 ·")).run()
+
+    at.selectbox(key="editar_select").select(nombre).run()
+    lote_2()
+    at.number_input(key=f"edit_lote_precio_{nombre}_2").set_value(4.0).run()
+    at.button(key=f"edit_boton_{nombre}").click().run()
+    compra_mov = next(m for m in inv.historial if m.producto_nombre == nombre and m.lote_id == 2 and m.es_compra())
+    comprobar(sin_excepciones(at, "corregir precio sin salidas") and inv.precios_de(nombre)[-1].precio_unitario == 4.0
+              and compra_mov.precio_unitario == 4.0,
+              "Corregir el precio de un lote sin usar corrige también su compra y el historial de precios")
+
+    at.radio(key=f"stock_tipo_{nombre}").set_value("Salida").run()
+    at.number_input(key=f"stock_cantidad_{nombre}").set_value(1.0)
+    caja = at.selectbox(key=f"stock_lote_{nombre}")
+    caja.select(opcion(caja, "Lote 2 ·")).run()
+    at.button(key=f"stock_boton_{nombre}").click().run()
+    lote_2()
+    at.number_input(key=f"edit_lote_precio_{nombre}_2").set_value(3.5).run()
+    pregunta = at.radio(key=f"edit_lote_corregir_{nombre}_2")
+    comprobar(any("salida de 1 kg" in t for t in textos(at.info)),
+              "Si ya ha salido algo del lote, se avisa de lo registrado y se pregunta qué hacer")
+    pregunta.set_value(next(o for o in pregunta.options if o.startswith("Dejarlo"))).run()
+    at.button(key=f"edit_boton_{nombre}").click().run()
+    salida = next(m for m in inv.historial if m.producto_nombre == nombre and m.lote_id == 2 and m.tipo == "salida")
+    comprobar(inv.buscar_producto(nombre).buscar_lote(2).precio_unitario == 3.5 and salida.precio_unitario == 4.0
+              and inv.precios_de(nombre)[-1].precio_unitario == 4.0,
+              "'Dejarlo como estaba': cambia el lote, pero no lo ya registrado")
+
+    at.selectbox(key="precios_select").select(nombre).run()
+    indice = inv.precios_de(nombre).index(inv.precios_de(nombre)[-1])
+    at.number_input(key=f"corregir_compra_precio_{nombre}_{indice}").set_value(3.5).run()
+    at.button(key=f"corregir_compra_guardar_{nombre}_{indice}").click().run()
+    comprobar(sin_excepciones(at, "corregir compra") and inv.precios_de(nombre)[-1].precio_unitario == 3.5
+              and salida.precio_unitario == 3.5,
+              "Desde el historial de precios se corrige una compra y lo que ya salió de ella")
+
 
 @prueba("Añadir productos")
 def prueba_anadir(at: AppTest) -> None:

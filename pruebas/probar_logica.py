@@ -790,6 +790,42 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar(hoja.max_row == 6 and hoja["C2"].value in ("Huerta", "Frutas Paco"),
               "El Excel tiene la hoja 'Historial de precios' (una fila por compra)")
 
+print("\n--- Corregir un precio hacia atrás ---")
+from gastos import RegistroGastos as _RG2, resumen_servicio as _res2  # noqa: E402
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Lomo", "Carnes", 0, "kg", 0, "Carnicería"))
+lote = silencio(inv.entrada_stock, "Lomo", 5, precio_unitario=14, proveedor="Carnicería")  # error: eran 4 €/kg
+silencio(inv.salida_stock, "Lomo", 2, "consumo", lote.id, servicio_id=900)
+silencio(inv.salida_stock, "Lomo", 0.5, "desperdicio", lote.id)
+silencio(inv.salida_stock, "Lomo", 1, "elaboración", lote.id)
+usos = inv.usos_del_lote("Lomo", lote.id)
+comprobar(usos["compra"] is not None and usos["servicios"] == {900: 28.0} and len(usos["salidas"]) == 3
+          and len(usos["derivados"]) == 1,
+          "Se sabe qué hay registrado con un lote: su compra, el servicio #900, un desperdicio y una elaboración")
+silencio(inv.editar_lote, "Lomo", lote.id, precio_unitario=4)
+comprobar(lote.precio_unitario == 4 and usos["compra"].precio_unitario == 14 and inv.precios_de("Lomo")[0].precio_unitario == 14,
+          "Sin corregir lo registrado, solo cambia el lote (lo que salga a partir de ahora)")
+silencio(inv.editar_lote, "Lomo", lote.id, precio_unitario=4, proveedor="Carnes Paco", corregir_registrado=True)
+servicio = Servicio(HOY, time(14, 0), 10, "Menú inexistente")
+servicio.id = 900
+servicio.estado = "completado"
+comprobar(_res2(servicio, inv, Recetario(), _RG2())["comida"] == 8.0
+          and Metricas(inv).gasto_por_categoria(HOY, HOY) == {"Carnes": 20.0}
+          and inv.precios_de("Lomo")[0].precio_unitario == 4 and inv.precios_de("Lomo")[0].proveedor == "Carnes Paco"
+          and "Carnes Paco" in usos["compra"].lote,
+          "Corrigiendo lo registrado: el servicio cuesta 8 €, la compra 20 € y el historial dice 4 € (y el proveedor nuevo)")
+silencio(inv.salida_stock, "Lomo", 1.5, "consumo", lote.id, servicio_id=901)
+comprobar(inv.buscar_producto("Lomo").buscar_lote(lote.id) is None, "(el lote ya se ha gastado entero)")
+compra = inv.precios_de("Lomo")[0]
+silencio(inv.corregir_compra, compra, 4.5)
+comprobar(compra.precio_unitario == 4.5 and inv.usos_del_lote("Lomo", lote.id)["servicios"] == {900: 9.0, 901: 6.75},
+          "Desde el historial de precios se corrige una compra aunque su lote ya no exista")
+try:
+    inv.corregir_compra(compra, -1)
+    comprobar(False, "Un precio negativo no se acepta")
+except ValueError:
+    comprobar(compra.precio_unitario == 4.5, "Un precio negativo no se acepta")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

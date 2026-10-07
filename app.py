@@ -849,6 +849,12 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             "Corregir no es un movimiento de stock: no queda en el historial. Si algo se ha gastado o tirado, "
             "regístralo como salida en 'Actualizar stock'. Poner la cantidad a 0 elimina este lote."
         )
+        datos_lote["corregir_registrado"] = False
+        if (abs(datos_lote["precio"] - lote.precio_unitario) > 1e-9
+                or datos_lote["proveedor"].strip() != lote.proveedor):
+            datos_lote["corregir_registrado"] = _pregunta_corregir_registrado(
+                inv.usos_del_lote(producto.nombre, lote.id), kl("corregir"), producto.unidad,
+            )
 
     if st.button("Guardar cambios", type="primary", key=k("boton")):
         # Se comprueba todo ANTES de guardar nada: o se guarda todo o nada.
@@ -871,7 +877,7 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
                     proveedor=datos_lote["proveedor"],
                     fecha_caducidad=datos_lote["fecha"] if datos_lote["tiene_fecha"] else None,
                     borrar_fecha_caducidad=not datos_lote["tiene_fecha"],
-                    peso_unitario=datos_lote["peso"],
+                    peso_unitario=datos_lote["peso"], corregir_registrado=datos_lote["corregir_registrado"],
                 )
             if exito:
                 if producto.nombre != nombre_original:
@@ -975,6 +981,50 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
             st.error("No se ha podido registrar la salida.")
 
 
+def _texto_usos(usos: dict, unidad: str) -> list[str]:
+    """Qué hay ya registrado con un lote, en frases cortas (para avisar antes de corregir su precio)."""
+    lineas = []
+    if usos["compra"] is not None:
+        lineas.append("su **compra** (cuenta como dinero gastado en Métricas)")
+    for servicio_id, valor in usos["servicios"].items():
+        lineas.append(f"lo que salió para el **servicio #{servicio_id}** ({valor:.2f} € con el precio actual)")
+    otras = [m for m in usos["salidas"] if m.servicio_id is None and m not in usos["derivados"]]
+    for m in otras:
+        lineas.append(f"una salida de {_num(m.cantidad)} {unidad} el {m.fecha.strftime('%d/%m/%Y')} ({m.motivo})")
+    return lineas
+
+
+def _pregunta_corregir_registrado(usos: dict, clave: str, unidad: str, preguntar: bool = True) -> bool:
+    """
+    Al corregir el precio (o el proveedor) de una compra: avisa de lo que ya
+    está registrado con ella y pregunta si se corrige también. Devuelve True
+    si hay que corregirlo.
+    """
+    lineas = _texto_usos(usos, unidad)
+    derivados = usos["derivados"]
+    if not usos["salidas"]:
+        if lineas:
+            st.caption("Se corregirá también su compra en Métricas y en el historial de precios.")
+        return True
+    st.info("Con este lote ya se ha registrado:\n\n" + "\n".join(f"- {l}" for l in lineas)
+            if lineas else "De este lote ya ha salido algo.")
+    if derivados:
+        st.warning(
+            "⚠️ De este lote también salió algo para **elaborar o limpiar** ("
+            + ", ".join(f"{_num(m.cantidad)} {unidad} el {m.fecha.strftime('%d/%m/%Y')}" for m in derivados)
+            + "). Esas tandas, elaboraciones base o productos limpios ya tienen su coste calculado y **no se "
+              "recalculan**: si es importante, corrige su precio a mano."
+        )
+    if not preguntar:
+        return True
+    return st.radio(
+        "¿Qué hacemos con lo ya registrado?",
+        ("Corregirlo también (coste de los servicios, Métricas e historial de precios)",
+         "Dejarlo como estaba (solo cambia lo que salga a partir de ahora)"),
+        key=clave,
+    ).startswith("Corregirlo")
+
+
 def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
     con_compras = [n for n in nombres if inv.precios_de(n)]
     if not con_compras:
@@ -1007,6 +1057,32 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
         "Total (€)": f"{c.total:.2f}", "Lote": c.lote_id or "—",
         "Origen": "Stock inicial" if c.origen == "inicial" else "Compra",
     } for c in reversed(compras)], width="stretch", hide_index=True)
+
+    with st.expander("✏️ Corregir el precio de una compra"):
+        st.caption("Para arreglar un precio mal apuntado, aunque ese lote ya se haya gastado. Se corrige también "
+                   "lo que ya salió de él (coste de los servicios, Métricas...).")
+        opciones = {
+            f"{c.fecha.strftime('%d/%m/%Y')} · {c.proveedor} · {_num(c.cantidad)} {c.unidad} a {_num(c.precio_unitario)} €"
+            + (f" · lote {c.lote_id}" if c.lote_id else ""): c
+            for c in reversed(compras)
+        }
+        compra = opciones[st.selectbox("Compra", list(opciones), key=f"corregir_compra_{nombre}")]
+        kc = lambda campo: f"corregir_compra_{campo}_{nombre}_{compras.index(compra)}"
+        c1, c2 = st.columns(2)
+        nuevo_precio = c1.number_input(f"Precio correcto (€/{unidad_txt})", min_value=0.0, step=0.1,
+                                       value=float(compra.precio_unitario), key=kc("precio"))
+        nuevo_proveedor = c2.text_input("Proveedor", value=compra.proveedor, key=kc("proveedor"))
+        cambia = abs(nuevo_precio - compra.precio_unitario) > 1e-9 or nuevo_proveedor.strip() != compra.proveedor
+        if cambia and compra.lote_id is not None:
+            _pregunta_corregir_registrado(inv.usos_del_lote(nombre, compra.lote_id), kc("pregunta"), producto.unidad,
+                                          preguntar=False)
+        if st.button("Guardar corrección", key=kc("guardar"), disabled=not cambia):
+            try:
+                inv.corregir_compra(compra, nuevo_precio, nuevo_proveedor)
+                avisar("success", f"Compra corregida: {_num(nuevo_precio)} €/{unidad_txt} ({nuevo_proveedor.strip()}).")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
 
 
 def _pestana_lotes(inv: Inventario, nombres: list[str]) -> None:

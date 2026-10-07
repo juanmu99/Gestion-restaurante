@@ -1210,6 +1210,7 @@ class Inventario:
         fecha_caducidad: Optional[date] = None,
         borrar_fecha_caducidad: bool = False,
         peso_unitario: Optional[float] = None,
+        corregir_registrado: bool = False,
     ) -> bool:
         """
         CORRIGE los datos de un lote (un error al apuntarlo, un recuento...).
@@ -1218,6 +1219,12 @@ class Inventario:
 
         None = "no lo toques". borrar_fecha_caducidad=True deja el lote sin
         caducidad. Una cantidad de 0 elimina el lote.
+
+        corregir_registrado: si se cambia el precio (o el proveedor) y es
+        True, se corrige también lo YA REGISTRADO con este lote: su compra
+        (Métricas), el historial de precios y lo que ya salió de él (coste
+        de servicios, desperdicio...). Ver usos_del_lote(). Si es False,
+        solo cambia el lote: lo que salga a partir de ahora.
         """
         producto = self.productos.get(nombre)
         lote = producto.buscar_lote(lote_id) if producto else None
@@ -1233,6 +1240,8 @@ class Inventario:
         if peso_unitario is not None and peso_unitario <= 0:
             raise ValueError("El peso por unidad debe ser mayor que 0.")
 
+        if corregir_registrado:
+            self._corregir_registrado(producto.nombre, lote.id, precio_unitario, proveedor)
         if cantidad is not None:
             lote.cantidad = cantidad
         if precio_unitario is not None:
@@ -1248,6 +1257,73 @@ class Inventario:
         producto.quitar_lotes_vacios()
         print(f"✏️  Lote corregido: {nombre} -> {lote.descripcion(producto.unidad)}")
         return True
+
+    def usos_del_lote(self, nombre: str, lote_id: int) -> dict:
+        """
+        Lo que ya se ha registrado con un lote y depende de su precio:
+        - compra: su entrada (cuenta como dinero gastado en Métricas) o None.
+        - salidas: lo que ya salió de él (consumo, desperdicio...), con su servicio si lo tiene.
+        - servicios: {servicio_id: valor de lo que salió para ese servicio}.
+        - derivados: salidas para elaborar o limpiar. Su coste ya pasó a
+          otra cosa (una tanda, una elaboración base, un producto limpio), y
+          eso NO se recalcula al corregir el precio.
+        """
+        movimientos = [m for m in self.historial if m.producto_nombre == nombre and m.lote_id == lote_id]
+        compra = next((m for m in movimientos if m.es_compra()), None)
+        salidas = [m for m in movimientos if m.tipo == "salida"]
+        servicios: dict[int, float] = {}
+        for m in salidas:
+            if m.servicio_id is not None:
+                servicios[m.servicio_id] = round(servicios.get(m.servicio_id, 0) + m.valor(), 2)
+        return {
+            "compra": compra,
+            "salidas": salidas,
+            "servicios": servicios,
+            "derivados": [m for m in salidas if m.motivo in ("elaboración", "limpieza")],
+        }
+
+    def corregir_compra(self, compra: "PrecioCompra", precio_unitario: float, proveedor: Optional[str] = None) -> None:
+        """
+        Corrige el precio (y el proveedor) de una compra del HISTORIAL DE
+        PRECIOS, aunque su lote ya se haya gastado entero: se corrige todo lo
+        registrado con ese lote (ver _corregir_registrado) y el lote, si sigue.
+        Las compras sin número de lote (sesiones muy antiguas) solo se
+        corrigen en el historial de precios.
+        """
+        if precio_unitario < 0:
+            raise ValueError("El precio no puede ser negativo.")
+        if proveedor is not None and (not proveedor.strip() or _es_numero(proveedor)):
+            raise ValueError("El proveedor debe ser texto descriptivo, no puede estar vacío ni ser un número")
+        if compra.lote_id is None:
+            compra.precio_unitario = precio_unitario
+            if proveedor is not None:
+                compra.proveedor = proveedor.strip()
+            return
+        producto = self.productos.get(compra.producto)
+        lote = producto.buscar_lote(compra.lote_id) if producto else None
+        if lote is not None:
+            self.editar_lote(compra.producto, compra.lote_id, precio_unitario=precio_unitario, proveedor=proveedor,
+                             corregir_registrado=True)
+        else:
+            self._corregir_registrado(compra.producto, compra.lote_id, precio_unitario, proveedor)
+
+    def _corregir_registrado(
+        self, nombre: str, lote_id: int, precio: Optional[float], proveedor: Optional[str],
+    ) -> None:
+        """Pone el precio (y el proveedor) corregidos en todo lo ya registrado con este lote."""
+        for m in self.historial:
+            if m.producto_nombre == nombre and m.lote_id == lote_id:
+                if precio is not None:
+                    m.precio_unitario = precio
+                if proveedor is not None and m.lote:
+                    partes = m.lote.split(" · ")
+                    m.lote = " · ".join(partes[:-1] + [proveedor.strip()])
+        for p in self.historial_precios:
+            if p.producto == nombre and p.lote_id == lote_id:
+                if precio is not None:
+                    p.precio_unitario = precio
+                if proveedor is not None:
+                    p.proveedor = proveedor.strip()
 
     # ---------- Limpieza / despiece ----------
 

@@ -505,7 +505,11 @@ def menu_inventario():
                         tipo=tipo,
                     )
                     if exito and lote is not None:
-                        inventario.editar_lote(producto.nombre, lote.id, **correccion)
+                        cambia = (correccion["precio_unitario"] is not None
+                                  and abs(correccion["precio_unitario"] - lote.precio_unitario) > 1e-9) \
+                            or (correccion["proveedor"] is not None and correccion["proveedor"].strip() != lote.proveedor)
+                        corregir = cambia and preguntar_corregir_registrado(producto.nombre, lote.id, producto.unidad)
+                        inventario.editar_lote(producto.nombre, lote.id, **correccion, corregir_registrado=corregir)
                 except ValueError as e:
                     print(f"❌ {e}")
                     exito = False
@@ -531,6 +535,27 @@ def menu_inventario():
         else:
             print("⚠️  Opción no válida.")
         pausa()
+
+
+def preguntar_corregir_registrado(nombre: str, lote_id: int, unidad: str, preguntar: bool = True) -> bool:
+    """Al corregir el precio de una compra: avisa de lo ya registrado con ella y pregunta si se corrige también."""
+    usos = inventario.usos_del_lote(nombre, lote_id)
+    if not usos["salidas"]:
+        return True  # solo su compra: se corrige también (Métricas e historial de precios)
+    print("Con este lote ya se ha registrado:")
+    if usos["compra"] is not None:
+        print("   - su compra (dinero gastado en Métricas)")
+    for servicio_id, valor in usos["servicios"].items():
+        print(f"   - lo que salió para el servicio #{servicio_id} ({valor:.2f} € con el precio actual)")
+    for m in usos["salidas"]:
+        if m.servicio_id is None and m not in usos["derivados"]:
+            print(f"   - una salida de {m.cantidad:g} {unidad} el {m.fecha.strftime('%d/%m/%Y')} ({m.motivo})")
+    if usos["derivados"]:
+        print("⚠️  También salió algo para elaborar o limpiar: esas tandas, elaboraciones base o productos "
+              "limpios ya tienen su coste y NO se recalculan.")
+    if not preguntar:
+        return True
+    return pedir_si_no("¿Corregir también lo ya registrado? (si no, solo cambia lo que salga a partir de ahora)")
 
 
 def pedir_correccion_lote(lote, pedir_caducidad: bool = True) -> dict:
@@ -578,9 +603,25 @@ def accion_historial_precios() -> None:
         print(f"   {f['proveedor']}: {f['compras']} compra(s), media {f['medio']:.2f} €, "
               f"mín {f['minimo']:g} €, máx {f['maximo']:g} €, última {f['ultimo']:g} € ({f['fecha_ultima'].strftime('%d/%m/%Y')})")
     print("Compras:")
-    for c in reversed(compras):
-        print(f"   {c.fecha.strftime('%d/%m/%Y')} {c.proveedor}: {c.cantidad:g} {c.unidad} a {c.precio_unitario:g} € "
-              f"(total {c.total:.2f} €)")
+    lista = list(reversed(compras))
+    for numero, c in enumerate(lista, start=1):
+        print(f"   {numero}. {c.fecha.strftime('%d/%m/%Y')} {c.proveedor}: {c.cantidad:g} {c.unidad} a "
+              f"{c.precio_unitario:g} € (total {c.total:.2f} €)")
+    if pedir_si_no("¿Corregir el precio de alguna de estas compras (aunque su lote ya se haya gastado)?"):
+        numero = pedir_entero("Nº de la compra: ")
+        if not 1 <= numero <= len(lista):
+            print("⚠️  Ese número no está en la lista.")
+            return
+        compra = lista[numero - 1]
+        precio = pedir_numero(f"Precio correcto [{compra.precio_unitario}]: ")
+        proveedor = pedir_texto_no_numerico_opcional(f"Proveedor [{compra.proveedor}]: ")
+        if compra.lote_id is not None:
+            preguntar_corregir_registrado(nombre, compra.lote_id, compra.unidad, preguntar=False)
+        try:
+            inventario.corregir_compra(compra, precio, proveedor)
+            print("✅ Compra corregida (y lo que ya salió de ella).")
+        except ValueError as e:
+            print(f"❌ {e}")
 
 
 def accion_elaboraciones() -> None:
