@@ -56,12 +56,16 @@ def convertir(cantidad: float, desde: str, hasta: str) -> float:
 
 
 # ---------- IVA ----------
-# Cada precio se guarda SIN IVA (la "base") junto a su tipo de IVA. Los
-# costes (servicios, rentabilidad, Métricas...) se calculan con o sin IVA
-# según este ajuste del negocio (Inventario.costes_con_iva):
-#   - False: el negocio deduce el IVA de sus compras -> el coste real es sin IVA.
-#   - True: no lo deduce (p. ej. recargo de equivalencia) -> el coste incluye el IVA.
-AJUSTES = {"costes_con_iva": False}
+# Cada precio se guarda SIN IVA (la "base") junto a su tipo de IVA. Lo que se
+# VE en todo el programa es lo pagado de verdad: CON IVA (precio_unitario).
+#
+# El ajuste del negocio solo cambia la RENTABILIDAD de los servicios:
+#   - iva_recuperable = True (régimen general): el IVA de las compras se
+#     recupera en las declaraciones trimestrales de IVA (modelo 303), así que
+#     el coste de un servicio para calcular su margen es SIN IVA.
+#   - iva_recuperable = False (p. ej. recargo de equivalencia): ese IVA no se
+#     recupera, así que el coste del servicio es CON IVA.
+AJUSTES = {"iva_recuperable": True, "iva_cobro": 10.0}
 
 # Tipos de IVA de España para comprar: general, reducido, superreducido y sin IVA.
 TIPOS_IVA = {"21 % (general)": 21.0, "10 % (reducido)": 10.0, "4 % (superreducido)": 4.0, "Sin IVA": 0.0}
@@ -73,31 +77,16 @@ def nombre_iva(iva: float) -> str:
     return next((nombre for nombre, valor in TIPOS_IVA.items() if abs(valor - iva) < 1e-9), f"{iva:g} %")
 
 
-def coste_desde_base(base: float, iva: float) -> float:
-    """El coste que cuenta para el negocio (con o sin IVA, según el ajuste) a partir del precio sin IVA."""
-    return base * (1 + iva / 100) if AJUSTES["costes_con_iva"] else base
-
-
-def base_desde_coste(coste: float, iva: float) -> float:
-    """El camino inverso de coste_desde_base()."""
-    return coste / (1 + iva / 100) if AJUSTES["costes_con_iva"] else coste
-
-
 def precio_a_coste(precio: float, incluye_iva: bool, iva: float) -> float:
-    """
-    Convierte un precio tal y como se apunta (con o sin IVA, el de un ticket
-    o una factura) en el coste que usa el programa según el ajuste.
-    """
-    base = precio / (1 + iva / 100) if incluye_iva else precio
-    return coste_desde_base(base, iva)
+    """Un precio tal y como se apunta (con o sin IVA) -> lo pagado de verdad, CON IVA."""
+    return precio if incluye_iva else precio * (1 + iva / 100)
 
 
 class ConPrecio:
     """
     Precio guardado SIN IVA (`precio_base`) y su tipo de IVA (`iva`, en %).
-    `precio_unitario` es el COSTE según el ajuste del negocio (con o sin
-    IVA): es el que usan todos los cálculos. Al asignarlo, se interpreta
-    con el mismo criterio.
+    `precio_unitario` es lo pagado de verdad (CON IVA): es lo que se ve y se
+    suma en todo el programa. Al asignarlo, se interpreta también con IVA.
     """
 
     iva: float = 0.0
@@ -105,15 +94,15 @@ class ConPrecio:
 
     @property
     def precio_unitario(self) -> float:
-        return round(coste_desde_base(self.precio_base, self.iva), 6)
+        return round(self.precio_base * (1 + self.iva / 100), 6)
 
     @precio_unitario.setter
     def precio_unitario(self, valor: float) -> None:
-        self.precio_base = base_desde_coste(valor, self.iva)
+        self.precio_base = valor / (1 + self.iva / 100)
 
     @property
     def precio_con_iva(self) -> float:
-        return round(self.precio_base * (1 + self.iva / 100), 6)
+        return self.precio_unitario
 
 
 class MovimientoStock(ConPrecio):
@@ -202,8 +191,15 @@ class MovimientoStock(ConPrecio):
         return self.tipo == "entrada" and self.motivo == "compra"
 
     def valor(self) -> float:
-        """Valor económico de este movimiento (cantidad x precio en ese momento)."""
+        """Valor económico de este movimiento (cantidad x precio en ese momento, con IVA)."""
         return round(self.cantidad * self.precio_unitario, 2)
+
+    def valor_sin_iva(self) -> float:
+        return round(self.cantidad * self.precio_base, 2)
+
+    def valor_iva(self) -> float:
+        """El IVA de este movimiento (lo pagado de IVA, si es una compra)."""
+        return round(self.cantidad * self.precio_base * self.iva / 100, 2)
 
     def __str__(self) -> str:
         flecha = "➕" if self.tipo == "entrada" else "➖"
@@ -541,12 +537,20 @@ class Producto(ConNotas):
 
     @property
     def precio_referencia(self) -> float:
-        """Precio de la última compra (coste según el ajuste de IVA). Ver ConPrecio."""
-        return round(coste_desde_base(self.precio_referencia_base, self.iva), 6)
+        """Precio de la última compra, con IVA. Ver ConPrecio."""
+        return round(self.precio_referencia_base * (1 + self.iva / 100), 6)
 
     @precio_referencia.setter
     def precio_referencia(self, valor: float) -> None:
-        self.precio_referencia_base = base_desde_coste(valor, self.iva)
+        self.precio_referencia_base = valor / (1 + self.iva / 100)
+
+    @property
+    def precio_sin_iva(self) -> float:
+        """Como precio_unitario, pero sin IVA (para la rentabilidad si el negocio recupera el IVA)."""
+        stock = self.stock
+        if stock <= 0:
+            return self.precio_referencia_base
+        return round(sum(l.cantidad * l.precio_base for l in self.lotes) / stock, 6)
 
     def es_consumible(self) -> bool:
         return self.tipo == "consumible"
@@ -612,8 +616,12 @@ class Producto(ConNotas):
         fecha_caducidad: Optional[date] = None,
         peso_unitario: Optional[float] = None,
         procedencia: str = "compra",
+        iva: Optional[float] = None,
     ) -> Lote:
-        """Crea un lote nuevo con el siguiente número libre. No registra movimiento (eso lo hace Inventario)."""
+        """
+        Crea un lote nuevo con el siguiente número libre. No registra movimiento (eso lo hace Inventario).
+        `iva`: el de este lote (por defecto, el del producto si es una compra; 0 si no).
+        """
         lote = Lote(
             self.siguiente_lote, cantidad, precio_unitario, proveedor,
             fecha_caducidad=None if self.es_consumible() else fecha_caducidad,
@@ -621,7 +629,7 @@ class Producto(ConNotas):
             procedencia=procedencia,
             # Solo lo comprado lleva IVA: lo que sale de limpiar o elaborar ya
             # tiene su coste calculado a partir de sus ingredientes.
-            iva=self.iva if procedencia in ("compra", "inicial") else 0.0,
+            iva=iva if iva is not None else (self.iva if procedencia in ("compra", "inicial") else 0.0),
         )
         self.siguiente_lote += 1
         self.lotes.append(lote)
@@ -976,13 +984,24 @@ class Inventario:
         self.historial_precios: list[PrecioCompra] = []
 
     @property
-    def costes_con_iva(self) -> bool:
-        """Ajuste del negocio: ¿los costes incluyen el IVA de las compras? (ver AJUSTES)."""
-        return AJUSTES["costes_con_iva"]
+    def iva_recuperable(self) -> bool:
+        """Ajuste del negocio: ¿recupera el IVA de sus compras (régimen general)? Ver AJUSTES."""
+        return AJUSTES["iva_recuperable"]
 
-    @costes_con_iva.setter
-    def costes_con_iva(self, valor: bool) -> None:
-        AJUSTES["costes_con_iva"] = bool(valor)
+    @iva_recuperable.setter
+    def iva_recuperable(self, valor: bool) -> None:
+        AJUSTES["iva_recuperable"] = bool(valor)
+
+    @property
+    def iva_cobro(self) -> float:
+        """IVA que se cobra a los clientes (10 % en catering), para estimar el IVA del trimestre."""
+        return AJUSTES["iva_cobro"]
+
+    @iva_cobro.setter
+    def iva_cobro(self, valor: float) -> None:
+        if valor < 0:
+            raise ValueError("El IVA no puede ser negativo.")
+        AJUSTES["iva_cobro"] = float(valor)
 
     def agregar_producto(self, producto: Producto) -> None:
         if producto.nombre in self.productos:
@@ -1103,6 +1122,7 @@ class Inventario:
         fecha_caducidad: Optional[date] = None,
         peso_unitario: Optional[float] = None,
         motivo: str = "compra",
+        iva: Optional[float] = None,
     ) -> Optional[Lote]:
         """
         Registra una entrada de mercancía. CADA entrada crea un LOTE NUEVO
@@ -1141,7 +1161,7 @@ class Inventario:
             print("❌ El peso por unidad debe ser mayor que 0.")
             return None
 
-        lote = producto.nuevo_lote(cantidad, precio, proveedor, fecha_caducidad, peso_unitario, motivo)
+        lote = producto.nuevo_lote(cantidad, precio, proveedor, fecha_caducidad, peso_unitario, motivo, iva)
         producto.precio_referencia = precio
         if lote.peso_unitario:
             producto.peso_unitario_referencia = lote.peso_unitario
@@ -1226,7 +1246,7 @@ class Inventario:
         servicio_id: int,
         proveedor: Optional[str] = None,
         fecha_caducidad: Optional[date] = None,
-        importe_incluye_iva: bool = False,
+        importe_incluye_iva: bool = True,
     ) -> Lote:
         """
         Una compra NO PREVISTA hecha para un servicio (ej: 5 kg de tomate de
@@ -1590,6 +1610,7 @@ class Inventario:
         self.entrada_stock(
             producto_limpio, cantidad_limpio, precio_unitario=round(coste / cantidad_limpio, 4),
             proveedor="Elaboración propia", fecha_caducidad=caducidades.get(producto_limpio), motivo="limpieza",
+            iva=lote.iva,  # su coste es el del bruto: lleva el mismo IVA (y se separa igual)
         )
         # Los derivados entran a coste 0.
         for nombre, kg in derivados_kg.items():
@@ -1943,14 +1964,20 @@ class Inventario:
             "limpiezas": [l.to_dict() for l in self.limpiezas],
             "elaboraciones": self.elaboraciones.to_dict(),
             "historial_precios": [p.to_dict() for p in self.historial_precios],
-            "costes_con_iva": self.costes_con_iva,
+            "iva_recuperable": self.iva_recuperable,
+            "iva_cobro": self.iva_cobro,
         }
 
     @classmethod
     def from_dict(cls, datos: dict) -> "Inventario":
         inventario = cls()
-        # El ajuste va PRIMERO: los precios se interpretan según él al cargarlos.
-        inventario.costes_con_iva = datos.get("costes_con_iva", False)
+        # Ajustes de IVA (las sesiones de antes no los tienen: se deja el que haya).
+        if "iva_recuperable" in datos:
+            inventario.iva_recuperable = datos["iva_recuperable"]
+        elif "costes_con_iva" in datos:
+            inventario.iva_recuperable = not datos["costes_con_iva"]
+        if "iva_cobro" in datos:
+            inventario.iva_cobro = datos["iva_cobro"]
         for datos_producto in datos["productos"]:
             producto = Producto.from_dict(datos_producto)
             inventario.productos[producto.nombre] = producto

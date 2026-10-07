@@ -46,6 +46,7 @@ from persistencia import guardar_sesion, cargar_sesion, Sesion
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
+from metricas import trimestre
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, rango_mes_calendario, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -404,9 +405,15 @@ def _elegir_lote(producto: Producto, etiqueta: str, clave: str, lotes: Optional[
     return opciones.get(elegido)
 
 
-def _criterio_costes() -> str:
-    """'sin IVA' o 'con IVA': cómo se calculan los costes (Ajustes)."""
-    return "con IVA" if st.session_state.inventario.costes_con_iva else "sin IVA"
+AVISO_FISCAL = (
+    "⚠️ Es una **estimación orientativa** a partir de lo registrado en el programa. La aplicación **no sustituye "
+    "a un gestor o asesor fiscal**: para tus declaraciones, consulta siempre con él."
+)
+
+
+def _criterio_rentabilidad() -> str:
+    """'sin IVA' o 'con IVA': cómo se calcula el coste de los servicios para su margen (Ajustes)."""
+    return "sin IVA" if st.session_state.inventario.iva_recuperable else "con IVA"
 
 
 def _elegir_iva(clave: str, actual: float = IVA_POR_DEFECTO, contenedor=None) -> float:
@@ -434,8 +441,9 @@ def _campo_precio(unidad: str, cantidad: Optional[float], k, referencia: float =
     incluye_iva = False
     if iva > 0:
         incluye_iva = contenedor.radio(
-            "El precio que escribo", ("Sin IVA", f"Con IVA incluido ({iva:g} %)"), horizontal=True,
-            key=k("con_iva"), help="Como venga en la factura o el ticket: el programa separa el IVA.",
+            "El precio que escribo", (f"Con IVA incluido ({iva:g} %)", "Sin IVA"), horizontal=True,
+            key=k("con_iva"), help="Como venga en el ticket (con IVA) o en la factura (sin IVA): el programa "
+                                   "guarda las dos cosas por separado.",
         ) != "Sin IVA"
     modo = contenedor.radio(
         "¿Cómo indicas el precio?", (f"Por {unidad_txt}", "Total pagado"), horizontal=True, key=k("modo_precio"),
@@ -470,9 +478,8 @@ def _precio_con_iva(precio: Optional[float], incluye_iva: bool, iva: float, unid
         return precio
     base = precio / (1 + iva / 100) if incluye_iva else precio
     contenedor.caption(
-        f"Sin IVA: {_num(round(base, 4))} € · IVA {iva:g} %: {_num(round(base * iva / 100, 4))} € · "
-        f"Con IVA: {_num(round(base * (1 + iva / 100), 4))} € (por {unidad_txt}). Los costes se calculan "
-        f"**{_criterio_costes()}** (Ajustes)."
+        f"Pagado (con IVA): **{_num(round(base * (1 + iva / 100), 4))} €** por {unidad_txt} = "
+        f"{_num(round(base, 4))} € sin IVA + {_num(round(base * iva / 100, 4))} € de IVA ({iva:g} %)."
     )
     return round(precio_a_coste(precio, incluye_iva, iva), 6)
 
@@ -511,7 +518,7 @@ def _filas_lotes(producto: Producto) -> list[dict]:
             estado = f"Caduca en {dias} día(s)"
         fila = {
             "Lote": l.id, "Cantidad": f"{_num(l.cantidad)} {producto.unidad}",
-            f"Precio (€, {_criterio_costes()})": _num(l.precio_unitario), "IVA": nombre_iva(l.iva).split(" (")[0],
+            "Precio (€, con IVA)": _num(l.precio_unitario), "IVA": nombre_iva(l.iva).split(" (")[0],
             "Valor (€)": _num(l.valor()), "Proveedor": l.proveedor, "Entrada": l.fecha_entrada.strftime("%d/%m/%Y"),
         }
         if not producto.es_consumible():
@@ -634,7 +641,7 @@ def _filas_inventario(productos: list, tipo: str = "alimento") -> list[dict]:
     for p in productos:
         fila = {
             "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
-            "Mínimo": p.stock_minimo, f"Precio medio (€, {_criterio_costes()})": round(p.precio_unitario, 2),
+            "Mínimo": p.stock_minimo, "Precio medio (€, con IVA)": round(p.precio_unitario, 2),
             "IVA": nombre_iva(p.iva).split(" (")[0], "Proveedor habitual": p.proveedor,
             "Lotes": len(p.lotes),
         }
@@ -876,7 +883,7 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             f"Cantidad ({producto.unidad})", min_value=0.0, value=float(lote.cantidad), step=0.1, key=kl("cantidad"),
         )
         datos_lote["precio"] = c4.number_input(
-            f"Precio (€, {_criterio_costes()})", min_value=0.0, value=float(lote.precio_unitario), step=0.1,
+            "Precio (€, con IVA)", min_value=0.0, value=float(lote.precio_unitario), step=0.1,
             key=kl("precio"), help=f"IVA de esta compra: {nombre_iva(lote.iva)}.",
         )
         datos_lote["proveedor"] = st.text_input("Proveedor de esta compra", value=lote.proveedor, key=kl("proveedor"))
@@ -1083,7 +1090,7 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
     unidad_txt = "unidad" if producto.unidad == "unidades" else producto.unidad
     compras = inv.precios_de(nombre)
 
-    st.caption(f"Los precios medios y la gráfica van {_criterio_costes()}, como los costes (Ajustes).")
+    st.caption("Los precios medios y la gráfica son lo pagado (con IVA).")
     st.markdown("**Por proveedor** (del más barato al más caro, de media)")
     st.dataframe([{
         "Proveedor": f["proveedor"], "Compras": f["compras"],
@@ -1104,7 +1111,7 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
         "Fecha": c.fecha.strftime("%d/%m/%Y"), "Proveedor": c.proveedor,
         "Cantidad": f"{_num(c.cantidad)} {c.unidad}", f"Precio sin IVA (€/{unidad_txt})": _num(round(c.precio_base, 4)),
         "IVA": nombre_iva(c.iva).split(" (")[0], f"Precio con IVA (€/{unidad_txt})": _num(round(c.precio_con_iva, 4)),
-        f"Total (€, {_criterio_costes()})": f"{c.total:.2f}", "Lote": c.lote_id or "—",
+        "Total pagado (€)": f"{c.total:.2f}", "Lote": c.lote_id or "—",
         "Origen": "Stock inicial" if c.origen == "inicial" else "Compra",
     } for c in reversed(compras)], width="stretch", hide_index=True)
 
@@ -1119,7 +1126,7 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
         compra = opciones[st.selectbox("Compra", list(opciones), key=f"corregir_compra_{nombre}")]
         kc = lambda campo: f"corregir_compra_{campo}_{nombre}_{compras.index(compra)}"
         c1, c2 = st.columns(2)
-        nuevo_precio = c1.number_input(f"Precio correcto (€/{unidad_txt}, {_criterio_costes()})", min_value=0.0, step=0.1,
+        nuevo_precio = c1.number_input(f"Precio correcto (€/{unidad_txt}, con IVA)", min_value=0.0, step=0.1,
                                        value=float(compra.precio_unitario), key=kc("precio"))
         nuevo_proveedor = c2.text_input("Proveedor", value=compra.proveedor, key=kc("proveedor"))
         cambia = abs(nuevo_precio - compra.precio_unitario) > 1e-9 or nuevo_proveedor.strip() != compra.proveedor
@@ -1880,7 +1887,7 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
         usada = c2.number_input(f"Usado en el servicio ({unidad})", min_value=0.0, step=0.1, key=k("usada"))
         importe = c3.number_input("Importe pagado (€)", min_value=0.0, step=1.0, key=k("importe"))
         importe_con_iva = st.radio(
-            "El importe es", ("Sin IVA", "Con IVA incluido"), horizontal=True, key=k("importe_iva"),
+            "El importe es", ("Con IVA incluido", "Sin IVA"), horizontal=True, key=k("importe_iva"),
             help="Como venga en el ticket o la factura: el programa separa el IVA según el tipo del producto.",
         ) != "Sin IVA"
         proveedor = st.text_input(
@@ -1983,7 +1990,7 @@ def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> Non
                 inv.compra_para_servicio(
                     extra["producto"], extra["comprada"], extra["usada"], extra["importe"], servicio.id,
                     proveedor=extra["proveedor"], fecha_caducidad=extra["fecha_caducidad"],
-                    importe_incluye_iva=extra.get("importe_incluye_iva", False),
+                    importe_incluye_iva=extra.get("importe_incluye_iva", True),
                 )
             except ValueError as e:
                 avisar("error", f"No se pudo registrar la compra de '{extra['producto']}': {e}")
@@ -2018,7 +2025,7 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
         return
 
     st.caption(
-        f"Costes {_criterio_costes()} (Ajustes); el cobro, sin IVA. "
+        f"Para el margen, lo comprado cuenta {_criterio_rentabilidad()} (Ajustes); el cobro, sin IVA. "
         "Coste = comida + consumibles + limpieza y mantenimiento + gastos del servicio (gasolina, personal...) + material roto o perdido. En los servicios completados es "
         "lo que salió de verdad del inventario; en los pendientes, una estimación (*) con los precios actuales."
     )
@@ -2051,6 +2058,14 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
     if r["material"]:
         desglose.append({"Concepto": "🍽️ Material roto o perdido", "Importe (€)": f"{r['material']:.2f}"})
     st.dataframe(desglose, width="stretch", hide_index=True)
+    if r["sin_iva"]:
+        st.caption(
+            f"Comida, consumibles y limpieza van **sin IVA**, porque el negocio lo recupera (Ajustes). IVA de lo "
+            f"comprado para este servicio: **{r['iva_recuperable']:.2f} €** (lo pagado fue "
+            f"{r['comida'] + r['consumibles'] + r['mantenimiento'] + r['iva_recuperable']:.2f} €)."
+        )
+    else:
+        st.caption("Comida, consumibles y limpieza van **con IVA** (lo pagado), porque el negocio no lo recupera (Ajustes).")
     gastos_servicio = gastos.gastos_de_servicio(servicio.id)
     if gastos_servicio:
         st.caption("Gastos de este servicio: " + "; ".join(f"{g.concepto} ({g.importe:.2f} €)" for g in gastos_servicio))
@@ -2964,6 +2979,98 @@ def pagina_exportar() -> None:
 
 # ---------- Página: Métricas ----------
 
+def _pestana_iva(metricas: Metricas, inv: Inventario) -> None:
+    hoy = date.today()
+    c1, c2 = st.columns(2)
+    año = int(c1.number_input("Año", min_value=2000, max_value=2100, value=hoy.year, step=1, key="iva_año"))
+    t = c2.selectbox("Trimestre", ("1T (ene-mar)", "2T (abr-jun)", "3T (jul-sep)", "4T (oct-dic)"),
+                     index=(hoy.month - 1) // 3, key="iva_trimestre")
+    desde, hasta = trimestre(date(año, 3 * int(t[0]) - 2, 1))
+    resumen = metricas.resumen_iva(desde, hasta, st.session_state.registro_servicios.servicios)
+    st.caption(f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}.")
+
+    st.markdown("**IVA pagado en las compras** (soportado)")
+    if resumen["soportado_por_tipo"]:
+        st.dataframe([{"Tipo": nombre_iva(tipo), "IVA pagado (€)": f"{importe:.2f}"}
+                      for tipo, importe in resumen["soportado_por_tipo"].items()], width="stretch", hide_index=True)
+    else:
+        st.caption("No hay compras con IVA en este trimestre.")
+
+    if inv.iva_recuperable:
+        st.markdown("**IVA cobrado a los clientes** (repercutido)")
+        st.write(
+            f"{resumen['servicios_cobrados']} servicio(s) completado(s) con precio de cobro: {resumen['base_cobrada']:.2f} € "
+            f"sin IVA × {inv.iva_cobro:g} % = **{resumen['repercutido']:.2f} €**"
+        )
+        if resumen["servicios_sin_cobro"]:
+            st.caption(f"⚠️ {resumen['servicios_sin_cobro']} servicio(s) completado(s) sin precio de cobro: no cuentan.")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("IVA cobrado", f"{resumen['repercutido']:.2f} €")
+        m2.metric("IVA pagado", f"{resumen['soportado']:.2f} €")
+        etiqueta = "A ingresar (aprox.)" if resumen["resultado"] >= 0 else "A compensar (aprox.)"
+        m3.metric(etiqueta, f"{abs(resumen['resultado']):.2f} €")
+        st.caption("Solo cuenta lo registrado aquí: no incluye el IVA de los gastos (gasolina, personal...) ni de otras "
+                   "compras o ventas que no estén en el programa.")
+    else:
+        st.info("El negocio no recupera el IVA de sus compras (Ajustes): este IVA forma parte de lo que te cuestan. "
+                "Se muestra solo como información.")
+    st.warning(AVISO_FISCAL)
+
+
+def pagina_ajustes() -> None:
+    st.header("⚙️ Ajustes")
+    inv = st.session_state.inventario
+    st.subheader("IVA de las compras")
+    st.write("En todo el programa ves **lo que has pagado de verdad** (con IVA), y el IVA queda apuntado aparte. "
+             "Este ajuste solo decide cómo se calcula la **rentabilidad** de los servicios:")
+    opciones = ("Recupero el IVA de mis compras", "No recupero el IVA de mis compras")
+    elegido = st.radio("¿Tu negocio recupera el IVA de sus compras?", opciones,
+                       index=0 if inv.iva_recuperable else 1, key="ajuste_iva")
+    c1, c2 = st.columns(2)
+    with c1.container(border=True):
+        st.markdown("**✅ Recupero el IVA de mis compras**")
+        st.markdown(
+            "Para autónomos y empresas en **régimen general** que presentan cada trimestre la declaración de IVA "
+            "(modelo 303) y se deducen el IVA de sus compras.\n\n"
+            "- El IVA que pagas al comprar lo recuperas: se resta del IVA que cobras a tus clientes.\n"
+            "- Por eso, en la **rentabilidad** de cada servicio lo comprado cuenta **sin IVA**, y el IVA aparece aparte "
+            "como \"IVA recuperable\".\n"
+            "- En **Métricas > 🧾 IVA** verás una estimación del IVA del trimestre (cobrado − pagado).\n\n"
+            "*Ejemplo:* compras tomate por 20,80 € (20 € + 0,80 € de IVA). Ves 20,80 €, pero al margen del servicio "
+            "le cuestan 20 €, porque los 0,80 € los recuperas."
+        )
+    with c2.container(border=True):
+        st.markdown("**❌ No recupero el IVA de mis compras**")
+        st.markdown(
+            "Para negocios que **no se deducen el IVA**: por ejemplo, en **recargo de equivalencia** o si no "
+            "presentas el modelo 303.\n\n"
+            "- El IVA que pagas al comprar es un gasto más: no vuelve.\n"
+            "- En la **rentabilidad** de cada servicio lo comprado cuenta **con IVA**, igual que lo que ves.\n"
+            "- En Métricas el IVA pagado se muestra solo como información.\n\n"
+            "*Ejemplo:* el mismo tomate de 20,80 € le cuesta al servicio 20,80 €."
+        )
+    st.caption("Qué NO cambia con este ajuste: los precios que ves (siempre lo pagado), el tipo de IVA de cada producto "
+               "y lo que ya está registrado. Conviene elegirlo una vez, al empezar, según cómo tribute el negocio.")
+    if st.button("Guardar ajuste de IVA", type="primary", key="ajuste_iva_guardar"):
+        inv.iva_recuperable = elegido == opciones[0]
+        avisar("success", f"Ajuste guardado: {elegido.lower()}.")
+        st.rerun()
+    st.caption(f"Ahora mismo: **{'recupero' if inv.iva_recuperable else 'no recupero'} el IVA** de mis compras.")
+
+    if inv.iva_recuperable:
+        st.markdown("**IVA que cobras a tus clientes**")
+        iva_cobro = st.number_input(
+            "IVA de tus servicios (%)", min_value=0.0, max_value=100.0, step=1.0, value=float(inv.iva_cobro),
+            key="ajuste_iva_cobro", help="El de catering suele ser el 10 %. Sirve para estimar el IVA del trimestre: "
+                                         "el precio de cobro de los servicios se apunta sin IVA.",
+        )
+        if st.button("Guardar IVA de cobro", key="ajuste_iva_cobro_guardar"):
+            inv.iva_cobro = iva_cobro
+            avisar("success", f"IVA de cobro guardado: {iva_cobro:g} %.")
+            st.rerun()
+    st.warning(AVISO_FISCAL)
+
+
 def pagina_metricas() -> None:
     st.header("📊 Métricas")
     inv = st.session_state.inventario
@@ -2983,9 +3090,12 @@ def pagina_metricas() -> None:
         )
         return
 
-    tab_consumo, tab_desperdicio, tab_ranking, tab_gasto, tab_merma = st.tabs(
-        ["Consumo por producto", "Desperdicio por producto", "🏆 Más consumidos", "💰 Gasto por categoría", "🦴 Merma"]
+    tab_consumo, tab_desperdicio, tab_ranking, tab_gasto, tab_merma, tab_iva = st.tabs(
+        ["Consumo por producto", "Desperdicio por producto", "🏆 Más consumidos", "💰 Gasto por categoría", "🦴 Merma",
+         "🧾 IVA"]
     )
+    with tab_iva:
+        _pestana_iva(metricas, inv)
 
     with tab_merma:
         # La merma va aparte del desperdicio: el hueso es inevitable, lo que
@@ -3042,8 +3152,8 @@ def pagina_metricas() -> None:
         por_tipo = metricas.gasto_por_tipo(desde, hasta)
         st.caption(
             f"Gasto en compras del periodo: alimentos {por_tipo['alimento']} € · consumibles {por_tipo['consumible']} € · "
-            f"limpieza y mantenimiento {por_tipo['mantenimiento']} € ({_criterio_costes()}). "
-            f"IVA soportado en las compras: {metricas.iva_soportado(desde, hasta):.2f} €"
+            f"limpieza y mantenimiento {por_tipo['mantenimiento']} € (lo pagado, con IVA). "
+            f"De eso, IVA: {metricas.iva_soportado(desde, hasta):.2f} € (el detalle, en la pestaña 🧾 IVA)."
         )
         if not gasto:
             st.info("No hay compras registradas en este periodo.")
@@ -3152,7 +3262,8 @@ st.sidebar.markdown(
 )
 pagina = st.sidebar.radio(
     "Navegación",
-    ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"],
+    ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup",
+     "Ajustes"],
 )
 
 st.sidebar.divider()
@@ -3164,22 +3275,6 @@ if st.sidebar.button("💾 Guardar sesión"):
         st.session_state.registro_material,
     )
     st.sidebar.success("Sesión guardada")
-
-with st.sidebar.expander("⚙️ Ajustes"):
-    _inv = st.session_state.inventario
-    _opciones_iva = ("Sin IVA (el negocio deduce el IVA)", "Con IVA (el negocio no lo deduce)")
-    _elegido = st.radio(
-        "Los costes se calculan", _opciones_iva, index=1 if _inv.costes_con_iva else 0, key="ajuste_iva",
-        help="Si el negocio deduce el IVA de sus compras (régimen general), su coste real es sin IVA. Si no lo "
-             "deduce (por ejemplo, recargo de equivalencia), el coste real incluye el IVA. Cambiarlo recalcula "
-             "los precios de las compras; lo que ya tiene su coste calculado (tandas, elaboraciones base, "
-             "limpiezas) no cambia.",
-    )
-    if (_elegido == _opciones_iva[1]) != _inv.costes_con_iva:
-        _inv.costes_con_iva = _elegido == _opciones_iva[1]
-        avisar("success", f"Ajuste guardado: los costes se calculan {_criterio_costes()}.")
-        st.rerun()
-    st.caption("El precio de cobro de los servicios se apunta siempre sin IVA.")
 
 if st.sidebar.button("🧪 Cargar datos de ejemplo"):
     cargar_datos_ejemplo()
@@ -3206,3 +3301,5 @@ elif pagina == "Métricas":
     pagina_metricas()
 elif pagina == "Exportar / Backup":
     pagina_exportar()
+elif pagina == "Ajustes":
+    pagina_ajustes()

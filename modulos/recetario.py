@@ -26,6 +26,18 @@ from inventario import ConNotas, Inventario
 from servicios import Servicio
 
 
+def _coste_de_filas(filas: list[dict], inventario: Inventario) -> tuple[float, float]:
+    """Lo que cuestan los lotes elegidos en `filas` (ver filas_necesidades): (con IVA, sin IVA)."""
+    coste = coste_sin_iva = 0.0
+    for f in filas:
+        producto = inventario.buscar_producto(f["ingrediente"])
+        for lote_id, cantidad in f["reparto"]:
+            lote = producto.buscar_lote(lote_id)
+            coste += lote.precio_unitario * cantidad
+            coste_sin_iva += lote.precio_base * cantidad
+    return coste, coste_sin_iva
+
+
 class Receta(ConNotas):
     """
     Representa UN plato. Los ingredientes se guardan "por comensal" para
@@ -64,19 +76,20 @@ class Receta(ConNotas):
             for ingrediente, cantidad in self.ingredientes_por_comensal.items()
         }
 
-    def costo_por_comensal(self, inventario: Inventario) -> float:
+    def costo_por_comensal(self, inventario: Inventario, sin_iva: bool = False) -> float:
         """
         Coste estimado de esta receta POR COMENSAL, según los precios
         ACTUALES del inventario (no una foto guardada, como en
         MovimientoStock -- aquí interesa saber "cuánto me costaría hacer
         esto hoy", no lo que costó en el pasado). Si algún ingrediente ya
         no existe en el inventario, se ignora en el cálculo.
+        Con IVA (lo pagado), o sin él si `sin_iva` (rentabilidad cuando se recupera el IVA).
         """
         total = 0.0
         for nombre_ingrediente, cantidad in self.ingredientes_por_comensal.items():
             producto = inventario.buscar_producto(nombre_ingrediente)
             if producto is not None:
-                total += cantidad * producto.precio_unitario
+                total += cantidad * (producto.precio_sin_iva if sin_iva else producto.precio_unitario)
         return round(total, 2)
 
     def __str__(self) -> str:
@@ -212,17 +225,17 @@ class Menu(ConNotas):
         """Los ingredientes de todas sus recetas, sumados, por comensal (para verlos de un vistazo)."""
         return self.calcular_ingredientes_totales(1)
 
-    def costo_por_comensal(self, inventario: Inventario) -> float:
+    def costo_por_comensal(self, inventario: Inventario, sin_iva: bool = False) -> float:
         """Coste de la COMIDA por comensal: suma de sus recetas -- ver Receta.costo_por_comensal()."""
-        return round(sum(r.costo_por_comensal(inventario) for r in self.recetas), 2)
+        return round(sum(r.costo_por_comensal(inventario, sin_iva) for r in self.recetas), 2)
 
-    def costo_consumibles_por_comensal(self, inventario: Inventario) -> float:
+    def costo_consumibles_por_comensal(self, inventario: Inventario, sin_iva: bool = False) -> float:
         """Coste de los consumibles por comensal, a los precios actuales."""
         total = 0.0
         for nombre, cantidad in self.consumibles_por_comensal.items():
             producto = inventario.buscar_producto(nombre)
             if producto is not None:
-                total += cantidad * producto.precio_unitario
+                total += cantidad * (producto.precio_sin_iva if sin_iva else producto.precio_unitario)
         return round(total, 2)
 
     def __str__(self) -> str:
@@ -531,14 +544,12 @@ class Recetario:
                 "Los lotes elegidos no cubren lo que hace falta de: " + ", ".join(pendientes)
                 + ". Elige de qué otro lote sale lo que falta."
             )
-        coste = 0.0
-        for f in filas:
-            producto = inventario.buscar_producto(f["ingrediente"])
-            coste += sum(producto.buscar_lote(lote_id).precio_unitario * cantidad for lote_id, cantidad in f["reparto"])
+        coste, coste_sin_iva = _coste_de_filas(filas, inventario)
         for f in filas:
             inventario.salida_repartida(f["ingrediente"], f["reparto"], "elaboración")
         return inventario.elaboraciones.nueva_tanda(
             nombre_receta, raciones, round(coste / raciones, 4), fecha_caducidad, fecha_preparacion,
+            coste_por_racion_sin_iva=round(coste_sin_iva / raciones, 4),
         )
 
     # ---------- Elaboraciones BASE (sofritos, fondos, salsas, masas...) ----------
@@ -584,18 +595,18 @@ class Recetario:
                 "Los lotes elegidos no cubren lo que hace falta de: " + ", ".join(pendientes)
                 + ". Elige de qué otro lote sale lo que falta."
             )
-        coste = 0.0
-        for f in filas:
-            ingrediente = inventario.buscar_producto(f["ingrediente"])
-            coste += sum(ingrediente.buscar_lote(lote_id).precio_unitario * c for lote_id, c in f["reparto"])
+        coste, coste_sin_iva = _coste_de_filas(filas, inventario)
         for f in filas:
             inventario.salida_repartida(f["ingrediente"], f["reparto"], "elaboración")
         fecha_preparacion = fecha_preparacion or date.today()
         if fecha_caducidad is None:
             fecha_caducidad = producto.caducidad_propuesta(fecha_preparacion)
+        # El lote guarda lo pagado (con IVA) y, como "IVA", la parte de IVA que
+        # llevaban sus ingredientes: así se puede separar igual que en una compra.
+        iva_efectivo = (coste / coste_sin_iva - 1) * 100 if coste_sin_iva > 0 else 0.0
         lote = inventario.entrada_stock(
-            nombre_base, cantidad_obtenida, round(coste / cantidad_obtenida, 4), "Elaboración propia",
-            fecha_caducidad, motivo="elaboración",
+            nombre_base, cantidad_obtenida, round(coste / cantidad_obtenida, 6), "Elaboración propia",
+            fecha_caducidad, motivo="elaboración", iva=round(iva_efectivo, 6),
         )
         registro = PreparacionBase(
             nombre_base, producto.unidad, cantidad_prevista, cantidad_obtenida, coste,

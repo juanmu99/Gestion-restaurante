@@ -125,7 +125,7 @@ def prueba_arranque(at: AppTest) -> None:
 @prueba("Todas las páginas se muestran")
 def prueba_paginas(at: AppTest) -> None:
     for pagina in ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas",
-                   "Exportar / Backup"]:
+                   "Exportar / Backup", "Ajustes"]:
         ir_a(at, pagina)
         comprobar(sin_excepciones(at, pagina) and not at.error, f"Página '{pagina}' sin errores")
 
@@ -199,32 +199,48 @@ def prueba_precios(at: AppTest) -> None:
               and salida.precio_unitario == 3.5,
               "Desde el historial de precios se corrige una compra y lo que ya salió de ella")
 
-    # (D) IVA: producto al 4 % con el precio escrito con IVA incluido
+    # (D) IVA: producto al 4 % con el precio escrito con IVA incluido (lo del ticket)
     v = at.session_state["add_version"]
     at.text_input(key=f"add_nombre_{v}").input("Huevos camperos")
     at.text_input(key=f"add_categoria_{v}").input("Huevos")
     at.number_input(key=f"add_stock_{v}").set_value(30.0)
     at.selectbox(key=f"add_unidad_{v}").select("unidades")
     at.selectbox(key=f"add_iva_{v}").select("4 % (superreducido)").run()
-    at.radio(key=f"add_con_iva_{v}").set_value("Con IVA incluido (4 %)").run()
+    comprobar(at.radio(key=f"add_con_iva_{v}").value.startswith("Con IVA"),
+              "Por defecto el precio se escribe con IVA incluido (lo que se paga)")
     at.number_input(key=f"add_precio_{v}").set_value(0.26).run()
-    comprobar(any("Sin IVA: 0.25 €" in t for t in textos(at.caption)),
-              "Al escribir el precio con IVA se ve el desglose (0,26 € con IVA = 0,25 € + IVA)")
+    comprobar(any("0.25 € sin IVA" in t and "0.01 € de IVA" in t for t in textos(at.caption)),
+              "Al escribir el precio se ve el desglose (0,26 € = 0,25 € sin IVA + 0,01 € de IVA)")
     at.text_input(key=f"add_proveedor_{v}").input("Granja Sol")
     at.button(key=f"add_boton_{v}").click().run()
     huevos = inv.buscar_producto("Huevos camperos")
     comprobar(sin_excepciones(at, "producto con IVA") and huevos is not None and huevos.iva == 4
-              and abs(huevos.lotes[0].precio_base - 0.25) < 1e-9 and abs(huevos.precio_unitario - 0.25) < 1e-9,
-              "El producto se guarda con su IVA (4 %) y su precio sin IVA (0,25 €)")
+              and abs(huevos.lotes[0].precio_base - 0.25) < 1e-9 and abs(huevos.precio_unitario - 0.26) < 1e-9,
+              "Se ve lo pagado (0,26 €) y se guarda aparte el precio sin IVA (0,25 €) y su tipo (4 %)")
 
-    at.sidebar.radio(key="ajuste_iva").set_value("Con IVA (el negocio no lo deduce)").run()
-    comprobar(inv.costes_con_iva and abs(huevos.precio_unitario - 0.26) < 1e-9,
-              "En Ajustes se elige calcular los costes con IVA (los huevos pasan a costar 0,26 €)")
+    ir_a(at, "Ajustes")
+    comprobar(sin_excepciones(at, "ajustes") and any("no sustituye" in t for t in textos(at.warning))
+              and any("régimen general" in t for t in textos(at.markdown))
+              and any("recargo de equivalencia" in t for t in textos(at.markdown)),
+              "Ajustes explica las dos opciones del IVA y avisa de que no sustituye a un gestor")
+    at.radio(key="ajuste_iva").set_value("No recupero el IVA de mis compras").run()
+    at.button(key="ajuste_iva_guardar").click().run()
+    comprobar(not inv.iva_recuperable and abs(huevos.precio_unitario - 0.26) < 1e-9,
+              "Se puede elegir 'No recupero el IVA' (los precios se siguen viendo igual)")
     for pagina in ("Dashboard", "Servicios", "Métricas", "Inventario"):
         ir_a(at, pagina)
-        comprobar(sin_excepciones(at, f"{pagina} con IVA") and not at.error, f"'{pagina}' funciona con los costes con IVA")
-    at.sidebar.radio(key="ajuste_iva").set_value("Sin IVA (el negocio deduce el IVA)").run()
-    comprobar(not inv.costes_con_iva and abs(huevos.precio_unitario - 0.25) < 1e-9, "...y volver a calcularlos sin IVA")
+        comprobar(sin_excepciones(at, f"{pagina} sin recuperar IVA") and not at.error,
+                  f"'{pagina}' funciona sin recuperar el IVA")
+    ir_a(at, "Ajustes")
+    at.radio(key="ajuste_iva").set_value("Recupero el IVA de mis compras").run()
+    at.button(key="ajuste_iva_guardar").click().run()
+    at.number_input(key="ajuste_iva_cobro").set_value(10.0)
+    at.button(key="ajuste_iva_cobro_guardar").click().run()
+    comprobar(inv.iva_recuperable and inv.iva_cobro == 10, "...y volver a 'Recupero el IVA', con el IVA de cobro (10 %)")
+    ir_a(at, "Métricas")
+    comprobar(sin_excepciones(at, "pestaña IVA") and any("no sustituye" in t for t in textos(at.warning))
+              and any("IVA cobrado" in m.label for m in at.metric),
+              "Métricas > IVA: estimación del trimestre (cobrado y pagado) con el aviso de que no sustituye a un gestor")
 
 
 @prueba("Añadir productos")

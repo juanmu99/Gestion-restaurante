@@ -326,8 +326,8 @@ def pedir_precio(unidad: str, cantidad: float, referencia: Optional[float] = Non
         return precio
     incluye = pedir_si_no(f"¿Ese precio incluye el IVA ({iva:g} %)?")
     coste = round(precio_a_coste(precio, incluye, iva), 6)
-    criterio = "con IVA" if inventario.costes_con_iva else "sin IVA"
-    print(f"   Coste para el programa ({criterio}): {coste:g} €")
+    base = coste / (1 + iva / 100)
+    print(f"   Pagado (con IVA): {coste:g} € = {base:.4g} € sin IVA + {coste - base:.4g} € de IVA")
     return coste
 
 
@@ -621,12 +621,44 @@ def accion_lotes() -> None:
         inventario.desechar_lote(nombre, lote.id)
 
 
+AVISO_FISCAL = ("⚠️  Estimación orientativa a partir de lo registrado en el programa. La aplicación NO sustituye "
+                "a un gestor o asesor fiscal.")
+
+
 def accion_ajustes() -> None:
-    actual = "CON IVA (el negocio no lo deduce)" if inventario.costes_con_iva else "SIN IVA (el negocio deduce el IVA)"
-    print(f"Ahora los costes se calculan {actual}. El precio de cobro de los servicios se apunta sin IVA.")
-    eleccion = pedir_opcion("¿Cómo se calculan los costes?", ("sin", "con"))
-    inventario.costes_con_iva = eleccion == "con"
-    print(f"✅ Los costes se calculan {eleccion} IVA.")
+    print("En todo el programa se ve lo pagado de verdad (con IVA). Este ajuste solo cambia la RENTABILIDAD:")
+    print("  - 'recupero': régimen general (modelo 303). El IVA de las compras se recupera, así que en el margen")
+    print("    de cada servicio lo comprado cuenta SIN IVA. Ej.: tomate de 20,80 € (20 € + 0,80 € IVA) -> 20 €.")
+    print("  - 'no': p. ej. recargo de equivalencia. El IVA no vuelve: en el margen cuenta CON IVA (20,80 €).")
+    actual = "recupero" if inventario.iva_recuperable else "no recupero"
+    print(f"Ahora: {actual} el IVA de mis compras. IVA de cobro a clientes: {inventario.iva_cobro:g} %.")
+    eleccion = pedir_opcion("¿Tu negocio recupera el IVA de sus compras?", ("recupero", "no"))
+    inventario.iva_recuperable = eleccion == "recupero"
+    if inventario.iva_recuperable:
+        nuevo = pedir_numero_opcional(f"IVA que cobras a tus clientes, en % [{inventario.iva_cobro:g}]: ")
+        if nuevo is not None:
+            inventario.iva_cobro = nuevo
+    print(AVISO_FISCAL)
+
+
+def accion_iva_trimestre() -> None:
+    from metricas import trimestre
+    año = pedir_entero("Año: ")
+    t = pedir_opcion("Trimestre", ("1", "2", "3", "4"))
+    desde, hasta = trimestre(date(año, 3 * int(t) - 2, 1))
+    r = Metricas(inventario).resumen_iva(desde, hasta, registro_servicios.servicios)
+    print(f"\nIVA del {t}T de {año} ({desde.strftime('%d/%m')} - {hasta.strftime('%d/%m')}):")
+    for tipo, importe in r["soportado_por_tipo"].items():
+        print(f"   Pagado en compras al {tipo:g} %: {importe:.2f} €")
+    print(f"   Total IVA pagado: {r['soportado']:.2f} €")
+    if inventario.iva_recuperable:
+        print(f"   IVA cobrado ({r['base_cobrada']:.2f} € x {inventario.iva_cobro:g} %): {r['repercutido']:.2f} €")
+        sentido = "a ingresar" if r["resultado"] >= 0 else "a compensar"
+        print(f"   Resultado aproximado: {abs(r['resultado']):.2f} € {sentido}")
+        print("   (No incluye el IVA de los gastos ni nada que no esté registrado en el programa.)")
+    else:
+        print("   El negocio no recupera el IVA: forma parte de lo que cuestan las compras.")
+    print(AVISO_FISCAL)
 
 
 def accion_historial_precios() -> None:
@@ -1900,6 +1932,7 @@ def menu_principal():
         print("13. Material (vajilla, cubertería...)")
         print("14. Historial de servicios")
         print("15. Ajustes (IVA)")
+        print("16. IVA del trimestre (estimación)")
         print("0. Salir")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1939,6 +1972,9 @@ def menu_principal():
             menu_historial()
         elif opcion == "15":
             accion_ajustes()
+            pausa()
+        elif opcion == "16":
+            accion_iva_trimestre()
             pausa()
         elif opcion == "0":
             respuesta = pedir_texto("¿Guardar sesión antes de salir? (s/n): ").strip().lower()

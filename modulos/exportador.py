@@ -46,9 +46,8 @@ def _ajustar_ancho_columnas(hoja, ancho: int = 18) -> None:
 
 def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
     hoja = wb.create_sheet("Inventario")
-    criterio = "con IVA" if inventario.costes_con_iva else "sin IVA"
-    columnas = ["Nombre", "Categoría", "Stock", "Unidad", f"Precio medio (€, {criterio})",
-                f"Valor total (€, {criterio})", "Proveedor habitual", "Stock mínimo", "Próxima caducidad",
+    columnas = ["Nombre", "Categoría", "Stock", "Unidad", "Precio medio (€, con IVA)",
+                "Valor total (€, con IVA)", "Proveedor habitual", "Stock mínimo", "Próxima caducidad",
                 "Tipo", "Peso medio por unidad en bruto (kg)", "Lotes", "Clase", "IVA"]
     _escribir_cabecera(hoja, columnas)
 
@@ -326,9 +325,11 @@ def _hoja_rentabilidad(
 ) -> None:
     """Coste y margen de cada servicio (con fórmulas: coste total = suma, margen = cobro - coste)."""
     hoja = wb.create_sheet("Rentabilidad")
-    _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", "Comida (€)", "Consumibles (€)",
-                              "Limpieza y mantenimiento (€)", "Gastos (€)", "Roturas y pérdidas (€)", "Coste total (€)",
-                              "Cobro (€)", "Margen (€)", "Coste estimado"])
+    criterio = "sin IVA" if inventario.iva_recuperable else "con IVA"
+    _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", f"Comida (€, {criterio})", f"Consumibles (€, {criterio})",
+                              f"Limpieza y mantenimiento (€, {criterio})", "Gastos (€)", "Roturas y pérdidas (€)",
+                              "Coste total (€)", "Cobro (€, sin IVA)", "Margen (€)", "Coste estimado",
+                              "IVA recuperable de las compras (€)"])
     fila = 2
     for s in sorted(registro.servicios, key=lambda s: (s.fecha, s.hora)):
         if s.estado == "cancelado":
@@ -337,7 +338,8 @@ def _hoja_rentabilidad(
         valores = [s.id, s.fecha.strftime("%d/%m/%Y"), s.menu, s.estado, r["comida"], r["consumibles"],
                    r["mantenimiento"], r["gastos"], r["material"], f"=E{fila}+F{fila}+G{fila}+H{fila}+I{fila}",
                    r["cobrado"] if r["cobrado"] is not None else "—",
-                   f"=K{fila}-J{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No"]
+                   f"=K{fila}-J{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No",
+                   r["iva_recuperable"]]
         for columna, valor in enumerate(valores, start=1):
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
         fila += 1

@@ -32,6 +32,11 @@ from compras import GestorCompras  # noqa: E402
 HOY = date.today()
 fallos: list[str] = []
 
+# Las pruebas de costes de servicios (hasta la sección de IVA) cuentan lo
+# PAGADO, con IVA: el modo "no recupero el IVA". La sección de IVA prueba el otro.
+from inventario import AJUSTES  # noqa: E402
+AJUSTES["iva_recuperable"] = False
+
 
 def comprobar(condicion: bool, descripcion: str) -> None:
     print(("✅ " if condicion else "❌ ") + descripcion)
@@ -827,62 +832,75 @@ except ValueError:
     comprobar(compra.precio_unitario == 4.5, "Un precio negativo no se acepta")
 
 print("\n--- IVA ---")
-from inventario import precio_a_coste, AJUSTES  # noqa: E402
+from inventario import precio_a_coste  # noqa: E402
 inv = Inventario()
-comprobar(inv.costes_con_iva is False, "Por defecto los costes se calculan sin IVA")
 silencio(inv.agregar_producto, Producto("Leche", "Lácteos", 0, "litros", 0, "Lácteos SA", iva=4))
 comprobar(Producto("Detergente", "Limpieza", 0, "litros", 0, "Droguería").iva == 21, "El IVA por defecto es el 21 %")
-precio = precio_a_coste(1.04, True, 4)  # el ticket dice 1,04 €/l con IVA
-lote = silencio(inv.entrada_stock, "Leche", 10, precio_unitario=precio, proveedor="Lácteos SA")
-comprobar(abs(lote.precio_base - 1.0) < 1e-9 and lote.iva == 4 and abs(lote.precio_unitario - 1.0) < 1e-9
-          and abs(lote.precio_con_iva - 1.04) < 1e-9,
-          "Un precio con IVA se guarda sin IVA (1 €/l) y con su tipo (4 %)")
+comprobar(precio_a_coste(1.0, False, 4) == 1.04 and precio_a_coste(1.04, True, 4) == 1.04,
+          "Un precio escrito sin IVA se convierte en lo pagado (1 € + 4 % = 1,04 €)")
+lote = silencio(inv.entrada_stock, "Leche", 10, precio_unitario=1.04, proveedor="Lácteos SA")
+comprobar(abs(lote.precio_base - 1.0) < 1e-9 and lote.iva == 4 and lote.precio_unitario == 1.04,
+          "Se ve lo pagado (1,04 €/l) y se guarda aparte sin IVA (1 €) y su tipo (4 %)")
 silencio(inv.salida_stock, "Leche", 3, "consumo", lote.id, servicio_id=950)
-comprobar(Metricas(inv).iva_soportado(HOY, HOY) == 0.4 and Metricas(inv).gasto_por_categoria(HOY, HOY) == {"Lácteos": 10.0},
-          "Métricas: 10 € de compra sin IVA y 0,40 € de IVA soportado")
+comprobar(Metricas(inv).iva_soportado(HOY, HOY) == 0.4 and Metricas(inv).gasto_por_categoria(HOY, HOY) == {"Lácteos": 10.4},
+          "Métricas: el gasto es lo pagado (10,40 €) y el IVA soportado se ve aparte (0,40 €)")
 servicio = Servicio(HOY, time(14, 0), 10, "Menú inexistente")
 servicio.id = 950
 servicio.estado = "completado"
-comprobar(_res2(servicio, inv, Recetario(), _RG2())["comida"] == 3.0, "Sin IVA: el servicio cuesta 3 €")
-inv.costes_con_iva = True
-try:
-    comprobar(abs(lote.precio_unitario - 1.04) < 1e-9 and _res2(servicio, inv, Recetario(), _RG2())["comida"] == 3.12
-              and Metricas(inv).gasto_por_categoria(HOY, HOY) == {"Lácteos": 10.4}
-              and abs(inv.precios_de("Leche")[0].precio_unitario - 1.04) < 1e-9,
-              "Con IVA (Ajustes): todo se recalcula (servicio 3,12 €, compra 10,40 €, historial 1,04 €/l)")
-    lote2 = silencio(inv.entrada_stock, "Leche", 5, precio_unitario=precio_a_coste(1.0, False, 4), proveedor="Lácteos SA")
-    comprobar(abs(lote2.precio_base - 1.0) < 1e-9 and abs(lote2.precio_unitario - 1.04) < 1e-9,
-              "Con IVA: un precio escrito sin IVA también se guarda bien (base 1 €, coste 1,04 €)")
-    copia = Inventario.from_dict(inv.to_dict())
-    comprobar(copia.costes_con_iva and abs(copia.buscar_producto("Leche").lotes[0].precio_unitario - 1.04) < 1e-9
-              and copia.historial[-1].iva == 4,
-              "El ajuste y los precios sin IVA se guardan y se cargan")
-    viejo = {"productos": [{"nombre": "Aceite", "categoria": "Despensa", "unidad": "litros", "proveedor": "X",
-                            "stock_minimo": 0, "precio_referencia": 5, "lotes": [
-                                {"id": 1, "cantidad": 2, "precio_unitario": 5, "proveedor": "X",
-                                 "fecha_entrada": HOY.isoformat(), "procedencia": "compra"}]}]}
-    antiguo = Inventario.from_dict(viejo)
-    comprobar(antiguo.costes_con_iva is False and antiguo.buscar_producto("Aceite").precio_unitario == 5
-              and antiguo.buscar_producto("Aceite").lotes[0].iva == 0,
-              "Las sesiones de antes del IVA se cargan con sus precios tal cual")
-finally:
-    AJUSTES["costes_con_iva"] = False
+servicio.precio_cobrado = 100
+inv.iva_recuperable = False
+r = _res2(servicio, inv, Recetario(), _RG2())
+comprobar(r["comida"] == 3.12 and r["iva_recuperable"] == 0, "Si NO se recupera el IVA, el servicio cuesta lo pagado (3,12 €)")
+inv.iva_recuperable = True
+r = _res2(servicio, inv, Recetario(), _RG2())
+comprobar(r["comida"] == 3.0 and r["iva_recuperable"] == 0.12 and r["margen"] == 97.0 and lote.precio_unitario == 1.04,
+          "Si se recupera, el margen se calcula sin IVA (3 €) y el IVA recuperable va aparte (0,12 €); el precio se sigue viendo con IVA")
+copia = Inventario.from_dict(inv.to_dict())
+comprobar(copia.iva_recuperable and copia.buscar_producto("Leche").lotes[0].precio_unitario == 1.04
+          and copia.historial[-1].iva == 4, "El ajuste y los precios se guardan y se cargan")
+viejo = {"productos": [{"nombre": "Aceite", "categoria": "Despensa", "unidad": "litros", "proveedor": "X",
+                        "stock_minimo": 0, "precio_referencia": 5, "lotes": [
+                            {"id": 1, "cantidad": 2, "precio_unitario": 5, "proveedor": "X",
+                             "fecha_entrada": HOY.isoformat(), "procedencia": "compra"}]}]}
+antiguo = Inventario.from_dict(viejo)
+comprobar(antiguo.buscar_producto("Aceite").precio_unitario == 5 and antiguo.buscar_producto("Aceite").lotes[0].iva == 0,
+          "Las sesiones de antes del IVA se cargan con sus precios tal cual")
+
+# Elaboraciones: conservan la parte de IVA de sus ingredientes
 inv2 = Inventario()
-silencio(inv2.agregar_producto, Producto("Cebolla", "Verduras", 3, "kg", 1, "Huerta", iva=4))
+silencio(inv2.agregar_producto, Producto("Cebolla", "Verduras", 3, "kg", 1.04, "Huerta", iva=4))
 silencio(inv2.definir_base, "Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 1.5})
 silencio(Recetario().preparar_base, "Sofrito", 1, 1, inv2)
-comprobar(inv2.buscar_producto("Sofrito").lotes[0].iva == 0 and inv2.buscar_producto("Cebolla").lotes[0].iva == 4,
-          "Lo que sale de una elaboración no lleva IVA propio: su coste ya viene de sus ingredientes")
+sofrito = inv2.buscar_producto("Sofrito").lotes[0]
+comprobar(abs(sofrito.precio_unitario - 1.56) < 1e-6 and abs(sofrito.precio_base - 1.5) < 1e-6,
+          "Una elaboración base cuesta lo pagado (1,56 €) y guarda su parte sin IVA (1,50 €)")
+rec2 = Recetario()
+ensalada2 = Receta("Ensalada", "Entrantes", {"Cebolla": 0.1})
+silencio(rec2.agregar_receta, ensalada2)
+tanda = silencio(rec2.preparar_elaboracion, "Ensalada", 10, inv2)
+comprobar(abs(tanda.coste_por_racion - 0.104) < 1e-6 and abs(tanda.coste_por_racion_sin_iva - 0.1) < 1e-6,
+          "Una tanda guarda su coste con IVA y sin IVA")
 silencio(inv2.editar_producto, "Cebolla", iva=10)
-comprobar(inv2.buscar_producto("Cebolla").iva == 10 and inv2.buscar_producto("Cebolla").lotes[0].iva == 4
-          and inv2.buscar_producto("Cebolla").precio_referencia == 1,
+comprobar(inv2.buscar_producto("Cebolla").iva == 10 and inv2.buscar_producto("Cebolla").lotes[0].iva == 4,
           "Cambiar el IVA de un producto vale para las compras nuevas; las ya hechas conservan el suyo")
+
+# IVA del trimestre (estimación)
+from metricas import trimestre  # noqa: E402
+registro = RegistroServicios()
+servicio.fecha = HOY
+silencio(registro.agregar_servicio, servicio)
+desde, hasta = trimestre(HOY)
+resumen = Metricas(inv).resumen_iva(desde, hasta, registro.servicios)
+comprobar(resumen["soportado_por_tipo"] == {4.0: 0.4} and resumen["soportado"] == 0.4
+          and resumen["repercutido"] == 10.0 and resumen["resultado"] == 9.6,
+          "IVA del trimestre: 0,40 € pagado, 10 € cobrado (10 % de 100 €) -> 9,60 € a ingresar (estimación)")
 with tempfile.TemporaryDirectory() as carpeta:
     from openpyxl import load_workbook
     libro = load_workbook(silencio(exportar_todo, inv, RegistroServicios(), GestorCompras(), carpeta))
     cabecera = [c.value for c in libro["Historial de precios"][1]]
     comprobar("IVA (%)" in cabecera and "Total con IVA (€)" in cabecera and libro["Historial de precios"]["G2"].value == 4,
               "El Excel separa precio sin IVA, IVA y precio con IVA")
+AJUSTES["iva_recuperable"] = False
 
 print()
 if fallos:

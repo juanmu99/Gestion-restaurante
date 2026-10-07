@@ -20,7 +20,7 @@ URL = "http://localhost:8501"
 RAIZ = Path(__file__).resolve().parent.parent
 CARPETA = RAIZ / "resultados" / "capturas"
 
-PAGINAS = ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]
+PAGINAS = ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup", "Ajustes"]
 PESTANAS_INVENTARIO = ["✏️ Editar producto", "📦 Actualizar stock", "🏷️ Lotes", "📈 Historial de precios", "🔪 Limpiar producto", "📜 Limpiezas"]
 
 
@@ -121,6 +121,16 @@ def main() -> int:
                     except Exception as e:  # noqa: BLE001
                         errores.append(f"Servicios > {pestana}: {e}")
                     numero += 1
+
+            if pagina == "Métricas":
+                try:
+                    page.get_by_role("tab", name="🧾 IVA").click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "metricas iva")), full_page=True)
+                    print("📸 Métricas > IVA")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Métricas > IVA: {e}")
+                numero += 1
 
             if pagina == "Recetario":
                 try:

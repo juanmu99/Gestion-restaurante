@@ -33,6 +33,7 @@ class Tanda:
         fecha_preparacion: Optional[date] = None,
         fecha_caducidad: Optional[date] = None,
         raciones_iniciales: Optional[float] = None,
+        coste_por_racion_sin_iva: Optional[float] = None,
     ):
         if raciones < 0:
             raise ValueError("Las raciones no pueden ser negativas.")
@@ -40,7 +41,10 @@ class Tanda:
         self.receta = receta
         self.raciones = raciones  # las que QUEDAN
         self.raciones_iniciales = raciones if raciones_iniciales is None else raciones_iniciales
-        self.coste_por_racion = coste_por_racion
+        self.coste_por_racion = coste_por_racion  # lo pagado (con IVA)
+        # El mismo coste sin el IVA de los ingredientes (para la rentabilidad
+        # si el negocio recupera el IVA). Las tandas antiguas no lo tienen.
+        self.coste_por_racion_sin_iva = coste_por_racion if coste_por_racion_sin_iva is None else coste_por_racion_sin_iva
         self.fecha_preparacion = fecha_preparacion or date.today()
         self.fecha_caducidad = fecha_caducidad
 
@@ -70,6 +74,7 @@ class Tanda:
         return {
             "id": self.id, "receta": self.receta, "raciones": self.raciones,
             "raciones_iniciales": self.raciones_iniciales, "coste_por_racion": self.coste_por_racion,
+            "coste_por_racion_sin_iva": self.coste_por_racion_sin_iva,
             "fecha_preparacion": self.fecha_preparacion.isoformat(),
             "fecha_caducidad": self.fecha_caducidad.isoformat() if self.fecha_caducidad else None,
         }
@@ -80,7 +85,7 @@ class Tanda:
             datos["id"], datos["receta"], datos["raciones"], datos["coste_por_racion"],
             date.fromisoformat(datos["fecha_preparacion"]),
             date.fromisoformat(datos["fecha_caducidad"]) if datos.get("fecha_caducidad") else None,
-            datos.get("raciones_iniciales"),
+            datos.get("raciones_iniciales"), datos.get("coste_por_racion_sin_iva"),
         )
 
 
@@ -91,7 +96,7 @@ class UsoTanda:
 
     def __init__(
         self, tanda_id: int, receta: str, raciones: float, motivo: str, coste: float,
-        servicio_id: Optional[int] = None, fecha: Optional[date] = None,
+        servicio_id: Optional[int] = None, fecha: Optional[date] = None, coste_sin_iva: Optional[float] = None,
     ):
         if motivo not in self.MOTIVOS:
             raise ValueError(f"Motivo no válido: {motivo}")
@@ -99,21 +104,23 @@ class UsoTanda:
         self.receta = receta
         self.raciones = raciones
         self.motivo = motivo
-        self.coste = round(coste, 2)
+        self.coste = round(coste, 2)  # con IVA
+        self.coste_sin_iva = self.coste if coste_sin_iva is None else round(coste_sin_iva, 2)
         self.servicio_id = servicio_id
         self.fecha = fecha or date.today()
 
     def to_dict(self) -> dict:
         return {
             "tanda_id": self.tanda_id, "receta": self.receta, "raciones": self.raciones, "motivo": self.motivo,
-            "coste": self.coste, "servicio_id": self.servicio_id, "fecha": self.fecha.isoformat(),
+            "coste": self.coste, "coste_sin_iva": self.coste_sin_iva, "servicio_id": self.servicio_id,
+            "fecha": self.fecha.isoformat(),
         }
 
     @classmethod
     def from_dict(cls, datos: dict) -> "UsoTanda":
         return cls(
             datos["tanda_id"], datos["receta"], datos["raciones"], datos["motivo"], datos["coste"],
-            datos.get("servicio_id"), date.fromisoformat(datos["fecha"]),
+            datos.get("servicio_id"), date.fromisoformat(datos["fecha"]), datos.get("coste_sin_iva"),
         )
 
 
@@ -175,10 +182,12 @@ class RegistroElaboraciones:
     def nueva_tanda(
         self, receta: str, raciones: float, coste_por_racion: float,
         fecha_caducidad: Optional[date] = None, fecha_preparacion: Optional[date] = None,
+        coste_por_racion_sin_iva: Optional[float] = None,
     ) -> Tanda:
         if raciones <= 0:
             raise ValueError("Las raciones deben ser más de 0.")
-        tanda = Tanda(self.siguiente_id, receta, raciones, coste_por_racion, fecha_preparacion, fecha_caducidad)
+        tanda = Tanda(self.siguiente_id, receta, raciones, coste_por_racion, fecha_preparacion, fecha_caducidad,
+                      coste_por_racion_sin_iva=coste_por_racion_sin_iva)
         self.siguiente_id += 1
         self.tandas.append(tanda)
         print(f"🥘 Elaboración preparada: {receta} -> {tanda.descripcion()}")
@@ -217,7 +226,8 @@ class RegistroElaboraciones:
     def _sacar(self, tanda: Tanda, raciones: float, motivo: str, servicio_id: Optional[int]) -> UsoTanda:
         raciones = min(raciones, tanda.raciones)
         tanda.raciones = round(tanda.raciones - raciones, 6)
-        uso = UsoTanda(tanda.id, tanda.receta, raciones, motivo, raciones * tanda.coste_por_racion, servicio_id)
+        uso = UsoTanda(tanda.id, tanda.receta, raciones, motivo, raciones * tanda.coste_por_racion, servicio_id,
+                       coste_sin_iva=raciones * tanda.coste_por_racion_sin_iva)
         self.usos.append(uso)
         self.tandas = [t for t in self.tandas if t.raciones > 1e-9]  # una tanda vacía desaparece
         return uso
@@ -271,8 +281,9 @@ class RegistroElaboraciones:
     def usos_de_servicio(self, servicio_id: int) -> list[UsoTanda]:
         return [u for u in self.usos if u.servicio_id == servicio_id and u.motivo == "consumo"]
 
-    def coste_servicio(self, servicio_id: int) -> float:
-        return round(sum(u.coste for u in self.usos_de_servicio(servicio_id)), 2)
+    def coste_servicio(self, servicio_id: int, sin_iva: bool = False) -> float:
+        """Lo que costaron las raciones preparadas usadas en un servicio (con IVA, o sin él si `sin_iva`)."""
+        return round(sum(u.coste_sin_iva if sin_iva else u.coste for u in self.usos_de_servicio(servicio_id)), 2)
 
     def desperdicio_en_rango(self, desde: date, hasta: date) -> float:
         return round(sum(u.coste for u in self.usos if u.motivo == "desperdicio" and desde <= u.fecha <= hasta), 2)

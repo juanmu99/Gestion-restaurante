@@ -68,6 +68,15 @@ def rango_mes_calendario(año: int, mes: int) -> tuple[date, date]:
     return primer_dia, ultimo_dia
 
 
+def trimestre(fecha: date) -> tuple[date, date]:
+    """Primer y último día del trimestre natural de `fecha` (como el modelo 303)."""
+    inicio_mes = 3 * ((fecha.month - 1) // 3) + 1
+    desde = date(fecha.year, inicio_mes, 1)
+    hasta = date(fecha.year + 1, 1, 1) - timedelta(days=1) if inicio_mes == 10 \
+        else date(fecha.year, inicio_mes + 3, 1) - timedelta(days=1)
+    return desde, hasta
+
+
 class Metricas:
     """
     Consulta inventario.historial y lo resume de varias formas. No tiene
@@ -167,6 +176,39 @@ class Metricas:
         return round(sum(
             m.cantidad * m.precio_base * m.iva / 100 for m in self._en_rango(fecha_inicio, fecha_fin) if m.es_compra()
         ), 2)
+
+    def iva_soportado_por_tipo(self, fecha_inicio: date, fecha_fin: date) -> dict[float, float]:
+        """El IVA pagado en las compras del rango, separado por tipo: {21.0: x, 10.0: y, 4.0: z}."""
+        por_tipo: dict[float, float] = {}
+        for m in self._en_rango(fecha_inicio, fecha_fin):
+            if m.es_compra() and m.iva > 0:
+                por_tipo[m.iva] = round(por_tipo.get(m.iva, 0) + m.cantidad * m.precio_base * m.iva / 100, 2)
+        return dict(sorted(por_tipo.items(), reverse=True))
+
+    def resumen_iva(self, fecha_inicio: date, fecha_fin: date, servicios: list) -> dict:
+        """
+        ESTIMACIÓN ORIENTATIVA del IVA de un periodo (normalmente un trimestre):
+        - soportado: el IVA pagado en las compras registradas (por tipo).
+        - repercutido: el IVA cobrado a los clientes, calculado sobre el
+          precio de cobro (sin IVA) de los servicios completados en el
+          periodo, con el IVA de cobro de los Ajustes (10 % en catering).
+        - resultado: repercutido - soportado (> 0: a ingresar; < 0: a compensar).
+        No incluye el IVA de los gastos (gasolina, personal...) ni de nada
+        que no esté registrado aquí. No sustituye a un gestor o asesor fiscal.
+        """
+        por_tipo = self.iva_soportado_por_tipo(fecha_inicio, fecha_fin)
+        soportado = round(sum(por_tipo.values()), 2)
+        cobrados = [s for s in servicios if s.estado == "completado" and fecha_inicio <= s.fecha <= fecha_fin
+                    and s.precio_cobrado is not None]
+        base_cobrada = round(sum(s.precio_cobrado for s in cobrados), 2)
+        repercutido = round(base_cobrada * self.inventario.iva_cobro / 100, 2)
+        return {
+            "soportado_por_tipo": por_tipo, "soportado": soportado,
+            "base_cobrada": base_cobrada, "servicios_cobrados": len(cobrados),
+            "servicios_sin_cobro": len([s for s in servicios if s.estado == "completado"
+                                        and fecha_inicio <= s.fecha <= fecha_fin and s.precio_cobrado is None]),
+            "repercutido": repercutido, "resultado": round(repercutido - soportado, 2),
+        }
 
     def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> float:
         """
