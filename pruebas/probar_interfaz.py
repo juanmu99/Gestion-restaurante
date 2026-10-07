@@ -140,21 +140,21 @@ def prueba_precios(at: AppTest) -> None:
               and "Harina de trigo" in avisos_barato and "más barato" in avisos_barato,
               "El Dashboard avisa de los precios fuera de lo habitual (tomate más caro, harina más barata)")
 
-    # Compra indicando el TOTAL pagado: el programa calcula el precio por litro
+    # Compra indicando el TOTAL pagado: el programa calcula el precio por kg
     ir_a(at, "Inventario")
     at.radio(key="inv_tipo").set_value("🍅 Alimentos").run()
-    nombre = "Aceite de oliva"
+    nombre = "Pimiento rojo"
     at.selectbox(key="stock_select").select(nombre).run()
     at.radio(key=f"stock_tipo_{nombre}").set_value("Entrada (compra)").run()
     at.number_input(key=f"stock_cantidad_{nombre}").set_value(10.0)
     at.radio(key=f"stock_modo_precio_{nombre}").set_value("Total pagado").run()
     at.number_input(key=f"stock_precio_total_{nombre}").set_value(48.0).run()
-    comprobar(any("4.8 € por litro" in t for t in textos(at.caption)),
-              "Con el total pagado se muestra el precio por litro antes de guardar (48 € / 10 l = 4,8 €)")
+    comprobar(any("4.8 € por kg" in t for t in textos(at.caption)),
+              "Con el total pagado se muestra el precio por kg antes de guardar (48 € / 10 kg = 4,8 €)")
     at.button(key=f"stock_boton_{nombre}").click().run()
     ultima = inv.precios_de(nombre)[-1]
     comprobar(sin_excepciones(at, "compra con total") and ultima.precio_unitario == 4.8 and ultima.cantidad == 10,
-              "La compra se guarda a 4,8 €/litro y entra en el historial de precios")
+              "La compra se guarda a 4,8 €/kg y entra en el historial de precios")
 
     at.selectbox(key="precios_select").select(nombre).run()
     comprobar(sin_excepciones(at, "historial de precios") and not at.error,
