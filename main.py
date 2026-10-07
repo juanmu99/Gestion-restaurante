@@ -353,7 +353,7 @@ def _pedir_precio_escrito(unidad: str, cantidad: float, referencia: Optional[flo
         if cantidad <= 0:
             print("⚠️  Sin cantidad no se puede calcular el precio por unidad: escríbelo por unidad.")
             continue
-        precio = round(valor / cantidad, 4)
+        precio = valor / cantidad  # sin redondear (en gramos o ml, redondear perdía dinero)
         print(f"   = {precio:g} € por {unidad_txt} ({valor:g} € / {cantidad:g} {unidad})")
         return precio
 

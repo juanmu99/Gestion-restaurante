@@ -76,7 +76,7 @@ class Receta(ConNotas):
             for ingrediente, cantidad in self.ingredientes_por_comensal.items()
         }
 
-    def costo_por_comensal(self, inventario: Inventario, sin_iva: bool = False) -> float:
+    def costo_por_comensal(self, inventario: Inventario, sin_iva: bool = False, redondear: bool = True) -> float:
         """
         Coste estimado de esta receta POR COMENSAL, según los precios
         ACTUALES del inventario (no una foto guardada, como en
@@ -87,10 +87,10 @@ class Receta(ConNotas):
         """
         total = 0.0
         for nombre_ingrediente, cantidad in self.ingredientes_por_comensal.items():
-            producto = inventario.buscar_producto(nombre_ingrediente)
-            if producto is not None:
-                total += cantidad * (producto.precio_sin_iva if sin_iva else producto.precio_unitario)
-        return round(total, 2)
+            total += cantidad * inventario.precio_de(nombre_ingrediente, sin_iva)
+        # Redondeado a céntimos para mostrarlo; para multiplicar por los
+        # comensales se pide sin redondear (si no, el error se multiplica).
+        return round(total, 2) if redondear else total
 
     def __str__(self) -> str:
         detalle = ", ".join(f"{c} {i}/comensal" for i, c in self.ingredientes_por_comensal.items())
@@ -225,18 +225,18 @@ class Menu(ConNotas):
         """Los ingredientes de todas sus recetas, sumados, por comensal (para verlos de un vistazo)."""
         return self.calcular_ingredientes_totales(1)
 
-    def costo_por_comensal(self, inventario: Inventario, sin_iva: bool = False) -> float:
+    def costo_por_comensal(self, inventario: Inventario, sin_iva: bool = False, redondear: bool = True) -> float:
         """Coste de la COMIDA por comensal: suma de sus recetas -- ver Receta.costo_por_comensal()."""
-        return round(sum(r.costo_por_comensal(inventario, sin_iva) for r in self.recetas), 2)
+        total = sum(r.costo_por_comensal(inventario, sin_iva, redondear=False) for r in self.recetas)
+        return round(total, 2) if redondear else total
 
-    def costo_consumibles_por_comensal(self, inventario: Inventario, sin_iva: bool = False) -> float:
+    def costo_consumibles_por_comensal(self, inventario: Inventario, sin_iva: bool = False,
+                                       redondear: bool = True) -> float:
         """Coste de los consumibles por comensal, a los precios actuales."""
         total = 0.0
         for nombre, cantidad in self.consumibles_por_comensal.items():
-            producto = inventario.buscar_producto(nombre)
-            if producto is not None:
-                total += cantidad * (producto.precio_sin_iva if sin_iva else producto.precio_unitario)
-        return round(total, 2)
+            total += cantidad * inventario.precio_de(nombre, sin_iva)
+        return round(total, 2) if redondear else total
 
     def __str__(self) -> str:
         platos = ", ".join(r.nombre for r in self.recetas)
@@ -568,8 +568,8 @@ class Recetario:
         for f in filas:
             inventario.salida_repartida(f["ingrediente"], f["reparto"], "elaboración")
         return inventario.elaboraciones.nueva_tanda(
-            nombre_receta, raciones, round(coste / raciones, 4), fecha_caducidad, fecha_preparacion,
-            coste_por_racion_sin_iva=round(coste_sin_iva / raciones, 4),
+            nombre_receta, raciones, coste / raciones, fecha_caducidad, fecha_preparacion,
+            coste_por_racion_sin_iva=coste_sin_iva / raciones,
         )
 
     # ---------- Elaboraciones BASE (sofritos, fondos, salsas, masas...) ----------

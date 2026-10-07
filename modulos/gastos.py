@@ -165,10 +165,10 @@ def resumen_servicio(
     if estimado:
         menu = recetario.buscar_menu(servicio.menu)
         if menu is not None:
-            comida = menu.costo_por_comensal(inventario, sin_iva) * servicio.comensales
-            consumibles = menu.costo_consumibles_por_comensal(inventario, sin_iva) * servicio.comensales
-            comida_con = menu.costo_por_comensal(inventario) * servicio.comensales
-            consumibles_con = menu.costo_consumibles_por_comensal(inventario) * servicio.comensales
+            comida = menu.costo_por_comensal(inventario, sin_iva, redondear=False) * servicio.comensales
+            consumibles = menu.costo_consumibles_por_comensal(inventario, sin_iva, redondear=False) * servicio.comensales
+            comida_con = menu.costo_por_comensal(inventario, redondear=False) * servicio.comensales
+            consumibles_con = menu.costo_consumibles_por_comensal(inventario, redondear=False) * servicio.comensales
     else:
         for m in inventario.historial:
             if m.servicio_id == servicio.id and m.tipo == "salida":

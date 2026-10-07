@@ -1021,6 +1021,61 @@ except ValueError:
     comprobar(inv.buscar_producto("Pata").stock == 2 and copia.buscar_producto("Sofrito").es_base(),
               "Una limpieza no puede dar una elaboración base (antes dejaba la sesión imposible de abrir)")
 
+print("\n--- Fase 2, bloque 1: precios exactos ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Harina", "Panadería", 0, "g", 0, "Harinas", iva=4))
+lote = silencio(inv.entrada_stock, "Harina", 25000, precio_unitario=15.50 / 25000, proveedor="Harinas")
+comprobar(abs(lote.valor() - 15.50) < 0.005 and abs(inv.buscar_producto("Harina").precio_unitario * 25000 - 15.50) < 1e-6,
+          "25.000 g comprados por 15,50 € valen 15,50 € (antes, por el redondeo, 15,00 €)")
+silencio(inv.agregar_producto, Producto("Pata", "Carnes", 1, "unidades", 40, "Carnicería", tiene_merma=True, peso_unitario=7))
+silencio(inv.agregar_producto, Producto("Carne limpia", "Carnes", 0, "g", 0, "Propio"))
+silencio(inv.limpiar_producto, "Pata", 1, "Carne limpia", 4321, unidad_peso="g", lote_id=1)
+comprobar(abs(inv.buscar_producto("Carne limpia").lotes[0].valor() - 40) < 0.005,
+          "Una limpieza en gramos conserva el coste exacto (40 €)")
+lote2 = silencio(inv.compra_para_servicio, "Harina", 10000, 0, 6.30, 1)
+comprobar(abs(lote2.valor() - 6.30) < 0.005, "Una compra de última hora en gramos también (10.000 g por 6,30 €)")
+
+print("\n--- Fase 2, bloque 1: elaboraciones base sin preparar ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Cebolla", "Verduras", 10, "kg", 2, "Huerta"))
+silencio(inv.agregar_producto, Producto("Aceite", "Despensa", 5, "litros", 5, "Mayorista"))
+silencio(inv.definir_base, "Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 2, "Aceite": 0.1})  # 4,50 €/kg
+silencio(inv.definir_base, "Salsa", "Elaboraciones", "litros", 2, {"Sofrito": 1, "Aceite": 0.2})  # (4,5 + 1) / 2
+rec = Recetario()
+guiso = Receta("Guiso", "Principales", {"Sofrito": 0.05, "Salsa": 0.1})
+silencio(rec.agregar_receta, guiso)
+comprobar(abs(inv.precio_de("Sofrito") - 4.5) < 1e-9 and abs(inv.precio_de("Salsa") - 2.75) < 1e-9
+          and guiso.costo_por_comensal(inv) == round(0.05 * 4.5 + 0.1 * 2.75, 2),
+          "Una base sin preparar cuesta lo que su fórmula (sofrito 4,50 €/kg; salsa con sofrito 2,75 €/l), no 0 €")
+silencio(rec.agregar_menu, Menu("Menú guiso", [guiso]))
+servicio = Servicio(HOY + timedelta(days=3), time(14, 0), 200, "Menú guiso")
+r = _res2(servicio, inv, rec, _RG2())
+comprobar(abs(r["comida"] - 200 * (0.05 * 4.5 + 0.1 * 2.75)) < 0.01,
+          "La rentabilidad estimada de un servicio cuenta las bases (200 comensales = 100 €, antes 0 €)")
+
+print("\n--- Fase 2, bloque 1: 'la última compra fue a…' ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Gambas", "Pescado", 0, "kg", 0, "Lonja"))
+lote = silencio(inv.entrada_stock, "Gambas", 2, precio_unitario=220, proveedor="Lonja")  # error: eran 22 €/kg
+silencio(inv.salida_stock, "Gambas", 2, "consumo", lote.id)
+silencio(inv.corregir_compra, inv.precios_de("Gambas")[-1], 22)
+comprobar(abs(inv.buscar_producto("Gambas").precio_referencia - 22) < 1e-9,
+          "Al corregir el precio de la última compra, se corrige también 'la última compra fue a…' (22 €, no 220 €)")
+lote = silencio(inv.entrada_stock, "Gambas", 1, precio_unitario=300, proveedor="Lonja")
+silencio(inv.editar_lote, "Gambas", lote.id, precio_unitario=30)
+comprobar(abs(inv.buscar_producto("Gambas").precio_referencia - 30) < 1e-9, "...también desde 'Editar producto'")
+silencio(inv.agregar_producto, Producto("Pata", "Carnes", 1, "unidades", 40, "Carnicería", tiene_merma=True, peso_unitario=7))
+silencio(inv.agregar_producto, Producto("Huesos", "Carnes", 0, "kg", 0, "Propio"))
+silencio(inv.entrada_stock, "Huesos", 2, precio_unitario=1.5, proveedor="Carnicería")
+silencio(inv.agregar_producto, Producto("Carne", "Carnes", 0, "kg", 0, "Propio"))
+silencio(inv.limpiar_producto, "Pata", 1, "Carne", 4, derivados={"Huesos": 1}, lote_id=1)
+comprobar(abs(inv.buscar_producto("Huesos").precio_referencia - 1.5) < 1e-9,
+          "Un derivado a 0 € de una limpieza no cambia 'la última compra fue a…'")
+viejo = {"productos": [{"nombre": "Harina", "categoria": "Panadería", "unidad": "kg", "proveedor": "X",
+                        "stock_minimo": 0, "precio_referencia": 1.5, "lotes": []}]}
+comprobar(abs(Inventario.from_dict(viejo).buscar_producto("Harina").precio_referencia - 1.5) < 1e-9,
+          "En datos de antes del IVA, el precio de referencia no sube un 21 % (sigue en 1,50 €)")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

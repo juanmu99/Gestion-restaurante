@@ -439,6 +439,19 @@ def _num(valor: float) -> str:
     return f"{round(valor, 3):g}"
 
 
+def _precio(valor: float) -> str:
+    """
+    Un precio para mostrar: con 2 decimales como mucho si es de 1 € o más
+    (4.5, 14.99), y con las cifras necesarias si es pequeño, como los precios
+    por gramo o mililitro (0.0125, 0.00062), que con 2 decimales saldrían 0,00.
+    """
+    if valor is None:
+        return "—"
+    if valor == 0 or abs(valor) >= 1:
+        return f"{round(valor, 2):g}"
+    return f"{valor:.3g}"
+
+
 def _parece_numero(texto: str) -> bool:
     try:
         float(texto.replace(",", "."))
@@ -545,8 +558,8 @@ def _campo_precio(unidad: str, cantidad: Optional[float], k, referencia: float =
     if not cantidad or cantidad <= 0:
         contenedor.caption("Indica la cantidad comprada para calcular el precio por " + unidad_txt + ".")
         return None
-    precio = round(total / cantidad, 4)
-    contenedor.caption(f"= **{_num(precio)} € por {unidad_txt}** ({_num(total)} € / {_num(cantidad)} {unidad})")
+    precio = total / cantidad  # sin redondear: redondear perdía dinero en gramos o mililitros
+    contenedor.caption(f"= **{_precio(precio)} € por {unidad_txt}** ({_num(total)} € / {_num(cantidad)} {unidad})")
     return _precio_con_iva(precio, incluye_iva, iva, unidad_txt, contenedor)
 
 
@@ -556,10 +569,10 @@ def _precio_con_iva(precio: Optional[float], incluye_iva: bool, iva: float, unid
         return precio
     base = precio / (1 + iva / 100) if incluye_iva else precio
     contenedor.caption(
-        f"Pagado (con IVA): **{_num(round(base * (1 + iva / 100), 4))} €** por {unidad_txt} = "
-        f"{_num(round(base, 4))} € sin IVA + {_num(round(base * iva / 100, 4))} € de IVA ({iva:g} %)."
+        f"Pagado (con IVA): **{_precio(base * (1 + iva / 100))} €** por {unidad_txt} = "
+        f"{_precio(base)} € sin IVA + {_precio(base * iva / 100)} € de IVA ({iva:g} %)."
     )
-    return round(precio_a_coste(precio, incluye_iva, iva), 6)
+    return precio_a_coste(precio, incluye_iva, iva)
 
 
 def _campos_entrada(producto: Producto, k, cantidad: Optional[float] = None) -> dict:
@@ -596,7 +609,7 @@ def _filas_lotes(producto: Producto) -> list[dict]:
             estado = f"Caduca en {dias} día(s)"
         fila = {
             "Lote": str(l.id), "Cantidad": f"{_num(l.cantidad)} {producto.unidad}",
-            "Precio (€, con IVA)": _num(l.precio_unitario), "IVA": nombre_iva(l.iva).split(" (")[0],
+            "Precio (€, con IVA)": _precio(l.precio_unitario), "IVA": nombre_iva(l.iva).split(" (")[0],
             "Valor (€)": _num(l.valor()), "Proveedor": l.proveedor, "Entrada": l.fecha_entrada.strftime("%d/%m/%Y"),
         }
         if not producto.es_consumible():
@@ -719,7 +732,7 @@ def _filas_inventario(productos: list, tipo: str = "alimento") -> list[dict]:
     for p in productos:
         fila = {
             "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
-            "Mínimo": p.stock_minimo, "Precio medio (€, con IVA)": round(p.precio_unitario, 2),
+            "Mínimo": p.stock_minimo, "Precio medio (€, con IVA)": _precio(p.precio_unitario),
             "IVA": nombre_iva(p.iva).split(" (")[0], "Proveedor habitual": p.proveedor,
             "Lotes": len(p.lotes),
         }
@@ -1190,9 +1203,9 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
     st.markdown("**Por proveedor** (del más barato al más caro, de media)")
     st.dataframe([{
         "Proveedor": f["proveedor"], "Compras": f["compras"],
-        f"Precio medio (€/{unidad_txt})": _num(round(f["medio"], 2)),
-        "Mínimo": _num(f["minimo"]), "Máximo": _num(f["maximo"]),
-        "Última compra": f"{_num(f['ultimo'])} € ({f['fecha_ultima'].strftime('%d/%m/%Y')})",
+        f"Precio medio (€/{unidad_txt})": _precio(f["medio"]),
+        "Mínimo": _precio(f["minimo"]), "Máximo": _precio(f["maximo"]),
+        "Última compra": f"{_precio(f['ultimo'])} € ({f['fecha_ultima'].strftime('%d/%m/%Y')})",
     } for f in inv.resumen_precios_por_proveedor(nombre)], width="stretch", hide_index=True)
 
     if len(compras) > 1:
@@ -1205,8 +1218,8 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
     st.markdown("**Todas las compras** (de la más reciente a la más antigua)")
     st.dataframe([{
         "Fecha": c.fecha.strftime("%d/%m/%Y"), "Proveedor": c.proveedor,
-        "Cantidad": f"{_num(c.cantidad)} {c.unidad}", f"Precio sin IVA (€/{unidad_txt})": _num(round(c.precio_base, 4)),
-        "IVA": nombre_iva(c.iva).split(" (")[0], f"Precio con IVA (€/{unidad_txt})": _num(round(c.precio_con_iva, 4)),
+        "Cantidad": f"{_num(c.cantidad)} {c.unidad}", f"Precio sin IVA (€/{unidad_txt})": _precio(c.precio_base),
+        "IVA": nombre_iva(c.iva).split(" (")[0], f"Precio con IVA (€/{unidad_txt})": _precio(c.precio_con_iva),
         "Total pagado (€)": f"{c.total:.2f}", "Lote": str(c.lote_id or "—"),
         "Origen": "Stock inicial" if c.origen == "inicial" else "Compra",
     } for c in reversed(compras)], width="stretch", hide_index=True)
@@ -1499,7 +1512,7 @@ def _seccion_elaboraciones() -> None:
                 "Fecha": p.fecha.strftime("%d/%m/%Y"), "Elaboración": p.producto,
                 "Prevista": f"{_num(p.prevista)} {p.unidad}", "Obtenida": f"{_num(p.obtenida)} {p.unidad}",
                 "Diferencia": f"{p.diferencia:+g} {p.unidad}",
-                "Coste (€)": f"{p.coste:.2f}", "Coste/unidad (€)": f"{p.coste_por_unidad:.2f}",
+                "Coste (€)": f"{p.coste:.2f}", "Coste/unidad (€)": _precio(p.coste_por_unidad),
                 "Lote": str(p.lote_id or "—"),
             } for p in preparaciones], width="stretch", hide_index=True)
             st.caption("Prevista = lo que debía salir según la fórmula. Obtenida = lo que salió de verdad.")
@@ -1622,7 +1635,7 @@ def _preparar_base(inv: Inventario, rec: Recetario) -> None:
             prep = rec.preparar_base(nombre, prevista, obtenida, inv, elecciones, caducidad, fecha_prep)
             avisar("success", f"Preparado '{nombre}': previsto {_num(prevista)}, obtenido {_num(obtenida)} "
                               f"{producto.unidad} (diferencia {prep.diferencia:+g}). Coste {prep.coste:.2f} € "
-                              f"({prep.coste_por_unidad:.2f} €/{producto.unidad}).")
+                              f"({_precio(prep.coste_por_unidad)} €/{producto.unidad}).")
             st.session_state.base_version = v + 1
             st.rerun()
         except ValueError as e:
@@ -2085,7 +2098,7 @@ def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> Non
             try:
                 if extra.get("producto_nuevo") and extra["producto"] not in inv.productos:
                     nuevo_producto = extra["producto_nuevo"]
-                    nuevo_producto.precio_referencia = round(extra["importe"] / extra["comprada"], 4)
+                    nuevo_producto.precio_referencia = extra["importe"] / extra["comprada"]
                     inv.agregar_producto(nuevo_producto)
                 inv.compra_para_servicio(
                     extra["producto"], extra["comprada"], extra["usada"], extra["importe"], servicio.id,
@@ -2899,7 +2912,7 @@ def _pestana_bases(inv: Inventario) -> None:
                                       for i, c in b.formula["ingredientes"].items()),
             "Vida útil": f"{b.vida_util_dias} día(s)" if b.vida_util_dias is not None else "—",
             "En stock": f"{_num(b.stock)} {b.unidad}",
-            "Coste estimado (€/unidad)": f"{inv.coste_estimado_base(b.nombre):.2f}",
+            "Coste estimado": f"{_precio(inv.coste_estimado_base(b.nombre))} €/{b.unidad}",
         } for b in bases], width="stretch", hide_index=True)
         for b in bases:
             st.markdown(f"**{b.nombre}**")

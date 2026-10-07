@@ -148,7 +148,7 @@ class PreparacionBase:
 
     @property
     def coste_por_unidad(self) -> float:
-        return round(self.coste / self.obtenida, 4) if self.obtenida else 0.0
+        return self.coste / self.obtenida if self.obtenida else 0.0
 
     def to_dict(self) -> dict:
         return {

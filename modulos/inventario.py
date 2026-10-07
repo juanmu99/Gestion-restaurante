@@ -94,7 +94,10 @@ class ConPrecio:
 
     @property
     def precio_unitario(self) -> float:
-        return round(self.precio_base * (1 + self.iva / 100), 6)
+        # 10 decimales: solo quita el "ruido" de los cálculos con decimales
+        # (14.000000000000002). Redondear a menos perdía dinero en productos
+        # en gramos o mililitros (0,00062 €/g).
+        return round(self.precio_base * (1 + self.iva / 100), 10)
 
     @precio_unitario.setter
     def precio_unitario(self, valor: float) -> None:
@@ -352,7 +355,9 @@ class Lote(ConPrecio):
 
     def descripcion(self, unidad: str) -> str:
         """Descripción completa, con la cantidad que queda y el precio."""
-        texto = f"{self.etiqueta()} · {_numero(self.cantidad)} {unidad} · {_numero(self.precio_unitario)} €/{unidad}"
+        precio = self.precio_unitario
+        precio_txt = f"{round(precio, 2):g}" if precio == 0 or precio >= 1 else f"{precio:.3g}"  # 0,0125 €/g, no 0,013
+        texto = f"{self.etiqueta()} · {_numero(self.cantidad)} {unidad} · {precio_txt} €/{unidad}"
         if self.peso_unitario:
             texto += f" · {_numero(self.peso_unitario)} kg/unidad"
         return texto
@@ -538,7 +543,7 @@ class Producto(ConNotas):
     @property
     def precio_referencia(self) -> float:
         """Precio de la última compra, con IVA. Ver ConPrecio."""
-        return round(self.precio_referencia_base * (1 + self.iva / 100), 6)
+        return round(self.precio_referencia_base * (1 + self.iva / 100), 10)
 
     @precio_referencia.setter
     def precio_referencia(self, valor: float) -> None:
@@ -550,7 +555,7 @@ class Producto(ConNotas):
         stock = self.stock
         if stock <= 0:
             return self.precio_referencia_base
-        return round(sum(l.cantidad * l.precio_base for l in self.lotes) / stock, 6)
+        return round(sum(l.cantidad * l.precio_base for l in self.lotes) / stock, 10)
 
     def es_consumible(self) -> bool:
         return self.tipo == "consumible"
@@ -577,7 +582,7 @@ class Producto(ConNotas):
         stock = self.stock
         if stock <= 0:
             return self.precio_referencia
-        return round(sum(l.cantidad * l.precio_unitario for l in self.lotes) / stock, 4)
+        return round(sum(l.cantidad * l.precio_unitario for l in self.lotes) / stock, 10)
 
     @property
     def fecha_caducidad(self) -> Optional[date]:
@@ -796,6 +801,11 @@ class Producto(ConNotas):
         producto.precio_referencia_base = datos.get(
             "precio_referencia_base", datos.get("precio_referencia", datos.get("precio_unitario", 0))
         )
+        if "precio_referencia_base" not in datos:
+            # Sesiones de antes del IVA: aquel precio era lo pagado; el producto
+            # tiene ahora un tipo de IVA, así que se guarda la parte sin IVA
+            # (si no, al mostrarlo con IVA subiría un 21 %).
+            producto.precio_referencia_base = producto.precio_referencia_base / (1 + producto.iva / 100)
         if "lotes" not in datos:
             for lote in producto.lotes:  # sesiones muy antiguas: el precio, tal cual y sin IVA aparte
                 lote.iva = 0.0
@@ -1164,7 +1174,10 @@ class Inventario:
             return None
 
         lote = producto.nuevo_lote(cantidad, precio, proveedor, fecha_caducidad, peso_unitario, motivo, iva)
-        producto.precio_referencia = precio
+        if motivo == "compra":
+            # "La última compra fue a…": solo las compras de verdad (no lo que
+            # sale de una limpieza o una elaboración, ni un derivado a 0 €).
+            producto.precio_referencia_base = lote.precio_base
         if lote.peso_unitario:
             producto.peso_unitario_referencia = lote.peso_unitario
         print(f"📦 Entrada: {cantidad} {producto.unidad} de {nombre} -> {lote.etiqueta()}")
@@ -1274,7 +1287,7 @@ class Inventario:
 
         precio = precio_a_coste(importe_total / comprada, importe_incluye_iva, producto.iva)
         lote = self.entrada_stock(
-            nombre, comprada, precio_unitario=round(precio, 4),
+            nombre, comprada, precio_unitario=precio,
             proveedor=proveedor, fecha_caducidad=fecha_caducidad,
         )
         if usada > 0:
@@ -1397,6 +1410,8 @@ class Inventario:
             lote.cantidad = cantidad
         if precio_unitario is not None:
             lote.precio_unitario = precio_unitario
+            if self._es_ultima_compra(producto.nombre, lote.id):
+                producto.precio_referencia_base = lote.precio_base
         if proveedor is not None:
             lote.proveedor = proveedor.strip()
         if borrar_fecha_caducidad or producto.es_consumible():
@@ -1457,6 +1472,13 @@ class Inventario:
                              corregir_registrado=True)
         else:
             self._corregir_registrado(compra.producto, compra.lote_id, precio_unitario, proveedor)
+            if producto is not None and self._es_ultima_compra(compra.producto, compra.lote_id):
+                producto.precio_referencia_base = compra.precio_base
+
+    def _es_ultima_compra(self, nombre: str, lote_id: Optional[int]) -> bool:
+        """True si ese lote es la compra más reciente del producto (la de "la última compra fue a…")."""
+        compras = self.precios_de(nombre)
+        return lote_id is not None and bool(compras) and compras[-1].lote_id == lote_id
 
     def _corregir_registrado(
         self, nombre: str, lote_id: int, precio: Optional[float], proveedor: Optional[str],
@@ -1618,7 +1640,7 @@ class Inventario:
         # El lote limpio carga con todo el coste de lo que se limpió.
         cantidad_limpio = round(convertir(peso_limpio_kg, "kg", principal.unidad), 6)
         self.entrada_stock(
-            producto_limpio, cantidad_limpio, precio_unitario=round(coste / cantidad_limpio, 4),
+            producto_limpio, cantidad_limpio, precio_unitario=coste / cantidad_limpio,
             proveedor="Elaboración propia", fecha_caducidad=caducidades.get(producto_limpio), motivo="limpieza",
             iva=lote.iva,  # su coste es el del bruto: lleva el mismo IVA (y se separa igual)
         )
@@ -1883,26 +1905,37 @@ class Inventario:
         producto.vida_util_dias = vida_util_dias
         print(f"✏️  Fórmula de '{nombre}' actualizada.")
 
-    def coste_estimado_base(self, nombre: str, cantidad: float = 1, vistos: Optional[set] = None) -> float:
+    def coste_estimado_base(
+        self, nombre: str, cantidad: float = 1, vistos: Optional[set] = None, sin_iva: bool = False,
+    ) -> float:
         """
         Lo que costaría preparar `cantidad` de una elaboración base con los
-        precios actuales. Si un ingrediente es otra base sin stock, se estima
-        con SU fórmula.
+        precios actuales (con IVA, o sin él si `sin_iva`). Si un ingrediente es
+        otra base sin stock, se estima con SU fórmula.
         """
         vistos = vistos or set()
         producto = self.productos.get(nombre)
         if producto is None or not producto.es_base() or nombre in vistos:
             return 0.0
+        factor = cantidad / producto.formula["cantidad"]
         total = 0.0
-        for ingrediente, c in producto.ingredientes_para(cantidad).items():
-            otro = self.productos.get(ingrediente)
-            if otro is None:
-                continue
-            if otro.es_base() and otro.stock <= 0:
-                total += self.coste_estimado_base(ingrediente, c, vistos | {nombre})
-            else:
-                total += c * otro.precio_unitario
-        return round(total, 4)
+        for ingrediente, c in producto.formula["ingredientes"].items():
+            total += self.precio_de(ingrediente, sin_iva, vistos | {nombre}) * c * factor
+        return round(total, 10)
+
+    def precio_de(self, nombre: str, sin_iva: bool = False, vistos: Optional[set] = None) -> float:
+        """
+        Precio por unidad de un producto para ESTIMAR costes (recetas, menús,
+        servicios pendientes): el medio de lo que hay en stock; sin stock, el de
+        la última compra. Una elaboración base sin stock se calcula con su
+        fórmula (antes contaba como 0 € si aún no se había preparado nunca).
+        """
+        producto = self.productos.get(nombre)
+        if producto is None:
+            return 0.0
+        if producto.es_base() and producto.stock <= 0:
+            return self.coste_estimado_base(nombre, 1, vistos, sin_iva)
+        return producto.precio_sin_iva if sin_iva else producto.precio_unitario
 
     def buscar_producto(self, nombre: str) -> Optional[Producto]:
         return self.productos.get(nombre)
