@@ -978,8 +978,8 @@ def prueba_fase1(at: AppTest) -> None:
     comprobar(completados and not any(o.startswith(f"#{s.id} ·") for o in caja.options for s in completados),
               "Los servicios completados no aparecen para cancelar")
     caja.select(opcion(caja, f"#{pendiente.id} ·")).run()
-    boton(at.button, "Cancelar servicio").click().run()
-    comprobar(pendiente.estado == "pendiente", "Sin marcar la confirmación no se cancela")
+    comprobar(boton(at.button, "Cancelar servicio").disabled and pendiente.estado == "pendiente",
+              "Sin marcar la confirmación el botón de cancelar no se puede pulsar")
     at.checkbox(key="cancelar_confirmar").check().run()
     boton(at.button, "Cancelar servicio").click().run()
     comprobar(pendiente.estado == "cancelado", "Marcando la confirmación, se cancela")
