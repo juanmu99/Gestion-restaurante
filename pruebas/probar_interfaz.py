@@ -130,6 +130,37 @@ def prueba_paginas(at: AppTest) -> None:
         comprobar(sin_excepciones(at, pagina) and not at.error, f"Página '{pagina}' sin errores")
 
 
+@prueba("Precios: total pagado, historial y avisos")
+def prueba_precios(at: AppTest) -> None:
+    inv = at.session_state["inventario"]
+    ir_a(at, "Dashboard")
+    avisos_caro = " ".join(textos(at.warning))
+    avisos_barato = " ".join(textos(at.success))
+    comprobar("Tomate" in avisos_caro and "más caro" in avisos_caro
+              and "Harina de trigo" in avisos_barato and "más barato" in avisos_barato,
+              "El Dashboard avisa de los precios fuera de lo habitual (tomate más caro, harina más barata)")
+
+    # Compra indicando el TOTAL pagado: el programa calcula el precio por litro
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🍅 Alimentos").run()
+    nombre = "Aceite de oliva"
+    at.selectbox(key="stock_select").select(nombre).run()
+    at.radio(key=f"stock_tipo_{nombre}").set_value("Entrada (compra)").run()
+    at.number_input(key=f"stock_cantidad_{nombre}").set_value(10.0)
+    at.radio(key=f"stock_modo_precio_{nombre}").set_value("Total pagado").run()
+    at.number_input(key=f"stock_precio_total_{nombre}").set_value(48.0).run()
+    comprobar(any("4.8 € por litro" in t for t in textos(at.caption)),
+              "Con el total pagado se muestra el precio por litro antes de guardar (48 € / 10 l = 4,8 €)")
+    at.button(key=f"stock_boton_{nombre}").click().run()
+    ultima = inv.precios_de(nombre)[-1]
+    comprobar(sin_excepciones(at, "compra con total") and ultima.precio_unitario == 4.8 and ultima.cantidad == 10,
+              "La compra se guarda a 4,8 €/litro y entra en el historial de precios")
+
+    at.selectbox(key="precios_select").select(nombre).run()
+    comprobar(sin_excepciones(at, "historial de precios") and not at.error,
+              "La pestaña 'Historial de precios' se muestra (con la gráfica por proveedor)")
+
+
 @prueba("Añadir productos")
 def prueba_anadir(at: AppTest) -> None:
     ir_a(at, "Inventario")
@@ -991,6 +1022,7 @@ def main() -> int:
     at = nueva_app()
     prueba_arranque(at)
     prueba_paginas(at)
+    prueba_precios(at)
     prueba_anadir(at)
     prueba_stock(at)
     prueba_limpiar(at)

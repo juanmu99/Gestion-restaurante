@@ -794,8 +794,56 @@ class Limpieza:
         )
 
 
+class PrecioCompra:
+    """
+    UNA compra en el HISTORIAL DE PRECIOS: qué se compró, cuándo, a quién,
+    cuánto y a qué precio por unidad (kg, litro, unidad...). Se apunta en
+    cada compra y también con el stock inicial al dar de alta un producto.
+    No se borra aunque el lote se gaste: sirve para ver cómo cambian los
+    precios con la temporada y comparar proveedores.
+    """
+
+    def __init__(
+        self, producto: str, fecha: date, proveedor: str, cantidad: float, unidad: str, precio_unitario: float,
+        lote_id: Optional[int] = None, origen: str = "compra",
+    ):
+        self.producto = producto
+        self.fecha = fecha
+        self.proveedor = proveedor
+        self.cantidad = cantidad
+        self.unidad = unidad
+        self.precio_unitario = precio_unitario
+        self.lote_id = lote_id
+        self.origen = origen  # "compra" o "inicial" (stock con el que se dio de alta)
+
+    @property
+    def total(self) -> float:
+        return round(self.cantidad * self.precio_unitario, 2)
+
+    def to_dict(self) -> dict:
+        return {
+            "producto": self.producto, "fecha": self.fecha.isoformat(), "proveedor": self.proveedor,
+            "cantidad": self.cantidad, "unidad": self.unidad, "precio_unitario": self.precio_unitario,
+            "lote_id": self.lote_id, "origen": self.origen,
+        }
+
+    @classmethod
+    def from_dict(cls, datos: dict) -> "PrecioCompra":
+        return cls(
+            datos["producto"], date.fromisoformat(datos["fecha"]), datos["proveedor"], datos["cantidad"],
+            datos["unidad"], datos["precio_unitario"], datos.get("lote_id"), datos.get("origen", "compra"),
+        )
+
+
 class Inventario:
     """Gestiona una colección de productos: altas, bajas, consultas..."""
+
+    # Avisos de precio (Dashboard): una compra de los últimos DIAS_AVISO_PRECIO
+    # días cuyo precio se separa más de UMBRAL_AVISO_PRECIO de la media de las
+    # compras anteriores (de los últimos VENTANA_PRECIO_HABITUAL días).
+    DIAS_AVISO_PRECIO = 30
+    VENTANA_PRECIO_HABITUAL = 180
+    UMBRAL_AVISO_PRECIO = 0.20
 
     def __init__(self):
         # Diccionario para acceder rápido a un producto por su nombre.
@@ -808,13 +856,86 @@ class Inventario:
         self.limpiezas: list[Limpieza] = []
         # Recetas preparadas por adelantado (tandas con raciones y caducidad).
         self.elaboraciones = RegistroElaboraciones()
+        # Historial de precios: una fila por compra (ver PrecioCompra).
+        self.historial_precios: list[PrecioCompra] = []
 
     def agregar_producto(self, producto: Producto) -> None:
         if producto.nombre in self.productos:
             print(f"⚠️  Ya existe '{producto.nombre}'. Registra una entrada para añadir un lote nuevo.")
             return
         self.productos[producto.nombre] = producto
+        # El stock con el que se da de alta también tiene un precio: entra en el historial de precios.
+        for lote in producto.lotes:
+            if lote.procedencia in ("inicial", "compra"):
+                self._apuntar_precio(producto, lote, lote.cantidad, "inicial")
         print(f"✅ Producto añadido: {producto.nombre}")
+
+    # ---------- Historial de precios ----------
+
+    def _apuntar_precio(self, producto: Producto, lote: Lote, cantidad: float, origen: str = "compra") -> None:
+        self.historial_precios.append(PrecioCompra(
+            producto.nombre, lote.fecha_entrada, lote.proveedor, cantidad, producto.unidad, lote.precio_unitario,
+            lote.id, origen,
+        ))
+
+    def precios_de(self, nombre: str) -> list[PrecioCompra]:
+        """Todas las compras de un producto, de la más antigua a la más reciente."""
+        return sorted((p for p in self.historial_precios if p.producto == nombre), key=lambda p: p.fecha)
+
+    def resumen_precios_por_proveedor(self, nombre: str) -> list[dict]:
+        """
+        Por cada proveedor de un producto: nº de compras, precio medio
+        (ponderado por la cantidad comprada), mínimo, máximo y el de la
+        última compra. Ordenado del más barato (de media) al más caro.
+        """
+        grupos: dict[str, list[PrecioCompra]] = {}
+        for p in self.precios_de(nombre):
+            grupos.setdefault(p.proveedor, []).append(p)
+        filas = []
+        for proveedor, compras in grupos.items():
+            cantidad = sum(c.cantidad for c in compras)
+            media = sum(c.cantidad * c.precio_unitario for c in compras) / cantidad if cantidad else 0
+            filas.append({
+                "proveedor": proveedor, "compras": len(compras), "medio": round(media, 4),
+                "minimo": min(c.precio_unitario for c in compras), "maximo": max(c.precio_unitario for c in compras),
+                "ultimo": compras[-1].precio_unitario, "fecha_ultima": compras[-1].fecha,
+            })
+        return sorted(filas, key=lambda f: f["medio"])
+
+    def avisos_precios(self, hoy: Optional[date] = None) -> list[dict]:
+        """
+        Compras RECIENTES (últimos DIAS_AVISO_PRECIO días) cuyo precio se
+        separa más de un UMBRAL_AVISO_PRECIO de lo habitual: la media
+        (ponderada) de las compras ANTERIORES de ese producto en los últimos
+        VENTANA_PRECIO_HABITUAL días. Solo la última compra de cada producto.
+        Devuelve dicts con: producto, unidad, fecha, proveedor, precio,
+        habitual, variacion (+0,35 = un 35 % más caro) y compras_anteriores.
+        """
+        hoy = hoy or date.today()
+        avisos = []
+        for nombre in sorted({p.producto for p in self.historial_precios}):
+            compras = self.precios_de(nombre)
+            ultima = compras[-1]
+            if (hoy - ultima.fecha).days > self.DIAS_AVISO_PRECIO:
+                continue
+            anteriores = [
+                c for c in compras[:-1]
+                if 0 <= (ultima.fecha - c.fecha).days <= self.VENTANA_PRECIO_HABITUAL
+            ]
+            cantidad = sum(c.cantidad for c in anteriores)
+            if not anteriores or cantidad <= 0:
+                continue
+            habitual = sum(c.cantidad * c.precio_unitario for c in anteriores) / cantidad
+            if habitual <= 0:
+                continue
+            variacion = ultima.precio_unitario / habitual - 1
+            if abs(variacion) >= self.UMBRAL_AVISO_PRECIO - 1e-9:
+                avisos.append({
+                    "producto": nombre, "unidad": ultima.unidad, "fecha": ultima.fecha, "proveedor": ultima.proveedor,
+                    "precio": ultima.precio_unitario, "habitual": round(habitual, 4), "variacion": round(variacion, 4),
+                    "compras_anteriores": len(anteriores),
+                })
+        return sorted(avisos, key=lambda a: -abs(a["variacion"]))
 
     def eliminar_producto(self, nombre: str) -> None:
         if nombre in self.productos:
@@ -899,6 +1020,8 @@ class Inventario:
             producto.peso_unitario_referencia = lote.peso_unitario
         print(f"📦 Entrada: {cantidad} {producto.unidad} de {nombre} -> {lote.etiqueta()}")
         self._registrar(producto, lote, "entrada", cantidad, motivo)
+        if motivo == "compra":
+            self._apuntar_precio(producto, lote, cantidad)
         return lote
 
     # ---------- Salidas: siempre de un lote concreto ----------
@@ -1445,6 +1568,9 @@ class Inventario:
         for prep in self.elaboraciones.preparaciones_base:
             if prep.producto == antiguo:
                 prep.producto = nuevo
+        for precio in self.historial_precios:
+            if precio.producto == antiguo:
+                precio.producto = nuevo
 
     # ---------- Elaboraciones base (sofritos, fondos, salsas...) ----------
 
@@ -1603,6 +1729,7 @@ class Inventario:
             "historial": [m.to_dict() for m in self.historial],
             "limpiezas": [l.to_dict() for l in self.limpiezas],
             "elaboraciones": self.elaboraciones.to_dict(),
+            "historial_precios": [p.to_dict() for p in self.historial_precios],
         }
 
     @classmethod
@@ -1619,6 +1746,19 @@ class Inventario:
         for datos_limpieza in datos.get("limpiezas", []):
             inventario.limpiezas.append(Limpieza.from_dict(datos_limpieza))
         inventario.elaboraciones = RegistroElaboraciones.from_dict(datos.get("elaboraciones", {}))
+        if "historial_precios" in datos:
+            inventario.historial_precios = [PrecioCompra.from_dict(d) for d in datos["historial_precios"]]
+        else:
+            # Sesiones de antes del historial de precios: se reconstruye con
+            # las compras que ya estaban en el historial de movimientos.
+            for m in inventario.historial:
+                if m.es_compra():
+                    proveedor = m.lote.split(" · ")[-1] if m.lote else ""
+                    producto = inventario.productos.get(m.producto_nombre)
+                    proveedor = proveedor or (producto.proveedor if producto else "")
+                    inventario.historial_precios.append(PrecioCompra(
+                        m.producto_nombre, m.fecha, proveedor, m.cantidad, m.unidad, m.precio_unitario, m.lote_id,
+                    ))
         return inventario
 
 

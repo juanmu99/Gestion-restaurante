@@ -27,7 +27,7 @@ from typing import Optional
 # nombre que uno de nuestros módulos, se usaría la nuestra y no la otra.
 sys.path.insert(0, str(Path(__file__).parent / "modulos"))
 
-from inventario import Inventario, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
+from inventario import Inventario, PrecioCompra, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
 from recetario import Recetario, Receta, Menu
 from compras import GestorCompras, ItemCompra
@@ -300,9 +300,40 @@ def mostrar_lotes(producto, lotes: Optional[list] = None) -> None:
         print(f"   {lote.descripcion(producto.unidad)}{aviso}")
 
 
-def pedir_datos_entrada(producto) -> dict:
+def pedir_precio(unidad: str, cantidad: float, referencia: Optional[float] = None) -> Optional[float]:
+    """
+    Precio POR UNIDAD de una compra. Se puede escribir por unidad o el total
+    pagado (terminado en 't': "15.60t"), y entonces se calcula por unidad.
+    Vacío = el de referencia (si lo hay).
+    """
+    unidad_txt = "unidad" if unidad == "unidades" else unidad
+    pista = f" [{referencia} €]" if referencia is not None else ""
+    while True:
+        texto = pedir_texto(f"Precio por {unidad_txt}, o el TOTAL pagado terminado en 't' (ej: 15.60t){pista}: ")
+        if texto == "":
+            return None
+        es_total = texto.lower().endswith("t")
+        try:
+            valor = float(texto.lower().rstrip("t").replace(",", ".").strip())
+        except ValueError:
+            print("⚠️  Escribe un número (o un número terminado en 't' si es el total).")
+            continue
+        if valor < 0:
+            print("⚠️  El precio no puede ser negativo.")
+            continue
+        if not es_total:
+            return valor
+        if cantidad <= 0:
+            print("⚠️  Sin cantidad no se puede calcular el precio por unidad: escríbelo por unidad.")
+            continue
+        precio = round(valor / cantidad, 4)
+        print(f"   = {precio:g} € por {unidad_txt} ({valor:g} € / {cantidad:g} {unidad})")
+        return precio
+
+
+def pedir_datos_entrada(producto, cantidad: float = 0) -> dict:
     """Pide los datos de un lote NUEVO (compra): precio, proveedor, caducidad y, si hace falta, peso por unidad."""
-    precio = pedir_numero_opcional(f"Precio de este lote [{producto.precio_referencia} €]: ")
+    precio = pedir_precio(producto.unidad, cantidad, producto.precio_referencia)
     proveedor = pedir_texto_no_numerico_opcional(f"Proveedor de este lote [{producto.proveedor}]: ")
     fecha = None
     if not producto.es_consumible() and pedir_si_no("¿Este lote tiene fecha de caducidad?"):
@@ -330,6 +361,7 @@ def menu_inventario():
         print("8. Historial de limpiezas y rendimiento medio")
         print("9. Ver los lotes de un producto o desechar uno")
         print("10. Elaboraciones (recetas preparadas por adelantado)")
+        print("11. Historial de precios de un producto")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -347,7 +379,7 @@ def menu_inventario():
                 tiene_merma = pedir_si_no("¿Es un producto con merma (se limpia o despieza antes de usarse)?")
                 if tiene_merma and unidad == "unidades":
                     peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
-            precio = pedir_numero(f"Precio (€ por {'unidad' if unidad == 'unidades' else unidad}): ")
+            precio = pedir_precio(unidad, stock) or 0.0
             proveedor = pedir_texto_no_numerico("Proveedor habitual: ")
             stock_minimo = pedir_numero("Stock mínimo: ")
             fecha_caducidad = None
@@ -367,7 +399,7 @@ def menu_inventario():
                 print(f"❌ No existe el producto '{nombre}'.")
             elif pedir_si_no("¿Es una entrada de mercancía (compra)?"):
                 cantidad = pedir_numero("Cantidad: ")
-                lote = inventario.entrada_stock(nombre, cantidad, **pedir_datos_entrada(producto))
+                lote = inventario.entrada_stock(nombre, cantidad, **pedir_datos_entrada(producto, cantidad))
                 pendiente = gestor_compras.pendiente_de(nombre)
                 if lote is not None and pendiente is not None and pedir_si_no(
                     f"'{nombre}' está pendiente en la lista de la compra ({pendiente.cantidad} {pendiente.unidad}). "
@@ -492,6 +524,8 @@ def menu_inventario():
             accion_lotes()
         elif opcion == "10":
             accion_elaboraciones()
+        elif opcion == "11":
+            accion_historial_precios()
         elif opcion == "0":
             return
         else:
@@ -531,6 +565,22 @@ def accion_lotes() -> None:
     if pedir_si_no("¿Quieres desechar alguno entero (desperdicio)?"):
         lote = pedir_lote(producto, "Número de lote", sugerir=False, mostrar=False)
         inventario.desechar_lote(nombre, lote.id)
+
+
+def accion_historial_precios() -> None:
+    nombre = pedir_texto("Producto: ")
+    compras = inventario.precios_de(nombre)
+    if not compras:
+        print(f"No hay compras registradas de '{nombre}'.")
+        return
+    print("\nPor proveedor (del más barato al más caro, de media):")
+    for f in inventario.resumen_precios_por_proveedor(nombre):
+        print(f"   {f['proveedor']}: {f['compras']} compra(s), media {f['medio']:.2f} €, "
+              f"mín {f['minimo']:g} €, máx {f['maximo']:g} €, última {f['ultimo']:g} € ({f['fecha_ultima'].strftime('%d/%m/%Y')})")
+    print("Compras:")
+    for c in reversed(compras):
+        print(f"   {c.fecha.strftime('%d/%m/%Y')} {c.proveedor}: {c.cantidad:g} {c.unidad} a {c.precio_unitario:g} € "
+              f"(total {c.total:.2f} €)")
 
 
 def accion_elaboraciones() -> None:
@@ -1211,7 +1261,7 @@ def menu_compras():
                     # -- entra en el inventario en el mismo paso, como un lote
                     # nuevo. entrada_stock() ya lo registra en el historial (y
                     # por tanto en las métricas de gasto) automáticamente.
-                    lote = inventario.entrada_stock(nombre, cantidad_real, **pedir_datos_entrada(producto))
+                    lote = inventario.entrada_stock(nombre, cantidad_real, **pedir_datos_entrada(producto, cantidad_real))
                     if lote is not None:
                         gestor_compras.marcar_comprado(nombre, cantidad_comprada=cantidad_real)
                         print(f"📦 Stock repuesto: +{cantidad_real} {unidad} de {nombre} ({lote.etiqueta()})")
@@ -1299,6 +1349,19 @@ def accion_cargar_datos_ejemplo():
     )
     secreto.nuevo_lote(0.8, 15, "Ibéricos Sierra", hoy + timedelta(days=9), procedencia="inicial")
     inventario.agregar_producto(secreto)
+    # Historial de precios: compras de meses anteriores (solo para el ejemplo).
+    # El tomate está ahora más caro de lo habitual y la harina, más barata:
+    # aparecen en el Dashboard, en "Precios fuera de lo habitual".
+    if len(inventario.precios_de("Tomate")) <= 1:
+        for nombre, proveedor, dias, cantidad, unidad, precio in (
+            ("Tomate", "Huerta Local", 75, 5, "kg", 1.6), ("Tomate", "Frutas Paco", 40, 4, "kg", 1.75),
+            ("Harina de trigo", "Harinas del Sur", 90, 10, "kg", 1.6), ("Harina de trigo", "Harinas del Sur", 45, 10, "kg", 1.5),
+            ("Aceite de oliva", "Oleícola Andaluza", 120, 20, "litros", 4.3),
+            ("Aceite de oliva", "Mayorista Sur", 60, 10, "litros", 4.6),
+        ):
+            inventario.historial_precios.append(
+                PrecioCompra(nombre, hoy - timedelta(days=dias), proveedor, cantidad, unidad, precio)
+            )
     # Consumibles: se gastan pero no se comen (lista aparte, sin caducidad).
     inventario.agregar_producto(Producto(
         "Servilletas de papel", "Desechables", 500, "unidades", 0.02, "Hostelería Total", stock_minimo=200,

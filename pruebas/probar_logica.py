@@ -744,6 +744,52 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar("Limpieza y mantenimiento" in [c.value for fila in hoja.iter_rows() for c in fila],
               "En el Excel aparecen con su clase")
 
+print("\n--- Historial de precios ---")
+from inventario import PrecioCompra  # noqa: E402
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 5, "kg", 1.6, "Huerta"))
+silencio(inv.entrada_stock, "Tomate", 4, precio_unitario=1.8, proveedor="Frutas Paco")
+silencio(inv.entrada_stock, "Tomate", 3, precio_unitario=1.7, proveedor="Huerta")
+precios = inv.precios_de("Tomate")
+comprobar([(p.proveedor, p.precio_unitario, p.origen) for p in precios]
+          == [("Huerta", 1.6, "inicial"), ("Frutas Paco", 1.8, "compra"), ("Huerta", 1.7, "compra")],
+          "Cada compra (y el stock inicial) queda en el historial de precios, con su proveedor")
+resumen = inv.resumen_precios_por_proveedor("Tomate")
+comprobar(resumen[0]["proveedor"] == "Huerta" and abs(resumen[0]["medio"] - (5 * 1.6 + 3 * 1.7) / 8) < 1e-6
+          and resumen[0]["compras"] == 2 and resumen[1]["proveedor"] == "Frutas Paco",
+          "El resumen por proveedor da el precio medio ponderado, del más barato al más caro")
+silencio(inv.salida_stock, "Tomate", 5, "consumo", 1)
+comprobar(len(inv.precios_de("Tomate")) == 3, "Aunque el lote se gaste entero, su precio sigue en el historial")
+comprobar(inv.avisos_precios() == [], "Sin cambios grandes de precio no hay avisos")
+silencio(inv.entrada_stock, "Tomate", 2, precio_unitario=2.3, proveedor="Frutas Paco")
+avisos = inv.avisos_precios()
+comprobar(len(avisos) == 1 and avisos[0]["producto"] == "Tomate" and avisos[0]["variacion"] > 0.3,
+          "Una compra mucho más cara de lo habitual da un aviso")
+silencio(inv.entrada_stock, "Tomate", 2, precio_unitario=1.2, proveedor="Huerta")
+avisos = inv.avisos_precios()
+comprobar(len(avisos) == 1 and avisos[0]["variacion"] < -0.2 and avisos[0]["precio"] == 1.2,
+          "...y una mucho más barata, también (solo cuenta la última compra de cada producto)")
+comprobar(inv.avisos_precios(hoy=HOY + timedelta(days=40)) == [], "Las compras de hace más de 30 días ya no avisan")
+silencio(inv.agregar_producto, Producto("Carne limpia", "Carnes", 0, "kg", 0, "Propio"))
+limpio_antes = len(inv.historial_precios)
+silencio(inv.entrada_stock, "Carne limpia", 1, precio_unitario=9, motivo="limpieza")
+comprobar(len(inv.historial_precios) == limpio_antes, "Lo que sale de una limpieza o elaboración no es una compra: no entra")
+silencio(inv.editar_producto, "Tomate", "Tomate pera")
+copia = Inventario.from_dict(inv.to_dict())
+comprobar(len(copia.precios_de("Tomate pera")) == 5 and not copia.precios_de("Tomate"),
+          "Se renombra con el producto y se guarda y se carga")
+viejo = inv.to_dict()
+del viejo["historial_precios"]
+reconstruido = Inventario.from_dict(viejo)
+comprobar([(p.proveedor, p.precio_unitario) for p in reconstruido.precios_de("Tomate pera")]
+          == [("Frutas Paco", 1.8), ("Huerta", 1.7), ("Frutas Paco", 2.3), ("Huerta", 1.2)],
+          "En sesiones antiguas se reconstruye con las compras del historial de movimientos")
+with tempfile.TemporaryDirectory() as carpeta:
+    from openpyxl import load_workbook
+    hoja = load_workbook(silencio(exportar_todo, inv, RegistroServicios(), GestorCompras(), carpeta))["Historial de precios"]
+    comprobar(hoja.max_row == 6 and hoja["C2"].value in ("Huerta", "Frutas Paco"),
+              "El Excel tiene la hoja 'Historial de precios' (una fila por compra)")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

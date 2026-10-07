@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent / "modulos"))
 import streamlit as st
 import pandas as pd
 
-from inventario import Inventario, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
+from inventario import Inventario, PrecioCompra, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
 from recetario import Recetario, Receta, Menu
 from compras import GestorCompras
@@ -239,6 +239,19 @@ def cargar_datos_ejemplo() -> None:
     )
     secreto.nuevo_lote(0.8, 15, "Ibéricos Sierra", date.today() + timedelta(days=9), procedencia="inicial")
     inv.agregar_producto(secreto)
+    # Historial de precios: compras de meses anteriores (solo para el ejemplo).
+    # El tomate está ahora más caro de lo habitual y la harina, más barata:
+    # aparecen en el Dashboard, en "Precios fuera de lo habitual".
+    if len(inv.precios_de("Tomate")) <= 1:
+        for nombre, proveedor, dias, cantidad, unidad, precio in (
+            ("Tomate", "Huerta Local", 75, 5, "kg", 1.6), ("Tomate", "Frutas Paco", 40, 4, "kg", 1.75),
+            ("Harina de trigo", "Harinas del Sur", 90, 10, "kg", 1.6), ("Harina de trigo", "Harinas del Sur", 45, 10, "kg", 1.5),
+            ("Aceite de oliva", "Oleícola Andaluza", 120, 20, "litros", 4.3),
+            ("Aceite de oliva", "Mayorista Sur", 60, 10, "litros", 4.6),
+        ):
+            inv.historial_precios.append(
+                PrecioCompra(nombre, date.today() - timedelta(days=dias), proveedor, cantidad, unidad, precio)
+            )
     # Consumibles: se gastan pero no se comen (lista aparte, sin caducidad).
     inv.agregar_producto(Producto(
         "Servilletas de papel", "Desechables", 500, "unidades", 0.02, "Hostelería Total", stock_minimo=200,
@@ -388,20 +401,50 @@ def _elegir_lote(producto: Producto, etiqueta: str, clave: str, lotes: Optional[
     return opciones.get(elegido)
 
 
-def _campos_entrada(producto: Producto, k) -> dict:
+def _campo_precio(unidad: str, cantidad: Optional[float], k, referencia: float = 0.0, contenedor=None) -> Optional[float]:
+    """
+    El precio de una compra, como prefiera quien la apunta: por unidad (€/kg,
+    €/litro, €/unidad) o el TOTAL pagado (lo que pone el ticket). Con el
+    total, el programa calcula el precio por unidad y lo enseña antes de
+    guardar. Devuelve el precio POR UNIDAD (None si falta algún dato).
+    """
+    contenedor = contenedor or st
+    unidad_txt = {"unidades": "unidad", "litros": "litro"}.get(unidad, unidad)
+    modo = contenedor.radio(
+        "¿Cómo indicas el precio?", (f"Por {unidad_txt}", "Total pagado"), horizontal=True, key=k("modo_precio"),
+        help="Si compras una caja o un paquete, pon el total que has pagado y el programa calcula el precio por "
+             f"{unidad_txt}.",
+    )
+    pista = f"La última compra fue a {_num(referencia)} € por {unidad_txt}." if referencia else None
+    # El precio empieza vacío: es el de ESTA compra, y no debe darse por bueno sin mirarlo.
+    if modo.startswith("Por"):
+        return contenedor.number_input(
+            f"Precio de este lote (€ por {unidad_txt})", min_value=0.0, value=None, placeholder="Precio de esta compra",
+            step=0.1, key=k("precio"), help=pista,
+        )
+    total = contenedor.number_input(
+        "Total pagado por esta compra (€)", min_value=0.0, value=None, placeholder="Lo que pone el ticket",
+        step=0.5, key=k("precio_total"), help=pista,
+    )
+    if total is None:
+        return None
+    if not cantidad or cantidad <= 0:
+        contenedor.caption("Indica la cantidad comprada para calcular el precio por " + unidad_txt + ".")
+        return None
+    precio = round(total / cantidad, 4)
+    contenedor.caption(f"= **{_num(precio)} € por {unidad_txt}** ({_num(total)} € / {_num(cantidad)} {unidad})")
+    return precio
+
+
+def _campos_entrada(producto: Producto, k, cantidad: Optional[float] = None) -> dict:
     """
     Campos de un lote NUEVO (compra): precio, proveedor, caducidad y, si hace
     falta, peso por unidad. `k` construye las keys de los widgets.
+    `cantidad`: lo comprado, para calcular el precio por unidad si se indica el total.
     """
-    unidad_txt = "unidad" if producto.unidad == "unidades" else producto.unidad
     c1, c2 = st.columns(2)
-    # El precio y el peso empiezan vacíos: son de ESTA compra, y no deben
-    # darse por buenos sin mirarlos. Los de la última vez se muestran como pista.
-    precio = c1.number_input(
-        f"Precio de este lote (€ por {unidad_txt})", min_value=0.0, value=None, placeholder="Precio de esta compra",
-        step=0.1, key=k("precio"),
-        help=f"La última compra fue a {_num(producto.precio_referencia)} € por {unidad_txt}." if producto.precio_referencia else None,
-    )
+    with c1:
+        precio = _campo_precio(producto.unidad, cantidad, k, producto.precio_referencia)
     proveedor = c2.text_input("Proveedor de este lote", value=producto.proveedor, key=k("proveedor"))
     necesita_peso = producto.tiene_merma and producto.unidad == "unidades"
     peso = None
@@ -508,6 +551,26 @@ def pagina_dashboard() -> None:
         st.subheader("📉 Se agotarán pronto (según ritmo de consumo)")
         for nombre, dias in proximos_agotarse:
             st.write(f"**{nombre}**: ~{dias} día(s) al ritmo actual")
+
+    avisos_precio = inv.avisos_precios()
+    st.divider()
+    st.subheader("💶 Precios fuera de lo habitual")
+    if not avisos_precio:
+        st.caption(
+            f"Ninguna compra de los últimos {inv.DIAS_AVISO_PRECIO} días se separa más de un "
+            f"{inv.UMBRAL_AVISO_PRECIO:.0%} de su precio habitual."
+        )
+    for a in avisos_precio:
+        unidad_txt = "unidad" if a["unidad"] == "unidades" else a["unidad"]
+        texto = (
+            f"**{a['producto']}**: {_num(a['precio'])} €/{unidad_txt} el {a['fecha'].strftime('%d/%m/%Y')} "
+            f"({a['proveedor']}), un **{abs(a['variacion']):.0%} {'más caro' if a['variacion'] > 0 else 'más barato'}** "
+            f"de lo habitual ({_num(a['habitual'])} €/{unidad_txt}, media de {a['compras_anteriores']} compra(s) anterior(es))."
+        )
+        (st.warning if a["variacion"] > 0 else st.success)(("📈 " if a["variacion"] > 0 else "📉 ") + texto)
+    if avisos_precio:
+        st.caption("Lo habitual es la media de las compras anteriores de los últimos "
+                   f"{inv.VENTANA_PRECIO_HABITUAL} días. El detalle está en Inventario > 📈 Historial de precios.")
 
     st.divider()
     st.metric("💰 Valor total del inventario", f"{inv.valor_total_inventario()} €")
@@ -622,8 +685,8 @@ def pagina_inventario() -> None:
             st.warning(f"⏳ Próximos a caducar: {detalle}")
 
     st.divider()
-    tab_add, tab_edit, tab_stock, tab_lotes, tab_limpiar, tab_limpiezas = st.tabs([
-        "➕ Añadir producto", "✏️ Editar producto", "📦 Actualizar stock", "🏷️ Lotes",
+    tab_add, tab_edit, tab_stock, tab_lotes, tab_precios, tab_limpiar, tab_limpiezas = st.tabs([
+        "➕ Añadir producto", "✏️ Editar producto", "📦 Actualizar stock", "🏷️ Lotes", "📈 Historial de precios",
         "🔪 Limpiar producto", "📜 Limpiezas",
     ])
 
@@ -636,6 +699,8 @@ def pagina_inventario() -> None:
         _pestana_stock(inv, nombres_tipo)
     with tab_lotes:
         _pestana_lotes(inv, nombres_tipo)
+    with tab_precios:
+        _pestana_precios(inv, nombres_tipo)
     with tab_limpiar:
         if tipo != "alimento":
             st.info("Esta pestaña es para alimentos con merma (se limpian o despiezan).")
@@ -671,9 +736,8 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
             peso_unitario = _campo_peso("Peso en bruto de cada unidad", f"add_peso_{v}")
 
     c3, c4 = st.columns(2)
-    precio = c3.number_input(
-        f"Precio (€ por {'unidad' if unidad == 'unidades' else unidad})", min_value=0.0, step=0.1, key=f"add_precio_{v}"
-    )
+    with c3:
+        precio = _campo_precio(unidad, stock, lambda campo: f"add_{campo}_{v}") or 0.0
     stock_minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.1, key=f"add_stock_minimo_{v}")
     proveedor = st.text_input("Proveedor habitual", key=f"add_proveedor_{v}")
     fecha_caducidad = None
@@ -837,7 +901,7 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
 
     if es_entrada:
         st.caption("Cada compra se guarda como un lote nuevo, con su precio y proveedor.")
-        datos = _campos_entrada(producto, k)
+        datos = _campos_entrada(producto, k, cantidad)
         # Si este producto está pendiente en la lista de la compra, se ofrece
         # marcarlo también allí (si no, seguiría apareciendo como pendiente).
         pendiente = st.session_state.gestor_compras.pendiente_de(nombre_sel)
@@ -909,6 +973,40 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
             st.rerun()
         else:
             st.error("No se ha podido registrar la salida.")
+
+
+def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
+    con_compras = [n for n in nombres if inv.precios_de(n)]
+    if not con_compras:
+        st.info("Todavía no hay compras registradas de los productos de esta lista.")
+        return
+    nombre = st.selectbox("Producto", con_compras, key="precios_select")
+    producto = inv.buscar_producto(nombre)
+    unidad_txt = "unidad" if producto.unidad == "unidades" else producto.unidad
+    compras = inv.precios_de(nombre)
+
+    st.markdown("**Por proveedor** (del más barato al más caro, de media)")
+    st.dataframe([{
+        "Proveedor": f["proveedor"], "Compras": f["compras"],
+        f"Precio medio (€/{unidad_txt})": _num(round(f["medio"], 2)),
+        "Mínimo": _num(f["minimo"]), "Máximo": _num(f["maximo"]),
+        "Última compra": f"{_num(f['ultimo'])} € ({f['fecha_ultima'].strftime('%d/%m/%Y')})",
+    } for f in inv.resumen_precios_por_proveedor(nombre)], width="stretch", hide_index=True)
+
+    if len(compras) > 1:
+        st.markdown(f"**Evolución del precio** (€/{unidad_txt})")
+        serie: dict[str, dict[str, float]] = {}
+        for c in compras:
+            serie.setdefault(c.proveedor, {})[c.fecha.isoformat()] = c.precio_unitario
+        st.line_chart(serie)
+
+    st.markdown("**Todas las compras** (de la más reciente a la más antigua)")
+    st.dataframe([{
+        "Fecha": c.fecha.strftime("%d/%m/%Y"), "Proveedor": c.proveedor,
+        "Cantidad": f"{_num(c.cantidad)} {c.unidad}", f"Precio (€/{unidad_txt})": _num(c.precio_unitario),
+        "Total (€)": f"{c.total:.2f}", "Lote": c.lote_id or "—",
+        "Origen": "Stock inicial" if c.origen == "inicial" else "Compra",
+    } for c in reversed(compras)], width="stretch", hide_index=True)
 
 
 def _pestana_lotes(inv: Inventario, nombres: list[str]) -> None:
@@ -2599,7 +2697,7 @@ def pagina_compras() -> None:
                 return
             st.caption("La compra entra en el inventario como un lote nuevo.")
             k = lambda campo: f"compra_{campo}_{nombre_marcar}"
-            datos = _campos_entrada(producto_marcar, k)
+            datos = _campos_entrada(producto_marcar, k, cantidad_real)
             if st.button("Marcar como comprado y reponer inventario"):
                 if datos["precio"] is None:
                     st.error("Indica el precio de esta compra.")

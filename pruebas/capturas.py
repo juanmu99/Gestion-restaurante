@@ -21,7 +21,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 CARPETA = RAIZ / "resultados" / "capturas"
 
 PAGINAS = ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup"]
-PESTANAS_INVENTARIO = ["✏️ Editar producto", "📦 Actualizar stock", "🏷️ Lotes", "🔪 Limpiar producto", "📜 Limpiezas"]
+PESTANAS_INVENTARIO = ["✏️ Editar producto", "📦 Actualizar stock", "🏷️ Lotes", "📈 Historial de precios", "🔪 Limpiar producto", "📜 Limpiezas"]
 
 
 def esperar(page) -> None:

@@ -189,6 +189,21 @@ def _hoja_bases(wb: Workbook, inventario: Inventario) -> None:
     hoja.column_dimensions["G"].width = 50
 
 
+def _hoja_precios(wb: Workbook, inventario: Inventario) -> None:
+    """Historial de precios: cada compra con su proveedor y precio por unidad."""
+    hoja = wb.create_sheet("Historial de precios")
+    _escribir_cabecera(hoja, ["Fecha", "Producto", "Proveedor", "Cantidad", "Unidad", "Precio por unidad (€)",
+                              "Total (€)", "Lote", "Origen"])
+    fila = 2
+    for p in sorted(inventario.historial_precios, key=lambda p: (p.producto, p.fecha)):
+        valores = [p.fecha.strftime("%d/%m/%Y"), p.producto, p.proveedor, p.cantidad, p.unidad, p.precio_unitario,
+                   f"=D{fila}*F{fila}", p.lote_id or "—", "Stock inicial" if p.origen == "inicial" else "Compra"]
+        for columna, valor in enumerate(valores, start=1):
+            hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
+        fila += 1
+    _ajustar_ancho_columnas(hoja)
+
+
 def _hoja_limpiezas(wb: Workbook, inventario: Inventario) -> None:
     """Historial de limpiezas/despieces: de dónde sale cada kilo limpio y cuánta merma hubo."""
     hoja = wb.create_sheet("Limpiezas")
@@ -369,6 +384,7 @@ def exportar_todo(
 
     _hoja_inventario(wb, inventario)
     _hoja_lotes(wb, inventario)
+    _hoja_precios(wb, inventario)
     _hoja_elaboraciones(wb, inventario)
     _hoja_bases(wb, inventario)
     if recetario is not None:

@@ -57,6 +57,14 @@ class Dashboard:
         for t in self.inventario.elaboraciones.proximas_a_caducar(dias_caducidad):
             alertas.append(f"⏳ Elaboración que caduca en {t.dias_para_caducar()} día(s): {t.receta} ({t.raciones:g} raciones)")
 
+        for a in self.inventario.avisos_precios():
+            sentido = "más caro" if a["variacion"] > 0 else "más barato"
+            alertas.append(
+                f"{'📈' if a['variacion'] > 0 else '📉'} Precio: {a['producto']} a {a['precio']:g} € el "
+                f"{a['fecha'].strftime('%d/%m/%Y')} ({a['proveedor']}), un {abs(a['variacion']):.0%} {sentido} "
+                f"de lo habitual ({a['habitual']:.2f} €)"
+            )
+
         pendientes = self.gestor_compras.items_pendientes()
         if pendientes:
             costo = self.gestor_compras.costo_total_pendiente()
