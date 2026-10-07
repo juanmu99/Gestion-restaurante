@@ -161,7 +161,7 @@ def prueba_precios(at: AppTest) -> None:
     at.number_input(key=f"stock_cantidad_{nombre}").set_value(10.0)
     at.radio(key=f"stock_modo_precio_{nombre}").set_value("Total pagado").run()
     at.number_input(key=f"stock_precio_total_{nombre}").set_value(48.0).run()
-    comprobar(any("4.8 € por kg" in t for t in textos(at.caption)),
+    comprobar(any("4,8 € por kg" in t for t in textos(at.caption)),
               "Con el total pagado se muestra el precio por kg antes de guardar (48 € / 10 kg = 4,8 €)")
     at.button(key=f"stock_boton_{nombre}").click().run()
     ultima = inv.precios_de(nombre)[-1]
@@ -221,7 +221,7 @@ def prueba_precios(at: AppTest) -> None:
     comprobar(at.radio(key=f"add_con_iva_{v}").value.startswith("Con IVA"),
               "Por defecto el precio se escribe con IVA incluido (lo que se paga)")
     at.number_input(key=f"add_precio_{v}").set_value(0.26).run()
-    comprobar(any("0.25 € sin IVA" in t and "0.01 € de IVA" in t for t in textos(at.caption)),
+    comprobar(any("0,25 € sin IVA" in t and "0,01 € de IVA" in t for t in textos(at.caption)),
               "Al escribir el precio se ve el desglose (0,26 € = 0,25 € sin IVA + 0,01 € de IVA)")
     at.text_input(key=f"add_proveedor_{v}").input("Granja Sol")
     at.button(key=f"add_boton_{v}").click().run()
@@ -499,6 +499,9 @@ def prueba_lotes(at: AppTest) -> None:
 
     # Desecharlo con el botón del aviso: sale todo como desperdicio
     at.button(key="desechar_Secreto ibérico_1").click().run()
+    comprobar(inv.buscar_producto("Secreto ibérico").buscar_lote(1) is not None,
+              "Desechar un lote pide confirmación (el primer clic no tira nada)")
+    at.button(key="desechar_Secreto ibérico_1_si").click().run()
     ultimo = inv.historial[-1]
     comprobar(secreto.buscar_lote(1) is None and ultimo.motivo == "desperdicio" and ultimo.lote_id == 1
               and ultimo.cantidad == 1, "'Desechar lote' lo tira entero y lo apunta como desperdicio")
@@ -947,8 +950,11 @@ def prueba_gastos(at: AppTest) -> None:
     at.number_input(key=f"gasto_importe_{v}").set_value(5.0)
     at.button(key=f"gasto_boton_{v}").click().run()
     sb = at.selectbox(key="gasto_eliminar_select")
-    sb.select(opcion(sb, f"#{gastos.gastos[-1].id} -"))
-    at.button(key="gasto_eliminar_boton").click().run()
+    id_error = gastos.gastos[-1].id
+    sb.select(opcion(sb, f"#{id_error} -")).run()
+    at.button(key=f"gasto_eliminar_boton_{id_error}").click().run()
+    comprobar(any(g.concepto == "Error" for g in gastos.gastos), "Eliminar un gasto pide confirmación")
+    at.button(key=f"gasto_eliminar_boton_{id_error}_si").click().run()
     comprobar(len(gastos.gastos) == antes + 2 and all(g.concepto != "Error" for g in gastos.gastos), "Eliminar un gasto")
 
     # Rentabilidad: coste con el gasto del servicio y margen; cambiar el precio
@@ -1265,7 +1271,7 @@ def prueba_bloque4(at: AppTest) -> None:
     at.text_input(key=f"gasto_concepto_{v}").input("Alquiler de carpa")
     at.selectbox(key=f"gasto_categoria_{v}").select("Alquiler de material").run()
     at.number_input(key=f"gasto_importe_{v}").set_value(121.0).run()
-    comprobar(any("100.00 € sin IVA" in t and "21.00 € de IVA" in t for t in textos(at.caption)),
+    comprobar(any("100,00 € sin IVA" in t and "21,00 € de IVA" in t for t in textos(at.caption)),
               "Al apuntar un gasto se ve su desglose de IVA (121 € = 100 € + 21 €)")
     at.date_input(key=f"gasto_fecha_{v}").set_value(date.today() + timedelta(days=10))
     at.button(key=f"gasto_boton_{v}").click().run()

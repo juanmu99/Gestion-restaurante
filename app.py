@@ -22,6 +22,7 @@ Conceptos nuevos en este archivo:
 """
 
 import os
+import re
 import threading
 import sys
 from pathlib import Path
@@ -75,7 +76,7 @@ CARPETA_DATOS = carpeta_datos(_carpeta_base())
 RUTA_SESION = str(CARPETA_DATOS / "sesion.json")
 
 # set_page_config DEBE ser el primer comando de Streamlit del script.
-st.set_page_config(page_title="Gestión Restaurante", page_icon="🍽️", layout="wide")
+st.set_page_config(page_title="Gestión Catering", page_icon="🍽️", layout="wide")
 
 # --- Estilo visual ---
 # CSS inyectado a mano: Streamlit no permite tipografías personalizadas ni
@@ -193,7 +194,7 @@ def avisar(tipo: str, texto: str) -> None:
     sobrevive al rerun) y mostrándolo al principio de la página, el aviso
     aparece DESPUÉS de recargar. tipo: "success", "warning", "error" o "info".
     """
-    st.session_state.setdefault("avisos", []).append((tipo, texto))
+    st.session_state.setdefault("avisos", []).append((tipo, _es(texto)))
 
 
 def mostrar_avisos() -> None:
@@ -436,9 +437,57 @@ def _notas_de_menu(nombre: str, notas: str, recetas: list[tuple[str, str]]) -> N
 
 # ---------- Lotes: piezas de interfaz compartidas ----------
 
+def _es(texto: str) -> str:
+    """
+    Pone la coma decimal española en un texto ya escrito: '2.5 kg' -> '2,5 kg'.
+    Solo cambia un punto ENTRE dos cifras, así que no toca fechas (12/10/2026),
+    horas (21:00) ni nombres de archivo.
+    """
+    return re.sub(r"(?<=\d)\.(?=\d)", ",", texto)
+
+
 def _num(valor: float) -> str:
-    """Número sin decimales sobrantes para mostrar: 2.0 -> '2', 0.30000001 -> '0.3'."""
-    return f"{round(valor, 3):g}"
+    """Número sin decimales sobrantes para mostrar, con coma: 2.0 -> '2', 0.30000001 -> '0,3'."""
+    return _es(f"{round(valor, 3):g}")
+
+
+def _eur(valor: float) -> str:
+    """Un importe en euros con 2 decimales, al estilo español: 1234.5 -> '1.234,50'."""
+    return f"{valor:,.2f}".replace(",", " ").replace(".", ",").replace(" ", ".")
+
+
+def _dec(valor: float, decimales: int = 1) -> str:
+    """Un número con `decimales` decimales fijos y coma: 2.345 -> '2,3'."""
+    return f"{valor:.{decimales}f}".replace(".", ",")
+
+
+def _pct(valor: float, decimales: int = 1) -> str:
+    """Un tanto por uno como porcentaje con coma: 0.643 -> '64,3%'."""
+    return f"{valor:.{decimales}%}".replace(".", ",")
+
+
+def _boton_confirmado(etiqueta: str, clave: str, contenedor=None, pregunta: str = "¿Seguro?") -> bool:
+    """
+    Un botón que pide confirmación: el primer clic pregunta (✔️ Sí / ✖️ No) y
+    solo el "Sí" devuelve True. Para lo que no se puede deshacer con un clic
+    (desechar un lote, eliminar un gasto...).
+    """
+    contenedor = contenedor or st
+    pedido = f"_confirmar_{clave}"
+    if not st.session_state.get(pedido):
+        if contenedor.button(etiqueta, key=clave):
+            st.session_state[pedido] = True
+            st.rerun()
+        return False
+    contenedor.markdown(f"**{pregunta}**")
+    si, no = contenedor.columns(2)
+    if si.button("✔️ Sí", key=f"{clave}_si", type="primary"):
+        st.session_state[pedido] = False
+        return True
+    if no.button("✖️ No", key=f"{clave}_no"):
+        st.session_state[pedido] = False
+        st.rerun()
+    return False
 
 
 def _precio(valor: float) -> str:
@@ -450,8 +499,8 @@ def _precio(valor: float) -> str:
     if valor is None:
         return "—"
     if valor == 0 or abs(valor) >= 1:
-        return f"{round(valor, 2):g}"
-    return f"{valor:.3g}"
+        return _es(f"{_num(round(valor, 2))}")
+    return _es(f"{valor:.3g}")
 
 
 def _parece_numero(texto: str) -> bool:
@@ -465,7 +514,7 @@ def _parece_numero(texto: str) -> bool:
 def _texto_lote(producto: Producto, lote) -> str:
     """Texto de un lote en los desplegables. Empieza siempre por 'Lote N ·'."""
     aviso = " · ⚠️ CADUCADO" if lote.esta_caducado() else ""
-    return lote.descripcion(producto.unidad) + aviso
+    return _es(lote.descripcion(producto.unidad)) + aviso
 
 
 def _elegir_lote(producto: Producto, etiqueta: str, clave: str, lotes: Optional[list] = None,
@@ -535,7 +584,7 @@ def _campo_precio(unidad: str, cantidad: Optional[float], k, referencia: float =
     incluye_iva = False
     if iva > 0:
         incluye_iva = contenedor.radio(
-            "El precio que escribo", (f"Con IVA incluido ({iva:g} %)", "Sin IVA"), horizontal=True,
+            "El precio que escribo", (f"Con IVA incluido ({_num(iva)} %)", "Sin IVA"), horizontal=True,
             key=k("con_iva"), help="Como venga en el ticket (con IVA) o en la factura (sin IVA): el programa "
                                    "guarda las dos cosas por separado.",
         ) != "Sin IVA"
@@ -573,7 +622,7 @@ def _precio_con_iva(precio: Optional[float], incluye_iva: bool, iva: float, unid
     base = precio / (1 + iva / 100) if incluye_iva else precio
     contenedor.caption(
         f"Pagado (con IVA): **{_precio(base * (1 + iva / 100))} €** por {unidad_txt} = "
-        f"{_precio(base)} € sin IVA + {_precio(base * iva / 100)} € de IVA ({iva:g} %)."
+        f"{_precio(base)} € sin IVA + {_precio(base * iva / 100)} € de IVA ({_num(iva)} %)."
     )
     return precio_a_coste(precio, incluye_iva, iva)
 
@@ -649,7 +698,7 @@ def pagina_dashboard() -> None:
                 if not proximos_servicios:
                     st.caption("No hay servicios próximos.")
                 for s in proximos_servicios:
-                    st.write(str(s))
+                    st.write(_es(str(s)))
 
     with col2:
         with st.container(border=True):
@@ -658,11 +707,11 @@ def pagina_dashboard() -> None:
                 if not bajo_minimo:
                     st.caption("Ningún producto bajo mínimo.")
                 for p in bajo_minimo:
-                    st.write(f"{p.nombre}: {p.stock} {p.unidad} (mínimo {p.stock_minimo})")
+                    st.write(f"{p.nombre}: {_num(p.stock)} {p.unidad} (mínimo {_num(p.stock_minimo)})")
 
     with col3:
         with st.container(border=True):
-            st.metric("⏳ Caducados o por caducar",
+            st.metric("⏳ Caducidad", help="Lotes y tandas caducados o que caducan en los próximos 7 días.", value=
                       len(caducados) + len(proximos_caducar) + len(tandas_caducadas) + len(tandas_proximas))
             with st.expander("Ver detalles"):
                 if not (caducados or proximos_caducar or tandas_caducadas or tandas_proximas):
@@ -683,7 +732,7 @@ def pagina_dashboard() -> None:
                 if not pendientes_compra:
                     st.caption("No hay compras pendientes.")
                 for i in pendientes_compra:
-                    st.write(f"{i.ingrediente}: {i.cantidad} {i.unidad} (≈{i.costo_estimado()}€)")
+                    st.write(f"{i.ingrediente}: {_num(i.cantidad)} {i.unidad} (≈{_eur(i.costo_estimado())} €)")
 
     # La proyección de agotamiento no encaja como un simple "recuadro con
     # lista" (cada producto tiene un número de días distinto que contar),
@@ -716,7 +765,7 @@ def pagina_dashboard() -> None:
                    f"{inv.VENTANA_PRECIO_HABITUAL} días. El detalle está en Inventario > 📈 Historial de precios.")
 
     st.divider()
-    st.metric("💰 Valor total del inventario", f"{inv.valor_total_inventario()} €")
+    st.metric("💰 Valor total del inventario", f"{_eur(inv.valor_total_inventario())} €")
 
 
 # ---------- Página: Inventario ----------
@@ -746,7 +795,7 @@ def _filas_inventario(productos: list, tipo: str = "alimento") -> list[dict]:
             fila["Tipo"] = p.tipo_descripcion() or "—"
             # Siempre texto: si la columna mezcla números y "—", Streamlit
             # tiene que corregir los tipos por su cuenta (y avisa en la consola).
-            fila["Peso/unidad (kg)"] = f"{round(p.peso_unitario, 2):g}" if p.peso_unitario else "—"
+            fila["Peso/unidad (kg)"] = f"{_num(round(p.peso_unitario, 2))}" if p.peso_unitario else "—"
         filas.append(fila)
     return filas
 
@@ -810,7 +859,7 @@ def pagina_inventario() -> None:
     for p, l in inv.lotes_caducados():
         c1, c2 = st.columns([4, 1])
         c1.error(f"🗑️ Caducado: **{p.nombre}** — {_num(l.cantidad)} {p.unidad} ({l.etiqueta()})")
-        if c2.button("Desechar lote", key=f"desechar_{p.nombre}_{l.id}"):
+        if _boton_confirmado("Desechar lote", f"desechar_{p.nombre}_{l.id}", c2, "¿Desecharlo?"):
             if inv.desechar_lote(p.nombre, l.id):
                 avisar("success", f"Lote {l.id} de '{p.nombre}' desechado ({_num(l.cantidad)} {p.unidad} a desperdicio).")
                 st.rerun()
@@ -920,7 +969,7 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
                 st.session_state.add_version += 1
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
 
 def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
@@ -1088,7 +1137,7 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             else:
                 st.error(f"No se ha guardado: ya existe otro producto llamado '{nuevo_nombre}'.")
         except ValueError as e:
-            st.error(str(e))
+            st.error(_es(str(e)))
 
     st.divider()
     _borrar_producto(inv, producto)
@@ -1115,7 +1164,7 @@ def _borrar_producto(inv: Inventario, producto: Producto) -> None:
                 vaciar_campos("editar_select")
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
 
 def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
@@ -1213,7 +1262,7 @@ def _texto_usos(usos: dict, unidad: str) -> list[str]:
     if usos["compra"] is not None:
         lineas.append("su **compra** (cuenta como dinero gastado en Métricas)")
     for servicio_id, valor in usos["servicios"].items():
-        lineas.append(f"lo que salió para el **servicio #{servicio_id}** ({valor:.2f} € con el precio actual)")
+        lineas.append(f"lo que salió para el **servicio #{servicio_id}** ({_eur(valor)} € con el precio actual)")
     otras = [m for m in usos["salidas"] if m.servicio_id is None and m not in usos["derivados"]]
     for m in otras:
         lineas.append(f"una salida de {_num(m.cantidad)} {unidad} el {m.fecha.strftime('%d/%m/%Y')} ({m.motivo})")
@@ -1282,7 +1331,7 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
         "Fecha": c.fecha.strftime("%d/%m/%Y"), "Proveedor": c.proveedor,
         "Cantidad": f"{_num(c.cantidad)} {c.unidad}", f"Precio sin IVA (€/{unidad_txt})": _precio(c.precio_base),
         "IVA": nombre_iva(c.iva).split(" (")[0], f"Precio con IVA (€/{unidad_txt})": _precio(c.precio_con_iva),
-        "Total pagado (€)": f"{c.total:.2f}", "Lote": str(c.lote_id or "—"),
+        "Total pagado (€)": f"{_eur(c.total)}", "Lote": str(c.lote_id or "—"),
         "Origen": "Stock inicial" if c.origen == "inicial" else "Compra",
     } for c in reversed(compras)], width="stretch", hide_index=True)
 
@@ -1345,7 +1394,7 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
                                   f"{nombre_iva(compra.iva).split(' (')[0]}).")
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
         st.divider()
         posible, motivo = inv.se_puede_anular(compra)
@@ -1384,7 +1433,8 @@ def _pestana_lotes(inv: Inventario, nombres: list[str]) -> None:
     st.subheader("Desechar un lote")
     lote_id = _elegir_lote(producto, "Lote", f"lotes_lote_{nombre_sel}")
     lote = producto.buscar_lote(lote_id)
-    if st.button("🗑️ Desechar este lote entero (desperdicio)", key=f"lotes_desechar_{nombre_sel}_{lote.id}"):
+    if _boton_confirmado("🗑️ Desechar este lote entero (desperdicio)", f"lotes_desechar_{nombre_sel}_{lote.id}",
+                         pregunta=f"¿Desechar el lote {lote.id} entero ({_num(lote.cantidad)} {producto.unidad})?"):
         cantidad_tirada = lote.cantidad
         if inv.desechar_lote(nombre_sel, lote.id):
             avisar("success", f"Lote {lote.id} de '{nombre_sel}' desechado ({_num(cantidad_tirada)} {producto.unidad} a desperdicio).")
@@ -1423,11 +1473,11 @@ def _pestana_limpiar(inv: Inventario) -> None:
         step=1.0 if por_unidades else 0.1, key=k("cantidad"),
     ) or 0.0
     peso_bruto_kg = origen.peso_kg(cantidad, lote) if cantidad > 0 else 0.0
-    c2.metric("Peso en bruto", f"{peso_bruto_kg:.3f} kg")
+    c2.metric("Peso en bruto", f"{_num(peso_bruto_kg)} kg")
     rendimiento = inv.rendimiento_medio(origen_nombre)
     if rendimiento:
         st.caption(
-            f"Rendimiento medio hasta ahora: {rendimiento:.0%} -> se esperan ~{peso_bruto_kg * rendimiento:.2f} kg limpios."
+            f"Rendimiento medio hasta ahora: {rendimiento:.0%} -> se esperan ~{_eur(peso_bruto_kg * rendimiento)} kg limpios."
         )
 
     unidad_peso = st.radio("Pesos del resultado en", UNIDADES_PESO, horizontal=True, key=k("unidad"))
@@ -1493,10 +1543,10 @@ def _pestana_limpiar(inv: Inventario) -> None:
         derivados_kg = convertir(sum(derivados.values()), unidad_peso, "kg")
         merma_kg = peso_bruto_kg - limpio_kg - derivados_kg
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Limpio", f"{limpio_kg:.3f} kg")
-        m2.metric("Derivados", f"{derivados_kg:.3f} kg")
-        m3.metric("Merma", f"{max(merma_kg, 0):.3f} kg")
-        m4.metric("Rendimiento", f"{limpio_kg / peso_bruto_kg:.1%}")
+        m1.metric("Limpio", f"{_num(limpio_kg)} kg")
+        m2.metric("Derivados", f"{_num(derivados_kg)} kg")
+        m3.metric("Merma", f"{_num(max(merma_kg, 0))} kg")
+        m4.metric("Rendimiento", f"{_pct(limpio_kg / peso_bruto_kg)}")
         if merma_kg < -1e-6:
             st.error("El limpio más los derivados pesan más que el bruto. Revisa los pesos.")
 
@@ -1510,13 +1560,13 @@ def _pestana_limpiar(inv: Inventario) -> None:
             )
             avisar(
                 "success",
-                f"Limpieza registrada: {limpieza.peso_limpio_kg} kg de '{limpieza.producto_limpio}' "
-                f"(rendimiento {limpieza.rendimiento:.1%}, merma {limpieza.merma_kg} kg).",
+                f"Limpieza registrada: {_num(limpieza.peso_limpio_kg)} kg de '{limpieza.producto_limpio}' "
+                f"(rendimiento {_pct(limpieza.rendimiento)}, merma {limpieza.merma_kg} kg).",
             )
             st.session_state.limpiar_version += 1
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            st.error(_es(str(e)))
 
 
 def _pestana_limpiezas(inv: Inventario) -> None:
@@ -1533,9 +1583,9 @@ def _pestana_limpiezas(inv: Inventario) -> None:
             "Producto": nombre,
             "Limpiezas": len(limpiezas),
             "Bruto total (kg)": round(bruto, 3),
-            "Rendimiento medio": f"{inv.rendimiento_medio(nombre):.1%}",
-            "Derivados aprovechados": f"{sum(sum(l.derivados_kg.values()) for l in limpiezas) / bruto:.1%}",
-            "Merma media": f"{sum(l.merma_kg for l in limpiezas) / bruto:.1%}",
+            "Rendimiento medio": f"{_pct(inv.rendimiento_medio(nombre))}",
+            "Derivados aprovechados": f"{_pct(sum(sum(l.derivados_kg.values()) for l in limpiezas) / bruto)}",
+            "Merma media": f"{_pct(sum(l.merma_kg for l in limpiezas) / bruto)}",
         })
     st.dataframe(filas_resumen, width="stretch", hide_index=True)
 
@@ -1544,13 +1594,13 @@ def _pestana_limpiezas(inv: Inventario) -> None:
         "Fecha": l.fecha.strftime("%d/%m/%Y"),
         "Producto": l.producto_origen,
         "Lote": str(l.lote_origen or "—"),
-        "Cantidad": f"{l.cantidad_origen:g} {l.unidad_origen}",
+        "Cantidad": f"{_num(l.cantidad_origen)} {l.unidad_origen}",
         "Bruto (kg)": round(l.peso_bruto_kg, 3),
         "Producto limpio": l.producto_limpio,
         "Limpio (kg)": round(l.peso_limpio_kg, 3),
-        "Derivados": ", ".join(f"{n} ({round(kg, 3)} kg)" for n, kg in l.derivados_kg.items()) or "—",
+        "Derivados": ", ".join(f"{n} ({_num(kg)} kg)" for n, kg in l.derivados_kg.items()) or "—",
         "Merma (kg)": l.merma_kg,
-        "Rendimiento": f"{l.rendimiento:.1%}",
+        "Rendimiento": f"{_pct(l.rendimiento)}",
         "Coste (€)": l.coste,
     } for l in reversed(inv.limpiezas)], width="stretch", hide_index=True)
 
@@ -1571,7 +1621,7 @@ def _seccion_elaboraciones() -> None:
                 "Receta": t.receta, "Tanda": t.id, "Raciones": f"{_num(t.raciones)} de {_num(t.raciones_iniciales)}",
                 "Preparada": t.fecha_preparacion.strftime("%d/%m/%Y"),
                 "Caducidad": t.fecha_caducidad.strftime("%d/%m/%Y") if t.fecha_caducidad else "—", "Estado": estado,
-                "Coste/ración (€)": f"{t.coste_por_racion:.2f}", "Valor (€)": f"{t.valor():.2f}",
+                "Coste/ración (€)": f"{_eur(t.coste_por_racion)}", "Valor (€)": f"{_eur(t.valor())}",
             })
         st.dataframe(filas, width="stretch", hide_index=True)
         st.caption("Recetas preparadas por adelantado. Al completar un servicio se pueden usar en vez de los ingredientes.")
@@ -1581,9 +1631,9 @@ def _seccion_elaboraciones() -> None:
     for t in reg.caducadas():
         c1, c2 = st.columns([4, 1])
         c1.error(f"🗑️ Caducada: **{t.receta}** — {_num(t.raciones)} raciones ({t.etiqueta()})")
-        if c2.button("Desechar", key=f"desechar_tanda_{t.id}"):
+        if _boton_confirmado("Desechar", f"desechar_tanda_{t.id}", c2, "¿Desecharla?"):
             uso = reg.desechar(t.id)
-            avisar("success", f"Tanda {t.id} de '{t.receta}' desechada ({_num(uso.raciones)} raciones, {uso.coste:.2f} € a desperdicio).")
+            avisar("success", f"Tanda {t.id} de '{t.receta}' desechada ({_num(uso.raciones)} raciones, {_eur(uso.coste)} € a desperdicio).")
             st.rerun()
     proximas = reg.proximas_a_caducar()
     if proximas:
@@ -1622,7 +1672,7 @@ def _seccion_elaboraciones() -> None:
                 "Fecha": p.fecha.strftime("%d/%m/%Y"), "Elaboración": p.producto,
                 "Prevista": f"{_num(p.prevista)} {p.unidad}", "Obtenida": f"{_num(p.obtenida)} {p.unidad}",
                 "Diferencia": f"{p.diferencia:+g} {p.unidad}",
-                "Coste (€)": f"{p.coste:.2f}", "Coste/unidad (€)": _precio(p.coste_por_unidad),
+                "Coste (€)": f"{_eur(p.coste)}", "Coste/unidad (€)": _precio(p.coste_por_unidad),
                 "Lote": str(p.lote_id or "—"),
             } for p in preparaciones], width="stretch", hide_index=True)
             st.caption("Prevista = lo que debía salir según la fórmula. Obtenida = lo que salió de verdad.")
@@ -1631,7 +1681,7 @@ def _seccion_elaboraciones() -> None:
         if not reg.tandas:
             st.info("No hay tandas.")
             return
-        opciones = {f"{t.receta} · {t.descripcion()}": t for t in sorted(reg.tandas, key=lambda t: (t.receta, t.id))}
+        opciones = {f"{t.receta} · {_es(t.descripcion())}": t for t in sorted(reg.tandas, key=lambda t: (t.receta, t.id))}
         tanda = opciones[st.selectbox("Tanda", list(opciones), key="elab_corregir_select")]
         huella = _huella(tanda.raciones, tanda.fecha_caducidad)  # ver _pestana_editar
         k = lambda campo: f"elab_corr_{campo}_{tanda.id}_{huella}"
@@ -1644,9 +1694,10 @@ def _seccion_elaboraciones() -> None:
             reg.corregir(tanda.id, raciones=raciones, fecha_caducidad=caducidad)
             avisar("success", f"Tanda {tanda.id} de '{tanda.receta}' corregida.")
             st.rerun()
-        if b2.button("🗑️ Desechar la tanda entera (desperdicio)", key=k("desechar")):
+        if _boton_confirmado("🗑️ Desechar la tanda entera (desperdicio)", k("desechar"), b2,
+                             f"¿Desechar las {_num(tanda.raciones)} raciones?"):
             uso = reg.desechar(tanda.id)
-            avisar("success", f"Tanda {tanda.id} de '{tanda.receta}' desechada ({_num(uso.raciones)} raciones, {uso.coste:.2f} €).")
+            avisar("success", f"Tanda {tanda.id} de '{tanda.receta}' desechada ({_num(uso.raciones)} raciones, {_eur(uso.coste)} €).")
             st.rerun()
 
 
@@ -1689,11 +1740,11 @@ def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
         try:
             tanda = rec.preparar_elaboracion(nombre, raciones, inv, elecciones, caducidad, fecha_prep)
             avisar("success", f"Preparadas {_num(raciones)} raciones de '{nombre}' ({tanda.etiqueta()}, "
-                              f"{tanda.coste_por_racion:.2f} €/ración).")
+                              f"{_eur(tanda.coste_por_racion)} €/ración).")
             st.session_state.elab_version = v + 1
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            st.error(_es(str(e)))
 
 
 def _preparar_base(inv: Inventario, rec: Recetario) -> None:
@@ -1746,12 +1797,12 @@ def _preparar_base(inv: Inventario, rec: Recetario) -> None:
         try:
             prep = rec.preparar_base(nombre, prevista, obtenida, inv, elecciones, caducidad, fecha_prep)
             avisar("success", f"Preparado '{nombre}': previsto {_num(prevista)}, obtenido {_num(obtenida)} "
-                              f"{producto.unidad} (diferencia {prep.diferencia:+g}). Coste {prep.coste:.2f} € "
+                              f"{producto.unidad} (diferencia {prep.diferencia:+g}). Coste {_eur(prep.coste)} € "
                               f"({_precio(prep.coste_por_unidad)} €/{producto.unidad}).")
             st.session_state.base_version = v + 1
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            st.error(_es(str(e)))
 
 
 # ---------- Inventario: material reutilizable ----------
@@ -1806,7 +1857,7 @@ def _seccion_material() -> None:
                 else:
                     st.error(f"Ya existe un material llamado '{nombre.strip()}'.")
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
     if not reg.materiales:
         return
@@ -1838,7 +1889,7 @@ def _seccion_material() -> None:
                 else:
                     st.error(f"Ya existe otro material llamado '{nuevo_nombre.strip()}'.")
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
         with st.expander(f"🗑️ Borrar el material '{nombre_sel}'"):
             if reg.en_uso(nombre_sel):
@@ -1860,7 +1911,7 @@ def _seccion_material() -> None:
                         vaciar_campos("mat_editar_select")
                         st.rerun()
                     except ValueError as e:
-                        st.error(str(e))
+                        st.error(_es(str(e)))
 
     with tab_reponer:
         nombre_sel = st.selectbox("Material", nombres, key="mat_reponer_select")
@@ -1885,11 +1936,11 @@ def _seccion_material() -> None:
                 else:
                     tipo = "rotura" if accion == "Se ha roto" else "pérdida"
                     incidencia = reg.dar_de_baja(nombre_sel, int(unidades), tipo)
-                    avisar("success", f"{tipo.capitalize()} registrada: {incidencia.cantidad} x {nombre_sel} ({incidencia.coste:.2f} €).")
+                    avisar("success", f"{tipo.capitalize()} registrada: {incidencia.cantidad} x {nombre_sel} ({_eur(incidencia.coste)} €).")
                     vaciar_campos(k("unidades"))
                     st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
     with tab_incidencias:
         if not reg.incidencias:
@@ -1897,9 +1948,9 @@ def _seccion_material() -> None:
         else:
             st.dataframe([{
                 "Fecha": i.fecha.strftime("%d/%m/%Y"), "Tipo": i.tipo, "Material": i.material, "Unidades": i.cantidad,
-                "Coste (€)": f"{i.coste:.2f}", "Dónde": f"Servicio #{i.servicio_id}" if i.servicio_id else "Almacén",
+                "Coste (€)": f"{_eur(i.coste)}", "Dónde": f"Servicio #{i.servicio_id}" if i.servicio_id else "Almacén",
             } for i in reversed(reg.incidencias)], width="stretch", hide_index=True)
-            st.metric("Coste total de roturas y pérdidas", f"{sum(i.coste for i in reg.incidencias):.2f} €")
+            st.metric("Coste total de roturas y pérdidas", f"{_eur(sum(i.coste for i in reg.incidencias))} €")
 
 
 # ---------- Servicios: salida y vuelta del material ----------
@@ -1939,11 +1990,11 @@ def _pestana_material_servicio(serv: RegistroServicios, rec: Recetario) -> None:
             try:
                 incidencias = reg.registrar_vuelta(servicio.id, vuelto, rotos)
                 coste = sum(i.coste for i in incidencias)
-                detalle = f" Roturas y pérdidas: {coste:.2f} €." if incidencias else " Ha vuelto todo."
+                detalle = f" Roturas y pérdidas: {_eur(coste)} €." if incidencias else " Ha vuelto todo."
                 avisar("success", f"Material del servicio #{servicio.id} de vuelta.{detalle}")
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
         st.divider()
     if servicio.estado == "cancelado":
         st.caption("Este servicio está cancelado: solo se puede registrar la vuelta de su material.")
@@ -1970,7 +2021,7 @@ def _pestana_material_servicio(serv: RegistroServicios, rec: Recetario) -> None:
             vaciar_campos(f"carga_{servicio.id}_")
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            st.error(_es(str(e)))
 
     anteriores = [s for s in reg.salidas_de(servicio.id) if s.ha_vuelto]
     if anteriores:
@@ -2057,7 +2108,7 @@ def _elegir_tandas_servicio(servicio: Servicio, inv: Inventario, rec: Recetario)
 
         def texto(t) -> str:
             aviso = " · ⚠️ caducada ese día" if t.esta_caducada(servicio.fecha) else ""
-            return t.descripcion() + aviso
+            return _es(t.descripcion()) + aviso
 
         opciones = {texto(t): t.id for t in tandas}
         validas = [texto(t) for t in tandas if not t.esta_caducada(servicio.fecha)]
@@ -2108,11 +2159,11 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
             sobra = extra["comprada"] - extra["usada"]
             marca = " (nuevo en el inventario)" if extra.get("producto_nuevo") else ""
             c1.write(
-                f"• 📦 {extra['producto']}{marca}: comprados {_num(extra['comprada'])} {unidad} por {extra['importe']:.2f} €, "
+                f"• 📦 {extra['producto']}{marca}: comprados {_num(extra['comprada'])} {unidad} por {_eur(extra['importe'])} €, "
                 f"usados {_num(extra['usada'])}" + (f", sobran {_num(sobra)} (al inventario)" if sobra > 0 else "")
             )
         else:
-            c1.write(f"• {extra['concepto']} ({extra['categoria']}): {extra['importe']:.2f} €")
+            c1.write(f"• {extra['concepto']} ({extra['categoria']}): {_eur(extra['importe'])} €")
         if c2.button("Quitar", key=f"{clave}_quitar_{i}"):
             extras.pop(i)
             st.rerun()
@@ -2270,7 +2321,7 @@ def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> Non
                                        iva=extra.get("iva")))
     if extras:
         avisar("info", f"💶 {len(extras)} coste(s) adicional(es) registrado(s) para el servicio "
-                       f"({sum(e['importe'] for e in extras):.2f} €).")
+                       f"({_eur(sum(e['importe'] for e in extras))} €).")
     st.session_state[f"extras_{servicio.id}"] = []
 
 
@@ -2297,7 +2348,7 @@ def _aviso_caducados(filas: list[dict]) -> None:
 
 
 def _texto_euros(valor: Optional[float]) -> str:
-    return "—" if valor is None else f"{valor:.2f} €"
+    return "—" if valor is None else f"{_eur(valor)} €"
 
 
 def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetario) -> None:
@@ -2335,24 +2386,24 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
     m3.metric("Margen", _texto_euros(r["margen"]),
               delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
     desglose = [
-        {"Concepto": "🍅 Comida", "Importe (€)": f"{r['comida']:.2f}"},
-        {"Concepto": "🧻 Consumibles", "Importe (€)": f"{r['consumibles']:.2f}"},
-        {"Concepto": "🧽 Limpieza y mantenimiento", "Importe (€)": f"{r['mantenimiento']:.2f}"},
-    ] + [{"Concepto": f"💶 {cat}", "Importe (€)": f"{imp:.2f}"} for cat, imp in r["gastos_por_categoria"].items()]
+        {"Concepto": "🍅 Comida", "Importe (€)": f"{_eur(r['comida'])}"},
+        {"Concepto": "🧻 Consumibles", "Importe (€)": f"{_eur(r['consumibles'])}"},
+        {"Concepto": "🧽 Limpieza y mantenimiento", "Importe (€)": f"{_eur(r['mantenimiento'])}"},
+    ] + [{"Concepto": f"💶 {cat}", "Importe (€)": f"{_eur(imp)}"} for cat, imp in r["gastos_por_categoria"].items()]
     if r["material"]:
-        desglose.append({"Concepto": "🍽️ Material roto o perdido", "Importe (€)": f"{r['material']:.2f}"})
+        desglose.append({"Concepto": "🍽️ Material roto o perdido", "Importe (€)": f"{_eur(r['material'])}"})
     st.dataframe(desglose, width="stretch", hide_index=True)
     if r["sin_iva"]:
         st.caption(
             f"Comida, consumibles, limpieza y gastos van **sin IVA**, porque el negocio lo recupera (Ajustes). IVA "
-            f"de lo comprado y los gastos de este servicio: **{r['iva_recuperable']:.2f} €** (lo pagado fue "
-            f"{r['comida'] + r['consumibles'] + r['mantenimiento'] + r['gastos'] + r['iva_recuperable']:.2f} €)."
+            f"de lo comprado y los gastos de este servicio: **{_eur(r['iva_recuperable'])} €** (lo pagado fue "
+            f"{_eur(r['comida'] + r['consumibles'] + r['mantenimiento'] + r['gastos'] + r['iva_recuperable'])} €)."
         )
     else:
         st.caption("Comida, consumibles y limpieza van **con IVA** (lo pagado), porque el negocio no lo recupera (Ajustes).")
     gastos_servicio = gastos.gastos_de_servicio(servicio.id)
     if gastos_servicio:
-        st.caption("Gastos de este servicio: " + "; ".join(f"{g.concepto} ({g.importe:.2f} €)" for g in gastos_servicio))
+        st.caption("Gastos de este servicio: " + "; ".join(f"{g.concepto} ({_eur(g.importe)} €)" for g in gastos_servicio))
     else:
         st.caption("Este servicio no tiene gastos apuntados. Se añaden en la página 'Gastos'.")
 
@@ -2421,7 +2472,7 @@ def _pestana_editar_servicio(serv: RegistroServicios, rec: Recetario) -> None:
             avisar("success", f"Servicio #{s.id} actualizado.")
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            st.error(_es(str(e)))
 
 
 def _arreglar_menus_inexistentes(serv: RegistroServicios, rec: Recetario) -> None:
@@ -2518,7 +2569,7 @@ def pagina_servicios() -> None:
                                           f"{int(comensales)} comensales, {menu_nombre}.")
                         st.rerun()  # para que la tabla de arriba y las demás pestañas ya lo vean
                     except ValueError as e:
-                        st.error(str(e))
+                        st.error(_es(str(e)))
 
     with tab_cancel:
         # Solo los que aún no se han hecho: uno completado ya gastó su stock y sus costes son reales.
@@ -2579,7 +2630,7 @@ def pagina_servicios() -> None:
                     "En stock": f"{_num(f['en_stock'])} {f['unidad']}" if f["existe"] else "no existe",
                     "Se descontará": f"{_num(f['a_descontar'])} {f['unidad']}",
                     "De qué lotes": _texto_reparto(f),
-                    "Faltaba": f"{f['faltante']} {f['unidad']}" if f["faltante"] > 0 else "—",
+                    "Faltaba": f"{_num(f['faltante'])} {f['unidad']}" if f["faltante"] > 0 else "—",
                 } for f in filas], width="stretch", hide_index=True)
                 _aviso_caducados(filas)
 
@@ -2611,7 +2662,7 @@ def pagina_servicios() -> None:
                 try:
                     rec.completar_servicio(servicio, inv, elecciones, plan)
                 except ValueError as e:
-                    st.error(str(e))
+                    st.error(_es(str(e)))
                 else:
                     servicio.valoracion = valoracion.strip()
                     _registrar_costes_adicionales(servicio, extras)
@@ -2664,9 +2715,9 @@ def pagina_historial() -> None:
     m3.metric("Facturado", _texto_euros(r["facturado"] if r["margen"] is not None else None))
     m4.metric("Margen", _texto_euros(r["margen"]),
               delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
-    detalles = [f"Coste total {r['coste']:.2f} €"]
+    detalles = [f"Coste total {_eur(r['coste'])} €"]
     if r["coste_por_comensal"] is not None:
-        detalles.append(f"coste medio por comensal {r['coste_por_comensal']:.2f} €")
+        detalles.append(f"coste medio por comensal {_eur(r['coste_por_comensal'])} €")
     if r["menu_mas_repetido"]:
         detalles.append(f"menú más repetido: {r['menu_mas_repetido']}")
     if r["menu_mas_rentable"]:
@@ -2720,7 +2771,7 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
     m2.metric("Coste", _texto_euros(r["coste_total"]))
     m3.metric("Margen", _texto_euros(r["margen"]),
               delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
-    m4.metric("Coste por comensal", f"{f['coste_por_comensal']:.2f} €")
+    m4.metric("Coste por comensal", f"{_eur(f['coste_por_comensal'])} €")
 
     tab_gasto, tab_plan, tab_gastos, tab_material, tab_menu = st.tabs(
         ["🍅 Lo que se gastó", "📋 Previsto frente a real", "💶 Gastos", "🍽️ Material", "📖 Menú"]
@@ -2729,10 +2780,10 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
         if f["consumos"]:
             st.dataframe([{
                 "Producto": _ICONO_TIPO.get(c["tipo"], "") + c["producto"],
-                "Cantidad": f"{_num(c['cantidad'])} {c['unidad']}", "Lote": c["lote"], "Coste (€)": f"{c['coste']:.2f}",
+                "Cantidad": f"{_num(c['cantidad'])} {c['unidad']}", "Lote": c["lote"], "Coste (€)": f"{_eur(c['coste'])}",
             } for c in f["consumos"]], width="stretch", hide_index=True)
-            st.caption(f"Comida {r['comida']:.2f} € · consumibles {r['consumibles']:.2f} € · limpieza y mantenimiento "
-                       f"{r['mantenimiento']:.2f} € (a precio real de cada lote)")
+            st.caption(f"Comida {_eur(r['comida'])} € · consumibles {_eur(r['consumibles'])} € · limpieza y mantenimiento "
+                       f"{_eur(r['mantenimiento'])} € (a precio real de cada lote)")
         else:
             st.info("No salió nada del inventario para este servicio.")
     with tab_plan:
@@ -2740,7 +2791,7 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
             st.dataframe([{
                 "Producto": p["producto"], "Previsto": f"{_num(p['previsto'])} {p['unidad']}",
                 "Real": f"{_num(p['real'])} {p['unidad']}",
-                "Diferencia": "—" if abs(p["diferencia"]) < 1e-9 else f"{p['diferencia']:+g} {p['unidad']}",
+                "Diferencia": "—" if abs(p["diferencia"]) < 1e-9 else f"{_es(format(p['diferencia'], '+g'))} {p['unidad']}",
             } for p in f["previsto_frente_a_real"]], width="stretch", hide_index=True)
             st.caption("Diferencia negativa: salió menos de lo que pedía el menú (normalmente faltaba stock). "
                        "Positiva: se usó más (compras de urgencia).")
@@ -2748,7 +2799,7 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
             st.info("No hay datos del menú de este servicio.")
     with tab_gastos:
         if f["gastos"]:
-            st.dataframe([{"Concepto": g.concepto, "Categoría": g.categoria, "Importe (€)": f"{g.importe:.2f}",
+            st.dataframe([{"Concepto": g.concepto, "Categoría": g.categoria, "Importe (€)": f"{_eur(g.importe)}",
                            "Notas": g.notas} for g in f["gastos"]], width="stretch", hide_index=True)
         else:
             st.info("Este servicio no tiene gastos apuntados.")
@@ -2761,7 +2812,7 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
                                "Volvieron": salida.vuelto.get(n, 0) if salida.ha_vuelto else "—"}
                               for n, c in salida.cantidades.items()], width="stretch", hide_index=True)
             for i in f["incidencias_material"]:
-                st.write(f"💥 {i.tipo.capitalize()}: {i.cantidad} x {i.material} ({i.coste:.2f} €)")
+                st.write(f"💥 {i.tipo.capitalize()}: {i.cantidad} x {i.material} ({_eur(i.coste)} €)")
         else:
             st.info("No se llevó material registrado a este servicio.")
     with tab_menu:
@@ -2826,7 +2877,7 @@ def _deshacer_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gast
             try:
                 r = rec.deshacer_completar(servicio, inv, gastos)
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
                 return
             detalle = f"{r['salidas']} salida(s) devuelta(s) al inventario"
             if r["raciones"]:
@@ -2937,7 +2988,7 @@ def _editar_receta(inv: Inventario, rec: Recetario) -> None:
             avisar("success", f"Receta '{nombre}' actualizada.")
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            st.error(_es(str(e)))
 
     with st.expander(f"🗑️ Borrar la receta '{nombre}'"):
         if menus:
@@ -2951,7 +3002,7 @@ def _editar_receta(inv: Inventario, rec: Recetario) -> None:
                 vaciar_campos("editar_receta_")
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
 
 def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
@@ -2960,7 +3011,7 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
         c1, c2 = st.columns([3, 1])
         c1.markdown(f"**{menu.nombre}**")
         c1.caption("Recetas: " + (", ".join(r.nombre for r in menu.recetas) or "—"))
-        c2.metric("Comida por comensal", f"{menu.costo_por_comensal(inv)} €")
+        c2.metric("Comida por comensal", f"{_eur(menu.costo_por_comensal(inv))} €")
         st.write("Ingredientes por comensal: " + _texto_cantidades(menu.ingredientes_por_comensal(), inv))
         _editor_nota(menu, f"menu_{menu.nombre}", menu.nombre)
 
@@ -2990,8 +3041,8 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                 st.caption("Este menú no tiene consumibles.")
             total = round(menu.costo_por_comensal(inv) + menu.costo_consumibles_por_comensal(inv), 2)
             st.caption(
-                f"Coste por comensal: comida {menu.costo_por_comensal(inv)} € + consumibles "
-                f"{menu.costo_consumibles_por_comensal(inv)} € = **{total} €**"
+                f"Coste por comensal: comida {_eur(menu.costo_por_comensal(inv))} € + consumibles "
+                f"{_eur(menu.costo_consumibles_por_comensal(inv))} € = **{_eur(total)} €**"
             )
 
             st.markdown("**🍽️ Material**")
@@ -3030,7 +3081,7 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                     avisar("success", f"Recetas del menú '{menu.nombre}' guardadas.")
                     st.rerun()
                 except ValueError as e:
-                    st.error(str(e))
+                    st.error(_es(str(e)))
             st.caption("Los servicios ya hechos no cambian: guardan cómo era el menú al hacerlos.")
 
             st.markdown("**🗑️ Borrar el menú**")
@@ -3048,7 +3099,7 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                         avisar("success", f"Menú '{menu.nombre}' borrado.")
                         st.rerun()
                     except ValueError as e:
-                        st.error(str(e))
+                        st.error(_es(str(e)))
 
 
 def pagina_recetario() -> None:
@@ -3068,7 +3119,7 @@ def pagina_recetario() -> None:
             st.info("No hay recetas todavía.")
         for r in rec.recetas.values():
             vida = f" · ⏳ dura {r.vida_util_dias} día(s) una vez hecha" if r.vida_util_dias is not None else ""
-            st.write(f"{r}  💶 {r.costo_por_comensal(inv)}€/comensal{vida}")
+            st.write(f"{_es(str(r))}  💶 {_eur(r.costo_por_comensal(inv))} €/comensal{vida}")
             _editor_nota(r, f"receta_{r.nombre}", r.nombre)
         if rec.recetas:
             st.markdown("**⏳ Vida útil de una receta**")
@@ -3173,7 +3224,7 @@ def pagina_recetario() -> None:
                         try:
                             rec.agregar_receta(nueva)
                         except ValueError as e:
-                            st.error(str(e))
+                            st.error(_es(str(e)))
                         else:
                             st.session_state.receta_ingredientes = {}
                             st.session_state.receta_form_version = vr + 1
@@ -3201,7 +3252,7 @@ def pagina_recetario() -> None:
                     try:
                         rec.agregar_menu(nuevo_menu)
                     except ValueError as e:
-                        st.error(str(e))
+                        st.error(_es(str(e)))
                     else:
                         avisar("success", f"Menú '{nuevo_menu.nombre}' creado.")
                         for prefijo in ("nombre_menu_input", "recetas_multiselect", "nuevo_menu_"):
@@ -3221,7 +3272,7 @@ def pagina_recetario() -> None:
                 with st.container(border=True):
                     col1, col2 = st.columns([3, 1])
                     col1.markdown(f"**{menu.nombre}**")
-                    col2.metric("Urgencia", f"{puntuacion:.1f}")
+                    col2.metric("Urgencia", f"{_dec(puntuacion)}")
 
                     if puede:
                         st.success("✅ Se puede preparar ya")
@@ -3309,7 +3360,7 @@ def _pestana_bases(inv: Inventario) -> None:
                 st.session_state.base_nueva_version = v + 1
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
     else:
         if not bases:
             st.info("Todavía no hay elaboraciones base.")
@@ -3331,7 +3382,7 @@ def _pestana_bases(inv: Inventario) -> None:
                 st.session_state.base_editar_version = v + 1
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
 
 # ---------- Página: Compras ----------
@@ -3370,7 +3421,7 @@ def pagina_compras() -> None:
             ]
             st.dataframe(filas, width="stretch", hide_index=True)
 
-        st.metric("💰 Coste total pendiente", f"{comp.costo_total_pendiente()} €")
+        st.metric("💰 Coste total pendiente", f"{_eur(comp.costo_total_pendiente())} €")
 
         st.divider()
         nombre_marcar = st.selectbox("Marcar como comprado", [i.ingrediente for i in pendientes], key="marcar_comprado_select")
@@ -3448,7 +3499,7 @@ def pagina_gastos() -> None:
         iva = _iva_gasto(categoria, k("iva"))
         if importe > 0 and iva:
             base = importe / (1 + iva / 100)
-            st.caption(f"{importe:.2f} € = {base:.2f} € sin IVA + {importe - base:.2f} € de IVA.")
+            st.caption(f"{_eur(importe)} € = {_eur(base)} € sin IVA + {_eur(importe - base)} € de IVA.")
         general = "Gasto general del negocio (no es de un servicio)"
         opciones = {general: None}
         for s in sorted(serv.servicios, key=lambda s: (s.fecha, s.hora), reverse=True):
@@ -3459,11 +3510,11 @@ def pagina_gastos() -> None:
         if st.button("Registrar gasto", type="primary", key=k("boton")):
             try:
                 gastos.agregar_gasto(Gasto(concepto, categoria, importe, fecha, servicio_id, notas, iva=iva))
-                avisar("success", f"Gasto registrado: {concepto} ({importe:.2f} €).")
+                avisar("success", f"Gasto registrado: {concepto} ({_eur(importe)} €).")
                 st.session_state.gasto_version += 1
                 st.rerun()
             except ValueError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
 
     with tab_lista:
         periodo = st.selectbox("Periodo", PERIODOS_VALIDOS, index=1, key="gastos_periodo")
@@ -3479,23 +3530,24 @@ def pagina_gastos() -> None:
         st.dataframe([{
             "Nº": g.id, "Fecha": g.fecha.strftime("%d/%m/%Y") + (" 📅 futuro" if g.fecha > date.today() else ""),
             "Concepto": g.concepto, "Categoría": g.categoria,
-            "Importe (€)": f"{g.importe:.2f}",
+            "Importe (€)": f"{_eur(g.importe)}",
             "IVA": "no desglosado" if g.iva is None else nombre_iva(g.iva).split(" (")[0],
             "Servicio": f"#{g.servicio_id}" if g.servicio_id else "General",
             "Notas": g.notas,
         } for g in list(reversed(futuros)) + list(reversed(lista))], width="stretch", hide_index=True)
         if futuros:
-            st.caption(f"📅 {len(futuros)} gasto(s) con fecha futura ({sum(g.importe for g in futuros):.2f} €): "
+            st.caption(f"📅 {len(futuros)} gasto(s) con fecha futura ({_eur(sum(g.importe for g in futuros))} €): "
                        "salen en la lista, pero no suman en el total de este periodo (sí en 'todo').")
         por_categoria = gastos.total_por_categoria(desde, hasta_total)
-        st.metric("Total del periodo", f"{sum(por_categoria.values()):.2f} €")
+        st.metric("Total del periodo", f"{_eur(sum(por_categoria.values()))} €")
         st.bar_chart(pd.DataFrame(list(por_categoria.items()), columns=["Categoría", "Gasto (€)"]).set_index("Categoría"))
 
         st.subheader("Eliminar un gasto")
-        textos_gasto = {f"#{g.id} - {g.fecha.strftime('%d/%m/%Y')} - {g.concepto} ({g.importe:.2f} €)": g.id
+        textos_gasto = {f"#{g.id} - {g.fecha.strftime('%d/%m/%Y')} - {g.concepto} ({_eur(g.importe)} €)": g.id
                         for g in list(reversed(futuros)) + list(reversed(lista))}
         elegido = st.selectbox("Gasto", list(textos_gasto), key="gasto_eliminar_select")
-        if st.button("🗑️ Eliminar este gasto", key="gasto_eliminar_boton"):
+        if _boton_confirmado("🗑️ Eliminar este gasto", f"gasto_eliminar_boton_{textos_gasto[elegido]}",
+                             pregunta=f"¿Eliminar el gasto {elegido}?"):
             gastos.eliminar_gasto(textos_gasto[elegido])
             avisar("success", "Gasto eliminado.")
             st.rerun()
@@ -3592,7 +3644,7 @@ def pagina_exportar() -> None:
             except ImportError:
                 st.error("Faltan librerías. En tu terminal: pip install google-auth-oauthlib google-api-python-client")
             except FileNotFoundError as e:
-                st.error(str(e))
+                st.error(_es(str(e)))
             except Exception as e:
                 st.error(f"Error al subir a Google Drive: {e}")
 
@@ -3612,10 +3664,10 @@ def _pestana_iva(metricas: Metricas, inv: Inventario) -> None:
 
     st.markdown("**IVA pagado en las compras y los gastos** (soportado)")
     if resumen["soportado_por_tipo"]:
-        st.dataframe([{"Tipo": nombre_iva(tipo), "IVA pagado (€)": f"{importe:.2f}"}
+        st.dataframe([{"Tipo": nombre_iva(tipo), "IVA pagado (€)": f"{_eur(importe)}"}
                       for tipo, importe in resumen["soportado_por_tipo"].items()], width="stretch", hide_index=True)
         if resumen["soportado_gastos"]:
-            st.caption(f"Incluye {resumen['soportado_gastos']:.2f} € de IVA de los gastos (gasolina, alquileres...).")
+            st.caption(f"Incluye {_eur(resumen['soportado_gastos'])} € de IVA de los gastos (gasolina, alquileres...).")
     else:
         st.caption("No hay compras ni gastos con IVA en este trimestre.")
     if resumen["gastos_sin_desglose"]:
@@ -3625,16 +3677,16 @@ def _pestana_iva(metricas: Metricas, inv: Inventario) -> None:
     if inv.iva_recuperable:
         st.markdown("**IVA cobrado a los clientes** (repercutido)")
         st.write(
-            f"{resumen['servicios_cobrados']} servicio(s) completado(s) con precio de cobro: {resumen['base_cobrada']:.2f} € "
-            f"sin IVA × {inv.iva_cobro:g} % = **{resumen['repercutido']:.2f} €**"
+            f"{resumen['servicios_cobrados']} servicio(s) completado(s) con precio de cobro: {_eur(resumen['base_cobrada'])} € "
+            f"sin IVA × {_num(inv.iva_cobro)} % = **{_eur(resumen['repercutido'])} €**"
         )
         if resumen["servicios_sin_cobro"]:
             st.caption(f"⚠️ {resumen['servicios_sin_cobro']} servicio(s) completado(s) sin precio de cobro: no cuentan.")
         m1, m2, m3 = st.columns(3)
-        m1.metric("IVA cobrado", f"{resumen['repercutido']:.2f} €")
-        m2.metric("IVA pagado", f"{resumen['soportado']:.2f} €")
+        m1.metric("IVA cobrado", f"{_eur(resumen['repercutido'])} €")
+        m2.metric("IVA pagado", f"{_eur(resumen['soportado'])} €")
         etiqueta = "A ingresar (aprox.)" if resumen["resultado"] >= 0 else "A compensar (aprox.)"
-        m3.metric(etiqueta, f"{abs(resumen['resultado']):.2f} €")
+        m3.metric(etiqueta, f"{_eur(abs(resumen['resultado']))} €")
         st.caption("Solo cuenta lo registrado aquí: no incluye compras, gastos o ventas que no estén en el programa.")
     else:
         st.info("El negocio no recupera el IVA de sus compras (Ajustes): este IVA forma parte de lo que te cuestan. "
@@ -3691,7 +3743,7 @@ def pagina_ajustes() -> None:
         )
         if st.button("Guardar IVA de cobro", key="ajuste_iva_cobro_guardar"):
             inv.iva_cobro = iva_cobro
-            avisar("success", f"IVA de cobro guardado: {iva_cobro:g} %.")
+            avisar("success", f"IVA de cobro guardado: {_num(iva_cobro)} %.")
             st.rerun()
     st.warning(AVISO_FISCAL)
 
@@ -3773,7 +3825,7 @@ def pagina_metricas() -> None:
         elif not resumen:
             st.info("No hay limpiezas registradas en este periodo.")
         else:
-            st.metric("Merma total del periodo", f"{metricas.merma_total_kg(desde, hasta)} kg")
+            st.metric("Merma total del periodo", f"{_num(metricas.merma_total_kg(desde, hasta))} kg")
             st.dataframe([{
                 "Producto": nombre,
                 "Limpiezas": fila["limpiezas"],
@@ -3781,7 +3833,7 @@ def pagina_metricas() -> None:
                 "Limpio (kg)": fila["limpio_kg"],
                 "Derivados (kg)": fila["derivados_kg"],
                 "Merma (kg)": fila["merma_kg"],
-                "Rendimiento": f"{fila['rendimiento']:.1%}",
+                "Rendimiento": f"{_pct(fila['rendimiento'])}",
             } for nombre, fila in resumen.items()], width="stretch", hide_index=True)
             df_merma = pd.DataFrame(
                 {nombre: [fila["limpio_kg"], fila["derivados_kg"], fila["merma_kg"]] for nombre, fila in resumen.items()},
@@ -3803,7 +3855,7 @@ def pagina_metricas() -> None:
             cantidad2 = metricas.cantidad_desperdiciada(nombre2, desde, hasta)
             st.metric(f"Desperdiciado de {nombre2}", f"{cantidad2} {inv.buscar_producto(nombre2).unidad}")
         valor_total = metricas.valor_desperdiciado_total(desde, hasta, tipo)
-        st.metric("Valor total desperdiciado (toda esta lista)", f"{valor_total} €")
+        st.metric("Valor total desperdiciado (toda esta lista)", f"{_eur(valor_total)} €")
 
     with tab_ranking:
         ranking = metricas.productos_mas_consumidos(desde, hasta, top=10, tipo=tipo)
@@ -3818,9 +3870,9 @@ def pagina_metricas() -> None:
         gasto = metricas.gasto_por_categoria(desde, hasta, tipo)
         por_tipo = metricas.gasto_por_tipo(desde, hasta)
         st.caption(
-            f"Gasto en compras del periodo: alimentos {por_tipo['alimento']} € · consumibles {por_tipo['consumible']} € · "
-            f"limpieza y mantenimiento {por_tipo['mantenimiento']} € (lo pagado, con IVA). "
-            f"De eso, IVA: {metricas.iva_soportado(desde, hasta):.2f} € (el detalle, en la pestaña 🧾 IVA)."
+            f"Gasto en compras del periodo: alimentos {_eur(por_tipo['alimento'])} € · consumibles {_eur(por_tipo['consumible'])} € · "
+            f"limpieza y mantenimiento {_eur(por_tipo['mantenimiento'])} € (lo pagado, con IVA). "
+            f"De eso, IVA: {_eur(metricas.iva_soportado(desde, hasta))} € (el detalle, en la pestaña 🧾 IVA)."
         )
         if not gasto:
             st.info("No hay compras registradas en este periodo.")
@@ -3828,7 +3880,7 @@ def pagina_metricas() -> None:
             df_gasto = pd.DataFrame(list(gasto.items()), columns=["Categoría", "Gasto (€)"]).set_index("Categoría")
             st.bar_chart(df_gasto)
             st.dataframe(df_gasto.reset_index(), width="stretch", hide_index=True)
-            st.metric("Gasto total", f"{round(sum(gasto.values()), 2)} €")
+            st.metric("Gasto total", f"{_eur(sum(gasto.values()))} €")
 
     st.divider()
     st.subheader("📁 Informes mensuales guardados")
@@ -3882,13 +3934,13 @@ def pagina_metricas() -> None:
 
                 if resultado:
                     c3, c4, c5 = st.columns(3)
-                    c3.metric(f"Gasto — {elegido1}", f"{resultado['gasto_total_1']} €")
+                    c3.metric(f"Gasto — {elegido1}", f"{_eur(resultado['gasto_total_1'])} €")
                     c4.metric(
-                        f"Gasto — {elegido2}", f"{resultado['gasto_total_2']} €",
-                        delta=f"{resultado['diferencia_gasto_total']:+} €", delta_color="inverse",
+                        f"Gasto — {elegido2}", f"{_eur(resultado['gasto_total_2'])} €",
+                        delta=f"{_es(format(resultado['diferencia_gasto_total'], '+.2f'))} €", delta_color="inverse",
                     )
                     c5.metric(
-                        "Diferencia en desperdicio", f"{resultado['diferencia_desperdicio']:+} €",
+                        "Diferencia en desperdicio", f"{_es(format(resultado['diferencia_desperdicio'], '+.2f'))} €",
                         delta_color="inverse",
                     )
 
@@ -3918,10 +3970,10 @@ st.sidebar.markdown(
     """
     <div style="padding: 0.3rem 0 1.2rem 0;">
         <div style="font-family: 'Fraunces', serif; font-size: 1.6rem; font-weight: 500; color: #EDE6D9;">
-            🍽️ Gestión Restaurante
+            🍽️ Gestión Catering
         </div>
         <div style="font-size: 0.85rem; color: #A79E8E; margin-top: 0.1rem;">
-            Cocina, sala y almacén
+            Cocina, eventos y almacén
         </div>
     </div>
     """,

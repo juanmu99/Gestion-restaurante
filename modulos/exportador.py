@@ -18,6 +18,8 @@ Conceptos de Python en este módulo:
 from datetime import datetime
 from pathlib import Path
 
+import re
+
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 
@@ -31,12 +33,51 @@ from recetario import Recetario
 FUENTE = "Arial"
 
 
-def _escribir_cabecera(hoja, columnas: list[str]) -> None:
+# Filas de cabecera de cada hoja (la 1, y las de una segunda tabla en la misma
+# hoja): sirven para dar formato a cada columna según su título (ver _dar_formato).
+_CABECERAS: dict[str, list[int]] = {}
+
+FORMATO_EUROS = '#,##0.00 "€"'
+FORMATO_FECHA = "DD/MM/YYYY"
+
+
+def _escribir_cabecera(hoja, columnas: list[str], fila: int = 1) -> None:
+    _CABECERAS.setdefault(hoja.title, [])
+    if fila not in _CABECERAS[hoja.title]:
+        _CABECERAS[hoja.title].append(fila)
     for col_idx, titulo in enumerate(columnas, start=1):
-        celda = hoja.cell(row=1, column=col_idx, value=titulo)
+        celda = hoja.cell(row=fila, column=col_idx, value=titulo)
         celda.font = Font(name=FUENTE, bold=True, color="FFFFFF")
         celda.fill = PatternFill("solid", fgColor="4472C4")
         celda.alignment = Alignment(horizontal="center")
+
+
+def _dar_formato(wb: Workbook) -> None:
+    """
+    Repaso final de todas las hojas:
+    - las fechas escritas como texto (dd/mm/aaaa) pasan a ser FECHAS de
+      verdad, para poder ordenarlas y filtrarlas en Excel;
+    - los números (y fórmulas) de las columnas con "€" en su título se
+      muestran como euros (1.234,50 €).
+    """
+    for hoja in wb.worksheets:
+        filas_cabecera = sorted(_CABECERAS.get(hoja.title, [1]))
+        for fila in hoja.iter_rows():
+            for celda in fila:
+                if celda.row in filas_cabecera:
+                    continue
+                cabecera = max((f for f in filas_cabecera if f < celda.row), default=None)
+                titulo = str(hoja.cell(row=cabecera, column=celda.column).value or "") if cabecera else ""
+                valor = celda.value
+                if isinstance(valor, str) and re.fullmatch(r"\d{2}/\d{2}/\d{4}", valor):
+                    try:
+                        celda.value = datetime.strptime(valor, "%d/%m/%Y")
+                        celda.number_format = FORMATO_FECHA
+                    except ValueError:
+                        pass
+                elif "€" in titulo and (isinstance(valor, (int, float)) and not isinstance(valor, bool)
+                                         or isinstance(valor, str) and valor.startswith("=")):
+                    celda.number_format = FORMATO_EUROS
 
 
 def _ajustar_ancho_columnas(hoja, ancho: int = 18) -> None:
@@ -312,6 +353,8 @@ def _hoja_material(wb: Workbook, registro_material: RegistroMaterial) -> None:
     fila += 1
     hoja.cell(row=fila, column=1, value="Roturas y pérdidas").font = Font(name=FUENTE, bold=True)
     fila += 1
+    _escribir_cabecera(hoja, ["Fecha", "Tipo", "Material", "Unidades", "Coste (€)", "Dónde"], fila)
+    fila += 1
     for i in registro_material.incidencias:
         valores = [i.fecha.strftime("%d/%m/%Y"), i.tipo, i.material, i.cantidad, i.coste,
                    f"servicio #{i.servicio_id}" if i.servicio_id else "almacén"]
@@ -367,8 +410,10 @@ def _hoja_lista_compra(wb: Workbook, gestor_compras: GestorCompras) -> None:
         fila += 1
 
     if fila > 2:
-        hoja.cell(row=fila, column=5, value="TOTAL").font = Font(name=FUENTE, bold=True)
-        hoja.cell(row=fila, column=6, value=f"=SUM(F2:F{fila - 1})").font = Font(name=FUENTE, bold=True)
+        # Solo lo PENDIENTE: lo ya comprado no es lo que queda por pagar.
+        hoja.cell(row=fila, column=5, value="TOTAL pendiente").font = Font(name=FUENTE, bold=True)
+        hoja.cell(row=fila, column=6, value=f'=SUMIF(G2:G{fila - 1},"Pendiente",F2:F{fila - 1})').font = Font(
+            name=FUENTE, bold=True)
 
     _ajustar_ancho_columnas(hoja, ancho=22)
 
@@ -389,6 +434,7 @@ def exportar_todo(
     """
     wb = Workbook()
     wb.remove(wb.active)  # quitamos la hoja "Sheet" vacía que crea por defecto
+    _CABECERAS.clear()
 
     _hoja_inventario(wb, inventario)
     _hoja_lotes(wb, inventario)
@@ -408,9 +454,10 @@ def exportar_todo(
             _hoja_rentabilidad(wb, inventario, registro_servicios, recetario, registro_gastos, registro_material)
             _hoja_historial(wb, inventario, registro_servicios, recetario, registro_gastos, registro_material)
 
+    _dar_formato(wb)
     Path(carpeta_salida).mkdir(parents=True, exist_ok=True)
     marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")
-    nombre_archivo = f"backup_restaurante_{marca_tiempo}.xlsx"
+    nombre_archivo = f"gestion_catering_{marca_tiempo}.xlsx"
     ruta_completa = str(Path(carpeta_salida) / nombre_archivo)
 
     wb.save(ruta_completa)

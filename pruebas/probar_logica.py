@@ -1492,6 +1492,36 @@ with tempfile.TemporaryDirectory() as carpeta:
               and diaria["resumen"] == {"productos": 3, "recetas": 1, "servicios": 0} and rota["resumen"] is None,
               "Se listan las copias con su tipo y lo que contienen (una dañada sale sin resumen)")
 
+print("\n--- Fase 3, bloque 4: Excel ---")
+from openpyxl import load_workbook  # noqa: E402
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 2, "kg", 2.5, "Huerta"))
+servicios = RegistroServicios()
+silencio(servicios.agregar_servicio, Servicio(HOY, time(14, 0), 10, "Menú", precio_cobrado=300))
+compras = GestorCompras()
+silencio(compras.agregar_item, ItemCompra("Tomate", 2, "kg", "Huerta", 2.5))
+silencio(compras.agregar_item, ItemCompra("Sal", 1, "kg", "Huerta", 1))
+silencio(compras.marcar_comprado, "Sal")
+gastos = RegistroGastos()
+silencio(gastos.agregar_gasto, Gasto("Gasolina", "Transporte", 30, HOY, None, iva=21))
+material = RegistroMaterial()
+silencio(material.agregar_material, Material("Copa", "Cristalería", 10, 2.0, "Bazar"))
+silencio(material.dar_de_baja, "Copa", 1)
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = silencio(exportar_todo, inv, servicios, compras, carpeta, gastos, Recetario(), material)
+    wb = load_workbook(ruta)
+    hoja = wb["Gastos"]
+    comprobar(hoja.cell(row=2, column=2).is_date and hoja.cell(row=2, column=5).number_format.endswith('"€"'),
+              "En el Excel, las fechas son fechas de verdad y los importes tienen formato de euros")
+    hoja = wb["Material"]
+    filas = [[c.value for c in f] for f in hoja.iter_rows()]
+    comprobar(["Fecha", "Tipo", "Material", "Unidades", "Coste (€)", "Dónde"] in [f[:6] for f in filas],
+              "La tabla de roturas y pérdidas tiene cabecera")
+    hoja = wb["Lista de compra"]
+    total = next(f for f in hoja.iter_rows() if f[4].value == "TOTAL pendiente")[5].value
+    comprobar(total.startswith("=SUMIF(") and "Pendiente" in total, "El TOTAL de la lista de la compra es solo lo pendiente")
+    comprobar(Path(ruta).name.startswith("gestion_catering_"), "El Excel se llama gestion_catering_<fecha>.xlsx")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")
