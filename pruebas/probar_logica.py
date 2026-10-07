@@ -559,7 +559,7 @@ comprobar(any(c["producto"] == "Ensalada (preparada)" and c["cantidad"] == 20 fo
                   for p in f["previsto_frente_a_real"]),
           "El historial muestra las raciones preparadas usadas y el previsto ya las descuenta")
 
-vieja = silencio(recetario.preparar_elaboracion, "Ensalada", 5, inv, None, HOY - timedelta(days=1))
+vieja = silencio(recetario.preparar_elaboracion, "Ensalada", 5, inv, None, HOY - timedelta(days=1), HOY - timedelta(days=3))  # preparada hace 3 días
 comprobar(inv.elaboraciones.caducadas() == [vieja], "Se detectan las tandas caducadas")
 silencio(inv.elaboraciones.desechar, vieja.id)
 comprobar(not inv.elaboraciones.tandas and Metricas(inv).valor_desperdiciado_total(HOY, HOY) == round(5 * vieja.coste_por_racion, 2),
@@ -1521,6 +1521,72 @@ with tempfile.TemporaryDirectory() as carpeta:
     total = next(f for f in hoja.iter_rows() if f[4].value == "TOTAL pendiente")[5].value
     comprobar(total.startswith("=SUMIF(") and "Pendiente" in total, "El TOTAL de la lista de la compra es solo lo pendiente")
     comprobar(Path(ruta).name.startswith("gestion_catering_"), "El Excel se llama gestion_catering_<fecha>.xlsx")
+
+print("\n--- Fase 3, bloque 5: cálculos y métricas menores ---")
+from metricas import rango_desde_periodo  # noqa: E402
+dia = date(2026, 8, 20)
+comprobar(rango_desde_periodo("últimos 7 días", dia) == (date(2026, 8, 14), dia), "'Últimos 7 días' son 7 días justos (antes 8)")
+comprobar(rango_desde_periodo("este mes", dia) == (date(2026, 8, 1), dia)
+          and rango_desde_periodo("este trimestre", dia) == (date(2026, 7, 1), dia)
+          and rango_desde_periodo("este año", dia) == (date(2026, 1, 1), dia),
+          "'Este mes / trimestre / año' empiezan el día 1 (el trimestre, como en el IVA)")
+
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 2, "kg", 2, "Huerta"))
+silencio(inv.elaboraciones.nueva_tanda, "Ensalada", 10, 0.5, HOY + timedelta(days=2))
+comprobar(abs(inv.valor_total_inventario() - 9) < 1e-9 and inv.valor_tandas() == 5,
+          "El valor del inventario incluye las raciones preparadas (4 € de tomate + 5 € de tandas)")
+
+rec = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1})
+silencio(rec.agregar_receta, ensalada)
+for preparacion, caducidad, texto in ((HOY, HOY - timedelta(days=1), "una caducidad anterior a la preparación"),
+                                      (HOY + timedelta(days=1), None, "una preparación en el futuro")):
+    try:
+        rec.preparar_elaboracion("Ensalada", 1, inv, None, caducidad, preparacion)
+        comprobar(False, f"No se acepta {texto}")
+    except ValueError:
+        comprobar(abs(inv.buscar_producto("Tomate").stock - 2) < 1e-9, f"No se acepta {texto} (y no se toca nada)")
+tanda = inv.elaboraciones.tandas[0]
+try:
+    inv.elaboraciones.corregir(tanda.id, raciones=3, fecha_caducidad=tanda.fecha_preparacion - timedelta(days=1))
+    comprobar(False, "Corregir una tanda no deja una caducidad anterior a la preparación")
+except ValueError:
+    comprobar(tanda.raciones == 10, "Corregir una tanda no deja una caducidad anterior a la preparación (ni cambia nada)")
+
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 1, "kg", 2, "Huerta", stock_minimo=1,
+                                        fecha_caducidad=HOY - timedelta(days=1)))
+silencio(inv.entrada_stock, "Tomate", 2, precio_unitario=2, fecha_caducidad=HOY + timedelta(days=2))
+rec = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1})
+silencio(rec.agregar_receta, ensalada)
+menu = Menu("Menú", [ensalada])
+silencio(rec.agregar_menu, menu)
+tomate = inv.buscar_producto("Tomate")
+comprobar(tomate.stock_bueno == 2 and tomate.dias_para_caducar_bueno() == 2 and menu.ingredientes_en_riesgo(inv) == [tomate],
+          "El Recomendador ve el lote bueno a punto de caducar aunque haya otro ya caducado")
+comprobar(menu.se_puede_preparar(inv, 20) and not menu.se_puede_preparar(inv, 25),
+          "...y no cuenta el stock caducado para decir si se puede preparar (2 kg buenos: 20 sí, 25 no)")
+
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Huevo", "Huevos", 100, "unidades", 0.25, "Granja"))
+silencio(inv.agregar_producto, Producto("Jamón", "Charcutería", 2, "kg", 40, "Ibéricos"))
+silencio(inv.salida_stock, "Huevo", 24, "consumo", 1)
+silencio(inv.salida_stock, "Jamón", 0.5, "consumo", 1)
+ranking = Metricas(inv).productos_mas_consumidos(HOY, HOY)
+comprobar([f["producto"] for f in ranking] == ["Jamón", "Huevo"] and ranking[0]["valor"] == 20 and ranking[1]["unidad"] == "unidades",
+          "El ranking de más consumidos se ordena por valor (0,5 kg de jamón = 20 € antes que 24 huevos = 6 €)")
+
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Azafrán", "Especias", 10, "g", 4.5, "Especias SL"))
+compras = GestorCompras()
+silencio(compras.agregar_item, ItemCompra("Azafrán", 5, "g", "Especias SL", 0.0125))
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = silencio(exportar_todo, inv, RegistroServicios(), compras, carpeta)
+    celda = load_workbook(ruta)["Lista de compra"].cell(row=2, column=5)
+    comprobar("0.00####" in celda.number_format,
+              "En el Excel, un precio por gramo (0,0125 €/g) se ve con sus decimales, no como 0,00 €")
 
 print()
 if fallos:

@@ -711,6 +711,17 @@ class Producto(ConNotas):
             return None
         return (self.fecha_caducidad - date.today()).days
 
+    @property
+    def stock_bueno(self) -> float:
+        """El stock que NO ha caducado (lo que de verdad se puede usar hoy)."""
+        return round(sum(l.cantidad for l in self.lotes if not l.esta_caducado()), 6)
+
+    def dias_para_caducar_bueno(self) -> Optional[int]:
+        """Días hasta que caduque el primero de sus lotes BUENOS (None si ninguno bueno caduca)."""
+        dias = [l.dias_para_caducar() for l in self.lotes
+                if l.fecha_caducidad is not None and not l.esta_caducado() and l.cantidad > 0]
+        return min(dias) if dias else None
+
     def esta_caducado(self) -> bool:
         """True si ALGUNO de sus lotes ya ha caducado."""
         return any(l.esta_caducado() for l in self.lotes)
@@ -2214,8 +2225,17 @@ class Inventario:
                 vistos.append(p)
         return vistos
 
-    def valor_total_inventario(self) -> float:
+    def valor_productos(self) -> float:
+        """Lo que vale el stock de los productos (a precio de cada lote)."""
         return round(sum(p.valor_total() for p in self.productos.values()), 2)
+
+    def valor_tandas(self) -> float:
+        """Lo que valen las raciones ya preparadas (su coste por ración)."""
+        return round(sum(t.valor() for t in self.elaboraciones.tandas), 2)
+
+    def valor_total_inventario(self) -> float:
+        """Productos + raciones preparadas (antes no contaba las tandas: lo preparado "desaparecía" del valor)."""
+        return round(self.valor_productos() + self.valor_tandas(), 2)
 
     def listar_todos(self) -> None:
         if not self.productos:

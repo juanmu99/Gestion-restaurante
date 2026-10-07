@@ -95,7 +95,8 @@ def previsto(servicio: Servicio, inventario: Optional[Inventario] = None) -> dic
 def consumos(servicio: Servicio, inventario: Inventario) -> list[dict]:
     """
     Todo lo que salió del inventario para este servicio, movimiento a
-    movimiento: producto, tipo, cantidad, unidad, lote y coste real.
+    movimiento: producto, tipo, cantidad, unidad, lote y coste real (lo
+    pagado, con IVA, y también sin IVA).
     """
     filas = [{
         "producto": _nombre_elaboracion(u.receta),
@@ -104,6 +105,7 @@ def consumos(servicio: Servicio, inventario: Inventario) -> list[dict]:
         "unidad": "raciones",
         "lote": f"Tanda {u.tanda_id}",
         "coste": u.coste,
+        "coste_sin_iva": u.coste_sin_iva,
     } for u in inventario.elaboraciones.usos_de_servicio(servicio.id)]
     return filas + [{
         "producto": m.producto_nombre,
@@ -112,6 +114,7 @@ def consumos(servicio: Servicio, inventario: Inventario) -> list[dict]:
         "unidad": m.unidad,
         "lote": m.lote or "—",
         "coste": m.valor(),
+        "coste_sin_iva": m.valor_sin_iva(),
     } for m in inventario.historial if m.servicio_id == servicio.id and m.tipo == "salida"]
 
 

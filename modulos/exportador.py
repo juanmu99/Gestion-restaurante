@@ -38,6 +38,9 @@ FUENTE = "Arial"
 _CABECERAS: dict[str, list[int]] = {}
 
 FORMATO_EUROS = '#,##0.00 "€"'
+# Precios por unidad: al menos 2 decimales y hasta 6, para que un precio por
+# gramo o mililitro (0,0125 €/g) no salga como 0,00 €.
+FORMATO_PRECIO = '#,##0.00#### "€"'
 FORMATO_FECHA = "DD/MM/YYYY"
 
 
@@ -77,7 +80,8 @@ def _dar_formato(wb: Workbook) -> None:
                         pass
                 elif "€" in titulo and (isinstance(valor, (int, float)) and not isinstance(valor, bool)
                                          or isinstance(valor, str) and valor.startswith("=")):
-                    celda.number_format = FORMATO_EUROS
+                    por_unidad = any(t in titulo.lower() for t in ("precio", "/unidad", "por unidad", "€/"))
+                    celda.number_format = FORMATO_PRECIO if por_unidad else FORMATO_EUROS
 
 
 def _ajustar_ancho_columnas(hoja, ancho: int = 18) -> None:
@@ -205,21 +209,20 @@ def _hoja_bases(wb: Workbook, inventario: Inventario) -> None:
     """Elaboraciones base (sofritos, fondos...): su fórmula y cada preparación (prevista frente a obtenida)."""
     hoja = wb.create_sheet("Elaboraciones base")
     _escribir_cabecera(hoja, ["Elaboración", "Fórmula para", "Unidad", "Ingredientes", "Vida útil (días)", "En stock",
-                              "Anotaciones", "Nota editada"])
+                              "Anotaciones", "Nota editada", "Coste estimado (€/unidad, con IVA)"])
     fila = 2
     for b in sorted(inventario.bases(), key=lambda b: b.nombre):
         ingredientes = ", ".join(f"{c:g} {i}" for i, c in b.formula["ingredientes"].items())
         valores = [b.nombre, b.formula["cantidad"], b.unidad, ingredientes,
                    b.vida_util_dias if b.vida_util_dias is not None else "—", b.stock,
-                   b.notas, _fecha_nota(b)]
+                   b.notas, _fecha_nota(b), inventario.coste_estimado_base(b.nombre)]
         for columna, valor in enumerate(valores, start=1):
             _celda_texto(hoja, fila, columna, valor)
         fila += 1
 
     fila += 1
-    cabecera = ["Fecha", "Elaboración", "Unidad", "Prevista", "Obtenida", "Diferencia", "Coste (€)", "Coste/unidad (€)", "Lote"]
-    for columna, texto in enumerate(cabecera, start=1):
-        hoja.cell(row=fila, column=columna, value=texto).font = Font(name=FUENTE, bold=True)
+    _escribir_cabecera(hoja, ["Fecha", "Elaboración", "Unidad", "Prevista", "Obtenida", "Diferencia", "Coste (€)",
+                              "Coste/unidad (€)", "Lote"], fila)
     fila += 1
     for p in sorted(inventario.elaboraciones.preparaciones_base, key=lambda p: p.fecha):
         valores = [p.fecha.strftime("%d/%m/%Y"), p.producto, p.unidad, p.prevista, p.obtenida, f"=E{fila}-D{fila}",

@@ -38,6 +38,16 @@ def _coste_de_filas(filas: list[dict], inventario: Inventario) -> tuple[float, f
     return coste, coste_sin_iva
 
 
+def _comprobar_fechas(fecha_preparacion: Optional[date], fecha_caducidad: Optional[date]) -> None:
+    """Una preparación no puede caducar antes de prepararse, ni prepararse en el futuro."""
+    preparacion = fecha_preparacion or date.today()
+    if preparacion > date.today():
+        raise ValueError("La fecha de preparación no puede ser posterior a hoy.")
+    if fecha_caducidad is not None and fecha_caducidad < preparacion:
+        raise ValueError(f"La caducidad ({fecha_caducidad.strftime('%d/%m/%Y')}) no puede ser anterior a la "
+                         f"preparación ({preparacion.strftime('%d/%m/%Y')}).")
+
+
 class Receta(ConNotas):
     """
     Representa UN plato. Los ingredientes se guardan "por comensal" para
@@ -124,9 +134,11 @@ class Receta(ConNotas):
         urgencia_total = 0.0
         for nombre_ingrediente in self.ingredientes_por_comensal:
             producto = inventario.buscar_producto(nombre_ingrediente)
-            if producto is None or producto.stock <= 0:
+            if producto is None or producto.stock_bueno <= 0:
                 continue
-            dias_restantes = producto.dias_para_caducar()
+            # Solo cuenta lo que sigue bueno: un lote ya caducado no se
+            # "aprovecha" (y antes tapaba a otro lote bueno a punto de caducar).
+            dias_restantes = producto.dias_para_caducar_bueno()
             if dias_restantes is not None and 0 <= dias_restantes <= dias:
                 # Restando de `dias` invertimos la escala: cuantos MENOS
                 # días quedan, MÁS puntos suma (más urgente).
@@ -149,7 +161,7 @@ class Receta(ConNotas):
             producto = inventario.buscar_producto(nombre_ingrediente)
             if producto is None or producto.stock_minimo <= 0:
                 continue
-            exceso = producto.stock - producto.stock_minimo
+            exceso = producto.stock_bueno - producto.stock_minimo
             if exceso > 0:
                 urgencia_total += exceso / producto.stock_minimo
         return urgencia_total
@@ -291,7 +303,7 @@ class Menu(ConNotas):
                 if nombre_ingrediente in nombres_vistos:
                     continue
                 producto = inventario.buscar_producto(nombre_ingrediente)
-                if producto and producto.stock_minimo > 0 and producto.stock > producto.stock_minimo:
+                if producto and producto.stock_minimo > 0 and producto.stock_bueno > producto.stock_minimo:
                     productos_exceso.append(producto)
                     nombres_vistos.add(nombre_ingrediente)
         return productos_exceso
@@ -308,20 +320,20 @@ class Menu(ConNotas):
                 if nombre_ingrediente in nombres_vistos:
                     continue
                 producto = inventario.buscar_producto(nombre_ingrediente)
-                if producto is None or producto.stock <= 0:
+                if producto is None or producto.stock_bueno <= 0:
                     continue
-                dias_restantes = producto.dias_para_caducar()
+                dias_restantes = producto.dias_para_caducar_bueno()
                 if dias_restantes is not None and 0 <= dias_restantes <= dias:
                     productos_riesgo.append(producto)
                     nombres_vistos.add(nombre_ingrediente)
         return productos_riesgo
 
     def se_puede_preparar(self, inventario: Inventario, comensales: int) -> bool:
-        """True si TODO lo que gasta este menú (ingredientes y consumibles) alcanza en stock para `comensales`."""
+        """True si TODO lo que gasta este menú (ingredientes y consumibles) alcanza con el stock BUENO (sin lo caducado)."""
         necesarios = self.calcular_necesidades_totales(comensales)
         for ingrediente, cantidad_necesaria in necesarios.items():
             producto = inventario.buscar_producto(ingrediente)
-            stock_actual = producto.stock if producto else 0
+            stock_actual = producto.stock_bueno if producto else 0
             if stock_actual < cantidad_necesaria:
                 return False
         return True
@@ -650,6 +662,7 @@ class Recetario:
         """
         if raciones <= 0:
             raise ValueError("Las raciones deben ser más de 0.")
+        _comprobar_fechas(fecha_preparacion, fecha_caducidad)
         filas = self.previsualizar_elaboracion(nombre_receta, raciones, inventario, elecciones)
         faltan = [f"{f['ingrediente']} ({f['faltante']:g} {f['unidad']})" if f["existe"] else f"{f['ingrediente']} (no existe)"
                   for f in filas if f["faltante"] > 1e-9 or not f["existe"]]
@@ -700,6 +713,7 @@ class Recetario:
             raise ValueError("La cantidad a preparar debe ser más de 0.")
         if cantidad_obtenida is None or cantidad_obtenida <= 0:
             raise ValueError("Indica cuánto ha salido de verdad (más de 0).")
+        _comprobar_fechas(fecha_preparacion, fecha_caducidad)
         producto = inventario.buscar_producto(nombre_base)
         filas = self.previsualizar_base(nombre_base, cantidad_prevista, inventario, elecciones)
         faltan = [f"{f['ingrediente']} ({f['faltante']:g} {f['unidad']})" if f["existe"] else f"{f['ingrediente']} (no existe)"

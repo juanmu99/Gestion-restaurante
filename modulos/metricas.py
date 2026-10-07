@@ -22,7 +22,10 @@ import calendar
 
 from inventario import Inventario, MovimientoStock
 
-PERIODOS_VALIDOS = ("semana", "mes", "trimestre", "año", "todo")
+# Periodos con nombre (los que se eligen en las pantallas). "Este mes",
+# "este trimestre" y "este año" son NATURALES (desde el día 1), así que
+# coinciden con la pestaña de IVA y con lo que se entiende al leerlos.
+PERIODOS_VALIDOS = ("últimos 7 días", "este mes", "este trimestre", "este año", "todo")
 
 # Índice 0 sin usar a propósito, así NOMBRES_MESES[mes] funciona directo
 # con los meses tal como los conocemos (1 = enero, ... 12 = diciembre).
@@ -31,36 +34,34 @@ NOMBRES_MESES = (
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 )
 
-_DIAS_POR_PERIODO = {
-    "semana": 7,
-    "mes": 30,
-    "trimestre": 90,
-    "año": 365,
-}
-
-
-def rango_desde_periodo(periodo: str) -> tuple[date, date]:
+def rango_desde_periodo(periodo: str, hoy: Optional[date] = None) -> tuple[date, date]:
     """
-    Traduce un periodo con nombre a un rango de fechas concreto, contando
-    hacia atrás desde hoy. "todo" no pone límite inferior real (usa una
-    fecha muy antigua) para incluir cualquier movimiento registrado.
+    Traduce un periodo con nombre a un rango de fechas concreto, hasta hoy:
+    - "últimos 7 días": hoy y los 6 anteriores (7 días justos; antes eran 8).
+    - "este mes" / "este trimestre" / "este año": desde el día 1 del mes, del
+      trimestre natural (como el IVA) o del año.
+    - "todo": sin límite inferior real (una fecha muy antigua).
     """
-    hoy = date.today()
-
+    hoy = hoy or date.today()
     if periodo == "todo":
         return date(1970, 1, 1), hoy
-    if periodo not in _DIAS_POR_PERIODO:
-        raise ValueError(f"Periodo no válido: '{periodo}'. Debe ser uno de: {', '.join(PERIODOS_VALIDOS)}")
-
-    return hoy - timedelta(days=_DIAS_POR_PERIODO[periodo]), hoy
+    if periodo == "últimos 7 días":
+        return hoy - timedelta(days=6), hoy
+    if periodo == "este mes":
+        return hoy.replace(day=1), hoy
+    if periodo == "este trimestre":
+        return trimestre(hoy)[0], hoy
+    if periodo == "este año":
+        return date(hoy.year, 1, 1), hoy
+    raise ValueError(f"Periodo no válido: '{periodo}'. Debe ser uno de: {', '.join(PERIODOS_VALIDOS)}")
 
 
 def rango_mes_calendario(año: int, mes: int) -> tuple[date, date]:
     """
-    A diferencia de rango_desde_periodo("mes") (que cuenta 30 días hacia
-    atrás desde HOY), esto devuelve el primer y último día de un mes de
-    CALENDARIO concreto -- lo que hace falta para poder comparar "agosto"
-    con "agosto del año pasado", no solo "los últimos 30 días".
+    A diferencia de rango_desde_periodo("este mes") (el mes EN CURSO, hasta
+    hoy), esto devuelve el primer y último día de un mes de CALENDARIO
+    concreto -- lo que hace falta para poder comparar "agosto" con "agosto
+    del año pasado".
     """
     primer_dia = date(año, mes, 1)
     ultimo_dia_numero = calendar.monthrange(año, mes)[1]  # [1] = nº de días que tiene ese mes
@@ -115,13 +116,21 @@ class Metricas:
 
     def productos_mas_consumidos(
         self, fecha_inicio: date, fecha_fin: date, top: int = 5, tipo: Optional[str] = None
-    ) -> list[tuple[str, float]]:
-        """Ranking de productos por cantidad CONSUMIDA (no desperdiciada), de mayor a menor."""
-        acumulado: dict[str, float] = {}
+    ) -> list[dict]:
+        """
+        Ranking de los productos más CONSUMIDOS (no desperdiciados), ordenado
+        por lo que VALE lo consumido (€, con IVA): así se pueden comparar
+        productos en unidades distintas (12 huevos frente a 3 kg de harina).
+        Cada fila: {"producto", "cantidad", "unidad", "valor"}.
+        """
+        acumulado: dict[str, dict] = {}
         for m in self._en_rango(fecha_inicio, fecha_fin, tipo):
             if m.tipo == "salida" and m.motivo in ("consumo", "elaboración"):
-                acumulado[m.producto_nombre] = round(acumulado.get(m.producto_nombre, 0) + m.cantidad, 3)
-        return sorted(acumulado.items(), key=lambda par: par[1], reverse=True)[:top]
+                fila = acumulado.setdefault(m.producto_nombre, {"producto": m.producto_nombre, "cantidad": 0.0,
+                                                                "unidad": m.unidad, "valor": 0.0})
+                fila["cantidad"] = round(fila["cantidad"] + m.cantidad, 3)
+                fila["valor"] = round(fila["valor"] + m.valor(), 2)
+        return sorted(acumulado.values(), key=lambda f: f["valor"], reverse=True)[:top]
 
     def gasto_por_categoria(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> dict[str, float]:
         """
@@ -447,7 +456,7 @@ if __name__ == "__main__":
     inv.actualizar_stock("Harina de trigo", 3, sumar=False, motivo_salida="consumo")
 
     metricas = Metricas(inv)
-    desde, hasta = rango_desde_periodo("mes")
+    desde, hasta = rango_desde_periodo("este mes")
 
     print(f"\n--- Métricas del último mes ({desde} a {hasta}) ---")
     print(f"Consumido de Tomate: {metricas.cantidad_consumida('Tomate', desde, hasta)} kg")

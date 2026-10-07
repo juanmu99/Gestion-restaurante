@@ -765,7 +765,9 @@ def pagina_dashboard() -> None:
                    f"{inv.VENTANA_PRECIO_HABITUAL} días. El detalle está en Inventario > 📈 Historial de precios.")
 
     st.divider()
-    st.metric("💰 Valor total del inventario", f"{_eur(inv.valor_total_inventario())} €")
+    st.metric("💰 Valor total del inventario", f"{_eur(inv.valor_total_inventario())} €",
+              help="Lo que vale lo que tienes, a precio de compra (con IVA): productos "
+                   f"{_eur(inv.valor_productos())} € + raciones ya preparadas {_eur(inv.valor_tandas())} €.")
 
 
 # ---------- Página: Inventario ----------
@@ -1691,9 +1693,13 @@ def _seccion_elaboraciones() -> None:
         caducidad = c2.date_input("Caducidad", value=tanda.fecha_caducidad, key=k("caducidad"), format="DD/MM/YYYY")
         b1, b2 = st.columns(2)
         if b1.button("Guardar corrección", type="primary", key=k("guardar")):
-            reg.corregir(tanda.id, raciones=raciones, fecha_caducidad=caducidad)
-            avisar("success", f"Tanda {tanda.id} de '{tanda.receta}' corregida.")
-            st.rerun()
+            try:
+                reg.corregir(tanda.id, raciones=raciones, fecha_caducidad=caducidad)
+            except ValueError as e:
+                st.error(_es(str(e)))
+            else:
+                avisar("success", f"Tanda {tanda.id} de '{tanda.receta}' corregida.")
+                st.rerun()
         if _boton_confirmado("🗑️ Desechar la tanda entera (desperdicio)", k("desechar"), b2,
                              f"¿Desechar las {_num(tanda.raciones)} raciones?"):
             uso = reg.desechar(tanda.id)
@@ -1709,10 +1715,11 @@ def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
     _mostrar_nota(receta)
     c1, c2, c3 = st.columns(3)
     raciones = c1.number_input("Raciones", min_value=0.0, step=1.0, value=None, placeholder="0", key=k("raciones")) or 0.0
-    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"), format="DD/MM/YYYY")
+    fecha_prep = c2.date_input("Preparada el", value=date.today(), max_value=date.today(), key=k("fecha_prep"),
+                               format="DD/MM/YYYY")
     propuesta = receta.caducidad_propuesta(fecha_prep)
     # La key lleva la fecha de preparación: si se cambia, se vuelve a proponer la caducidad.
-    caducidad = c3.date_input("Caduca el", value=propuesta, key=k(f"caducidad_{fecha_prep.isoformat()}"), format="DD/MM/YYYY")
+    caducidad = c3.date_input("Caduca el", value=propuesta, min_value=fecha_prep, key=k(f"caducidad_{fecha_prep.isoformat()}"), format="DD/MM/YYYY")
     if receta.vida_util_dias is not None:
         st.caption(f"'{nombre}' dura {receta.vida_util_dias} día(s) una vez hecha: se propone la caducidad según eso.")
     else:
@@ -1762,9 +1769,10 @@ def _preparar_base(inv: Inventario, rec: Recetario) -> None:
     c1, c2, c3 = st.columns(3)
     prevista = c1.number_input(f"Cantidad a preparar ({producto.unidad})", min_value=0.0, step=0.5, value=None,
                                placeholder="0", key=k("prevista")) or 0.0
-    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"), format="DD/MM/YYYY")
+    fecha_prep = c2.date_input("Preparada el", value=date.today(), max_value=date.today(), key=k("fecha_prep"),
+                               format="DD/MM/YYYY")
     caducidad = c3.date_input("Caduca el", value=producto.caducidad_propuesta(fecha_prep),
-                              key=k(f"caducidad_{fecha_prep.isoformat()}"), format="DD/MM/YYYY")
+                              min_value=fecha_prep, key=k(f"caducidad_{fecha_prep.isoformat()}"), format="DD/MM/YYYY")
     if producto.vida_util_dias is None:
         st.caption(f"'{nombre}' no tiene vida útil: indica la caducidad a mano (puedes ponérsela en el Recetario).")
     if prevista <= 0:
@@ -2778,12 +2786,18 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
     )
     with tab_gasto:
         if f["consumos"]:
+            # La tabla y el resumen de debajo, con el MISMO criterio de IVA que la
+            # rentabilidad (antes la tabla iba con IVA y el resumen sin él: no cuadraban).
+            criterio = "sin IVA" if r["sin_iva"] else "con IVA"
             st.dataframe([{
                 "Producto": _ICONO_TIPO.get(c["tipo"], "") + c["producto"],
-                "Cantidad": f"{_num(c['cantidad'])} {c['unidad']}", "Lote": c["lote"], "Coste (€)": f"{_eur(c['coste'])}",
+                "Cantidad": f"{_num(c['cantidad'])} {c['unidad']}", "Lote": c["lote"],
+                f"Coste (€, {criterio})": _eur(c["coste_sin_iva"] if r["sin_iva"] else c["coste"]),
+                **({"Pagado (€, con IVA)": _eur(c["coste"])} if r["sin_iva"] else {}),
             } for c in f["consumos"]], width="stretch", hide_index=True)
             st.caption(f"Comida {_eur(r['comida'])} € · consumibles {_eur(r['consumibles'])} € · limpieza y mantenimiento "
-                       f"{_eur(r['mantenimiento'])} € (a precio real de cada lote)")
+                       f"{_eur(r['mantenimiento'])} € ({criterio}, a precio real de cada lote"
+                       + (", como en la rentabilidad: el negocio recupera el IVA)" if r["sin_iva"] else ")"))
         else:
             st.info("No salió nada del inventario para este servicio.")
     with tab_plan:
@@ -3281,12 +3295,12 @@ def pagina_recetario() -> None:
 
                     riesgo = menu.ingredientes_en_riesgo(inv, dias)
                     if riesgo:
-                        detalle = ", ".join(f"{p.nombre} ({p.dias_para_caducar()}d)" for p in riesgo)
+                        detalle = ", ".join(f"{p.nombre} ({p.dias_para_caducar_bueno()}d)" for p in riesgo)
                         st.caption(f"⏳ Por caducidad: {detalle}")
 
                     exceso = menu.ingredientes_en_exceso(inv)
                     if exceso:
-                        detalle = ", ".join(f"{p.nombre} ({p.stock} sobre mínimo {p.stock_minimo})" for p in exceso)
+                        detalle = ", ".join(f"{p.nombre} ({_num(p.stock_bueno)} sobre mínimo {_num(p.stock_minimo)})" for p in exceso)
                         st.caption(f"📦 Por exceso de stock: {detalle}")
 
 
@@ -3519,6 +3533,8 @@ def pagina_gastos() -> None:
     with tab_lista:
         periodo = st.selectbox("Periodo", PERIODOS_VALIDOS, index=1, key="gastos_periodo")
         desde, hasta = rango_desde_periodo(periodo)
+        if periodo != "todo":
+            st.caption(f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}.")
         # "todo" incluye también los gastos con fecha futura; los demás periodos los
         # muestran aparte (marcados), sin sumarlos al total.
         hasta_total = date.max if periodo == "todo" else hasta
@@ -3862,9 +3878,12 @@ def pagina_metricas() -> None:
         if not ranking:
             st.info("No hay datos de consumo en este periodo.")
         else:
-            df_ranking = pd.DataFrame(ranking, columns=["Producto", "Cantidad consumida"]).set_index("Producto")
-            st.bar_chart(df_ranking)
-            st.dataframe(df_ranking.reset_index(), width="stretch", hide_index=True)
+            st.caption("Ordenado por lo que vale lo consumido (€, con IVA): así se pueden comparar productos que se "
+                       "miden distinto (huevos por unidades, harina por kg...).")
+            st.bar_chart(pd.DataFrame([{"Producto": f["producto"], "Consumido (€)": f["valor"]} for f in ranking])
+                         .set_index("Producto"))
+            st.dataframe([{"Producto": f["producto"], "Cantidad": f"{_num(f['cantidad'])} {f['unidad']}",
+                           "Valor consumido (€)": _eur(f["valor"])} for f in ranking], width="stretch", hide_index=True)
 
     with tab_gasto:
         gasto = metricas.gasto_por_categoria(desde, hasta, tipo)

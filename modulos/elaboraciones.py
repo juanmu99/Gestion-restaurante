@@ -287,9 +287,12 @@ class RegistroElaboraciones:
         tanda = self.buscar(tanda_id)
         if tanda is None:
             raise ValueError(f"No existe la tanda {tanda_id}.")
+        if raciones is not None and raciones < 0:
+            raise ValueError("Las raciones no pueden ser negativas.")
+        if fecha_caducidad is not None and not borrar_caducidad and fecha_caducidad < tanda.fecha_preparacion:
+            raise ValueError(f"La caducidad no puede ser anterior a la preparación "
+                             f"({tanda.fecha_preparacion.strftime('%d/%m/%Y')}).")
         if raciones is not None:
-            if raciones < 0:
-                raise ValueError("Las raciones no pueden ser negativas.")
             tanda.raciones = raciones
         if borrar_caducidad:
             tanda.fecha_caducidad = None

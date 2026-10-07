@@ -1495,12 +1495,12 @@ def menu_recetario():
 
                         riesgo = menu.ingredientes_en_riesgo(inventario, dias)
                         if riesgo:
-                            detalle = ", ".join(f"{p.nombre} (caduca en {p.dias_para_caducar()}d)" for p in riesgo)
+                            detalle = ", ".join(f"{p.nombre} (caduca en {p.dias_para_caducar_bueno()}d)" for p in riesgo)
                             print(f"   ⏳ Por caducidad: {detalle}")
 
                         exceso = menu.ingredientes_en_exceso(inventario)
                         if exceso:
-                            detalle = ", ".join(f"{p.nombre} ({p.stock} sobre mínimo {p.stock_minimo})" for p in exceso)
+                            detalle = ", ".join(f"{p.nombre} ({p.stock_bueno:g} sobre mínimo {p.stock_minimo})" for p in exceso)
                             print(f"   📦 Por exceso de stock: {detalle}")
                     else:
                         print(f"   {menu.nombre} | sin urgencia | {disponibilidad}")
@@ -1797,8 +1797,9 @@ def menu_metricas():
             ranking = metricas.productos_mas_consumidos(desde, hasta)
             if not ranking:
                 print("No hay datos de consumo en ese periodo.")
-            for i, (nombre, cantidad) in enumerate(ranking, start=1):
-                print(f"{i}. {nombre}: {cantidad}")
+            print("(Ordenado por lo que vale lo consumido, para poder comparar productos en unidades distintas.)")
+            for i, fila in enumerate(ranking, start=1):
+                print(f"{i}. {fila['producto']}: {fila['valor']:.2f}€ ({fila['cantidad']:g} {fila['unidad']})")
         elif opcion == "4":
             gasto = metricas.gasto_por_categoria(desde, hasta)
             if not gasto:
