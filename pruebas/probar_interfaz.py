@@ -1139,24 +1139,26 @@ def prueba_caducados(at: AppTest) -> None:
     inv = at.session_state["inventario"]
     rec = at.session_state["recetario"]
     hoy = date.today()
-    inv.agregar_producto(Producto("Nata", "Lácteos", 1, "litros", 2, "Granja", fecha_caducidad=hoy - timedelta(days=2)))
-    inv.entrada_stock("Nata", 2, precio_unitario=2, fecha_caducidad=hoy + timedelta(days=5))
-    rec.agregar_receta(Receta("Crema", "Postres", {"Nata": 0.1}))
+    inv.agregar_producto(Producto("Nata para montar", "Lácteos", 1, "litros", 2, "Granja",
+                                  fecha_caducidad=hoy - timedelta(days=2)))
+    caducado = inv.buscar_producto("Nata para montar").lotes[0].id
+    bueno = inv.entrada_stock("Nata para montar", 2, precio_unitario=2, fecha_caducidad=hoy + timedelta(days=5)).id
+    rec.agregar_receta(Receta("Crema montada", "Postres", {"Nata para montar": 0.1}))
 
     ir_a(at, "Inventario")
     at.radio(key="inv_tipo").set_value("🥘 Elaboraciones").run()
     at.radio(key="elab_que").set_value("Un plato (raciones)").run()
     v = at.session_state["elab_version"]
-    at.selectbox(key=f"elab_receta_{v}").select("Crema").run()
-    at.number_input(key=f"elab_raciones_Crema_{v}").set_value(5.0).run()
-    lote = at.selectbox(key=f"elab_lote_Crema_{v}_Nata_0")
-    comprobar(sin_excepciones(at, "preparar con un lote caducado") and str(lote.value).startswith("Lote 2 ·")
+    at.selectbox(key=f"elab_receta_{v}").select("Crema montada").run()
+    at.number_input(key=f"elab_raciones_Crema montada_{v}").set_value(5.0).run()
+    lote = at.selectbox(key=f"elab_lote_Crema montada_{v}_Nata para montar_0")
+    comprobar(sin_excepciones(at, "preparar con un lote caducado") and str(lote.value).startswith(f"Lote {bueno} ·")
               and "CADUCADO" in lote.options[-1] and not any("CADUCADO" in t for t in textos(at.error)),
               "Al preparar se propone el lote bueno (no el caducado, que va al final y marcado)")
-    lote.select(opcion(lote, "Lote 1 ·")).run()
-    comprobar(any("CADUCADO" in t and "Nata" in t for t in textos(at.error)),
+    lote.select(opcion(lote, f"Lote {caducado} ·")).run()
+    comprobar(any("CADUCADO" in t and "Nata para montar" in t for t in textos(at.error)),
               "Si se elige el lote caducado, se avisa en rojo antes de preparar")
-    inv.desechar_lote("Nata", 1)  # para no dejar avisos de caducados en el resto de pruebas
+    inv.desechar_lote("Nata para montar", caducado)  # para no dejar avisos de caducados en el resto de pruebas
 
 
 @prueba("Historial de servicios")
