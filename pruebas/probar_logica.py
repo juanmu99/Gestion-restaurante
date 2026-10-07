@@ -544,8 +544,8 @@ comprobar(gestor.pendiente_de("Tomate").cantidad == 3 and any("raciones preparad
           "La lista de la compra descuenta lo ya preparado (80 - 20 = 60 raciones: 6 kg, hay 3 -> faltan 3)")
 avisos = silencio(gestor.generar_lista_desde_servicios,
                   [Servicio(HOY + timedelta(days=10), time(14, 0), 80, "Menú ensalada")], recetario, inv)
-comprobar(gestor.pendiente_de("Tomate").cantidad == 5,
-          "...pero no cuenta una tanda que habrá caducado el día del servicio")
+comprobar(gestor.pendiente_de("Tomate").cantidad == 8,
+          "...pero no cuenta una tanda que habrá caducado el día del servicio (ni el tomate caducado: 8 kg)")
 
 silencio(recetario.completar_servicio, servicio, inv, {"Tomate": [1]})
 comprobar(not inv.elaboraciones.tandas and inv.elaboraciones.coste_servicio(501) == round(20 * tanda.coste_por_racion, 2),
@@ -1075,6 +1075,85 @@ viejo = {"productos": [{"nombre": "Harina", "categoria": "Panadería", "unidad":
                         "stock_minimo": 0, "precio_referencia": 1.5, "lotes": []}]}
 comprobar(abs(Inventario.from_dict(viejo).buscar_producto("Harina").precio_referencia - 1.5) < 1e-9,
           "En datos de antes del IVA, el precio de referencia no sube un 21 % (sigue en 1,50 €)")
+
+print("\n--- Fase 2, bloque 2: caducidades en la lista de la compra ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 2, "kg", 2, "Huerta", fecha_caducidad=HOY + timedelta(days=3)))
+silencio(inv.agregar_producto, Producto("Sal", "Despensa", 5, "kg", 1, "Mayorista"))
+recetario = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1, "Sal": 0.01})
+silencio(recetario.agregar_receta, ensalada)
+silencio(recetario.agregar_menu, Menu("Menú ensalada", [ensalada]))
+pronto = Servicio(HOY + timedelta(days=1), time(14, 0), 15, "Menú ensalada")
+pronto.id = 701
+tarde = Servicio(HOY + timedelta(days=5), time(14, 0), 15, "Menú ensalada")
+tarde.id = 702
+gestor = GestorCompras()
+silencio(gestor.generar_lista_desde_servicios, [pronto], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate") is None, "Un lote que sigue bueno el día del servicio cuenta (1,5 kg de 2: no se compra)")
+avisos = silencio(gestor.generar_lista_desde_servicios, [tarde], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate").cantidad == 1.5,
+          "Un lote que caduca ANTES del servicio no cuenta (se compran los 1,5 kg)")
+comprobar(any("caducan el" in a and "#702" in a and "Tomate" in a for a in avisos),
+          "...y se avisa de que ese lote caduca antes del servicio #702")
+avisos = silencio(gestor.generar_lista_desde_servicios, [pronto, tarde], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate").cantidad == 1.5,
+          "Con dos servicios, el lote cubre el primero (antes de caducar) y para el segundo se compra")
+comprobar(gestor.pendiente_de("Sal") is None, "Lo que no caduca cuenta siempre (sal)")
+
+silencio(inv.entrada_stock, "Tomate", 1, precio_unitario=2, fecha_caducidad=HOY - timedelta(days=1))
+avisos = silencio(gestor.generar_lista_desde_servicios, [pronto, tarde], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate").cantidad == 1.5 and any("ya está caducado" in a for a in avisos),
+          "Un lote YA caducado no cuenta, y se avisa de que se puede desechar")
+
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 2, "kg", 2, "Huerta", fecha_caducidad=HOY + timedelta(days=10)))
+silencio(inv.agregar_producto, Producto("Sal", "Despensa", 5, "kg", 1, "Mayorista"))
+gestor = GestorCompras()
+silencio(gestor.generar_lista_desde_servicios, [pronto, tarde], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate").cantidad == 1,
+          "El mismo lote no cubre dos servicios a la vez (3 kg necesarios, 2 en stock: falta 1)")
+
+print("\n--- Fase 2, bloque 2: lotes caducados al preparar o completar ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 1, "kg", 2, "Huerta", fecha_caducidad=HOY - timedelta(days=2)))
+silencio(inv.entrada_stock, "Tomate", 3, precio_unitario=2, fecha_caducidad=HOY + timedelta(days=4))
+tomate = inv.buscar_producto("Tomate")
+comprobar([l.id for l in tomate.lotes_para_usar()] == [2, 1],
+          "Primero se propone el lote bueno; el caducado, al final (aunque caduque antes)")
+filas = Recetario.filas_necesidades({"Tomate": 0.5}, inv)
+comprobar(filas[0]["reparto"] == [(2, 0.5)] and filas[0]["caducados"] == [],
+          "Por defecto se gasta del lote bueno, no del caducado")
+filas = Recetario.filas_necesidades({"Tomate": 0.5}, inv, {"Tomate": [1]})
+comprobar(filas[0]["caducados"] == [(1, 0.5, HOY - timedelta(days=2))],
+          "Si se elige el lote caducado, la fila lo señala (para avisar)")
+filas = Recetario.filas_necesidades({"Tomate": 5}, inv)
+comprobar(filas[0]["reparto"] == [(2, 3), (1, 1)] and filas[0]["caducados"] == [(1, 1, HOY - timedelta(days=2))],
+          "Si no llega con todo, lo caducado se gasta al final, y se señala")
+inv2 = Inventario()
+silencio(inv2.agregar_producto, Producto("Leche", "Lácteos", 2, "litros", 1, "Granja", fecha_caducidad=HOY - timedelta(days=1)))
+filas = Recetario.filas_necesidades({"Leche": 1}, inv2)
+comprobar(filas[0]["caducados"] == [(1, 1, HOY - timedelta(days=1))],
+          "Con un único lote caducado también se señala (antes pasaba sin avisar)")
+
+print("\n--- Fase 2, bloque 2: varias tandas y varios servicios ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 0, "kg", 2, "Huerta"))
+silencio(inv.agregar_producto, Producto("Sal", "Despensa", 5, "kg", 1, "Mayorista"))
+silencio(inv.elaboraciones.nueva_tanda, "Ensalada", 10, 0.5, HOY + timedelta(days=3))
+silencio(inv.elaboraciones.nueva_tanda, "Ensalada", 10, 0.5, None)
+s1 = Servicio(HOY + timedelta(days=1), time(14, 0), 10, "Menú ensalada")
+s1.id = 711
+s2 = Servicio(HOY + timedelta(days=6), time(14, 0), 10, "Menú ensalada")
+s2.id = 712
+gestor = GestorCompras()
+silencio(gestor.generar_lista_desde_servicios, [s1, s2], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate") is None,
+          "Cada servicio usa la tanda que caduca antes y sigue buena: no se compra de más (antes pedía 1 kg)")
+s3 = Servicio(HOY + timedelta(days=7), time(14, 0), 10, "Menú ensalada")
+s3.id = 713
+silencio(gestor.generar_lista_desde_servicios, [s1, s2, s3], recetario, inv)
+comprobar(gestor.pendiente_de("Tomate").cantidad == 1, "...y las raciones que ya no quedan sí se compran (1 kg)")
 
 print()
 if fallos:

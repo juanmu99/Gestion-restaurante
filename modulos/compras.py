@@ -18,6 +18,7 @@ Conceptos de Python nuevos en este módulo:
 """
 
 import math
+from datetime import date
 from typing import Optional
 
 from inventario import Inventario, convertir
@@ -72,6 +73,39 @@ class ItemCompra:
         return item
 
 
+def _cubrir(producto, demandas: list, hoy: date) -> tuple[list, list]:
+    """
+    Simula (SIN tocar nada) gastar los lotes de `producto` para cubrir sus
+    `demandas` [(fecha, cantidad, servicio_id)], por orden de fecha y
+    sacando primero de los lotes que caducan antes. Un lote solo sirve si
+    sigue bueno ese día (y como pronto, hoy: lo ya caducado no sirve).
+
+    Devuelve (faltas, caducados):
+    - faltas: [(fecha, cantidad, servicio_id)] lo que el stock no cubre.
+    - caducados: [(lote, cantidad, servicio_id, fecha)] lotes a los que les
+      quedaba stock pero no sirvieron para una necesidad por caducar antes.
+    """
+    lotes = producto.lotes_ordenados() if producto else []
+    queda = {l.id: l.cantidad for l in lotes}
+    faltas, caducados = [], []
+    for fecha, cantidad, servicio_id in sorted(demandas, key=lambda d: d[0]):
+        dia = max(fecha, hoy)
+        pendiente = cantidad
+        for lote in lotes:
+            if pendiente <= 1e-9:
+                break
+            if lote.esta_caducado(dia) or queda[lote.id] <= 1e-9:
+                continue
+            sale = min(pendiente, queda[lote.id])
+            queda[lote.id] -= sale
+            pendiente -= sale
+        if pendiente > 1e-9:
+            faltas.append((fecha, pendiente, servicio_id))
+            caducados += [(l, round(queda[l.id], 3), servicio_id, fecha) for l in lotes
+                          if queda[l.id] > 1e-9 and l.esta_caducado(dia)]
+    return faltas, caducados
+
+
 class GestorCompras:
     """Genera y gestiona la lista de la compra consolidada."""
 
@@ -79,23 +113,31 @@ class GestorCompras:
         self.items: list[ItemCompra] = []
 
     def generar_lista_desde_servicios(
-        self, servicios: list[Servicio], recetario: Recetario, inventario: Inventario
+        self, servicios: list[Servicio], recetario: Recetario, inventario: Inventario,
+        hoy: Optional[date] = None,
     ) -> list[str]:
         """
         Consolida las necesidades de ingredientes de VARIOS servicios y
         genera items de compra solo para lo que realmente falta.
 
-        Paso 1: sumar TODAS las necesidades de TODOS los servicios primero.
+        Cada necesidad se apunta con la FECHA del servicio que la pide. Así,
+        al compararla con el stock, solo cuentan los lotes que seguirán
+        buenos ese día: 2 kg de tomate que caducan el 10 no sirven para un
+        servicio del 12 (y se avisa). Los servicios se cubren por orden de
+        fecha, gastando primero los lotes que caducan antes, y el mismo
+        stock nunca cubre dos servicios a la vez.
+
+        Paso 0: las raciones ya PREPARADAS (tandas) se reparten tanda a tanda
+                por orden de fecha; solo se compra para el resto.
+        Paso 1: necesidades de cada servicio (ingredientes y consumibles).
+        Paso 1b: lo que falta de una elaboración BASE no se compra: se
+                prepara, así que se compran sus ingredientes.
         Paso 2: lo que falta de un producto LIMPIO no se compra tal cual:
                 se convierte en producto EN BRUTO usando su rendimiento medio
                 (faltan 2 kg de carne limpia y rinde un 64 % -> 3,13 kg de pata).
-        Paso 3: comparar esa suma contra el stock, UNA sola vez.
-        (Si se comparara servicio por servicio, el mismo stock parecería
-        cubrir el déficit de varios servicios a la vez, lo cual es incorrecto.)
-
         Paso 2b: los productos de limpieza y mantenimiento por debajo de su
                 mínimo se añaden también (no dependen de los servicios).
-
+        Paso 3: comparar contra el stock bueno y crear los items.
         Paso 4: los productos que estaban PENDIENTES en la lista y que ya no
                 hacen falta (por ejemplo, porque se compraron registrándolos
                 directamente en el inventario) se quitan de la lista.
@@ -104,13 +146,41 @@ class GestorCompras:
         interfaz), por ejemplo cuando un producto aún no tiene limpiezas
         registradas y no se conoce su rendimiento.
         """
+        hoy = hoy or date.today()
         avisos: list[str] = []
-        necesidades_acumuladas: dict[str, float] = {}
+        # {producto: [(fecha, cantidad, id del servicio o None)]}
+        demandas: dict[str, list[tuple[date, float, Optional[int]]]] = {}
+        avisados: set = set()
 
-        # Raciones ya PREPARADAS (elaboraciones): se reparten entre los
-        # servicios por orden de fecha, y solo se compra para el resto. Una
-        # tanda que habrá caducado el día del servicio no cuenta.
-        ya_asignadas: dict[str, float] = {}
+        def pedir(nombre: str, fecha: date, cantidad: float, servicio_id: Optional[int]) -> None:
+            if cantidad > 1e-9:
+                demandas.setdefault(nombre, []).append((fecha, cantidad, servicio_id))
+
+        def faltas_de(nombre: str) -> list[tuple[date, float, Optional[int]]]:
+            """Lo que el stock bueno NO cubre de las necesidades de `nombre` (y avisa de lo caducado)."""
+            producto = inventario.buscar_producto(nombre)
+            faltas, caducados = _cubrir(producto, demandas.get(nombre, []), hoy)
+            for lote, cantidad, servicio_id, fecha in caducados:
+                if (nombre, lote.id) in avisados:
+                    continue
+                avisados.add((nombre, lote.id))
+                caduca = lote.fecha_caducidad.strftime("%d/%m/%Y")
+                if lote.esta_caducado(hoy):
+                    avisos.append(
+                        f"⚠️ '{nombre}': el lote {lote.id} ({cantidad:g} {producto.unidad}) ya está caducado "
+                        f"(cad. {caduca}), así que no se cuenta. Si ya no sirve, deséchalo en el Inventario."
+                    )
+                else:
+                    para = f"del servicio #{servicio_id} ({fecha.strftime('%d/%m/%Y')})" if servicio_id is not None \
+                        else f"del {fecha.strftime('%d/%m/%Y')}"
+                    avisos.append(
+                        f"⚠️ '{nombre}': {cantidad:g} {producto.unidad} del lote {lote.id} caducan el {caduca}, "
+                        f"antes {para}: no se cuentan para él."
+                    )
+            return faltas
+
+        # --- Pasos 0 y 1: raciones preparadas y necesidades de cada servicio ---
+        quedan_en_tanda = {t.id: t.raciones for t in inventario.elaboraciones.tandas}
         for servicio in sorted(servicios, key=lambda s: (s.fecha, s.hora)):
             menu = recetario.buscar_menu(servicio.menu)
             if menu is None:
@@ -118,76 +188,79 @@ class GestorCompras:
                               f"'{servicio.menu}' no existe en el Recetario, así que NO se ha tenido en cuenta. "
                               "Cámbiale el menú.")
                 continue
+            dia = max(servicio.fecha, hoy)
             preparadas: dict[str, float] = {}
             for receta in menu.recetas:
-                libres = inventario.elaboraciones.raciones_disponibles(receta.nombre, servicio.fecha) \
-                    - ya_asignadas.get(receta.nombre, 0)
-                usar = min(servicio.comensales, max(0.0, libres))
-                if usar > 0:
+                # Tanda a tanda: primero las que caducan antes y siguen buenas ese día.
+                usar = 0.0
+                for tanda in inventario.elaboraciones.tandas_de(receta.nombre, dia):
+                    if usar >= servicio.comensales - 1e-9:
+                        break
+                    sale = min(servicio.comensales - usar, quedan_en_tanda.get(tanda.id, 0.0))
+                    if sale > 1e-9:
+                        quedan_en_tanda[tanda.id] -= sale
+                        usar += sale
+                if usar > 1e-9:
                     preparadas[receta.nombre] = usar
-                    ya_asignadas[receta.nombre] = ya_asignadas.get(receta.nombre, 0) + usar
                     avisos.append(
                         f"Servicio #{servicio.id}: hay {usar:g} raciones preparadas de '{receta.nombre}'; "
                         f"solo se compra para las {servicio.comensales - usar:g} restantes."
                     )
             # Ingredientes Y consumibles: los dos se compran.
-            necesidades = recetario.necesidades_servicio(servicio, preparadas)
-            for ingrediente, cantidad in necesidades.items():
-                necesidades_acumuladas[ingrediente] = round(
-                    necesidades_acumuladas.get(ingrediente, 0) + cantidad, 3
-                )
+            for ingrediente, cantidad in recetario.necesidades_servicio(servicio, preparadas).items():
+                pedir(ingrediente, servicio.fecha, cantidad, servicio.id)
 
         # --- Paso 1b: elaboraciones BASE (sofritos, fondos...) ---
-        # Lo que falta de una base no se compra: se prepara. Se compran sus
-        # ingredientes. Se repite hasta que no cambie nada, porque una base
-        # puede llevar otra base dentro (un fondo dentro de una salsa).
+        # Una base puede llevar otra dentro (un fondo dentro de una salsa):
+        # cada base se calcula cuando ya se han calculado todas las que la
+        # llevan, para que le lleguen también sus necesidades.
         no_se_compran: set[str] = set()
-        expandido: dict[str, float] = {}  # cuánto de cada base ya se ha convertido en ingredientes
-        for _ in range(50):  # las fórmulas no pueden ir en círculo; esto es solo un seguro
-            cambio = False
-            for ingrediente in list(necesidades_acumuladas):
-                producto = inventario.buscar_producto(ingrediente)
-                if producto is None or not producto.es_base():
-                    continue
-                faltante = round(
-                    necesidades_acumuladas[ingrediente] - producto.stock - expandido.get(ingrediente, 0), 3
-                )
-                if faltante <= 1e-9:
-                    continue
-                no_se_compran.add(ingrediente)
-                expandido[ingrediente] = round(expandido.get(ingrediente, 0) + faltante, 3)
-                for otro, cantidad in producto.ingredientes_para(faltante).items():
-                    necesidades_acumuladas[otro] = round(necesidades_acumuladas.get(otro, 0) + cantidad, 3)
-                cambio = True
-            if not cambio:
+        bases = [p.nombre for p in inventario.bases()]
+        hechas: set[str] = set()
+        while len(hechas) < len(bases):
+            lista = [b for b in bases if b not in hechas
+                     and not any(otra not in hechas and inventario._lleva(otra, b) for otra in bases if otra != b)]
+            if not lista:  # las fórmulas no pueden ir en círculo; esto es solo un seguro
                 break
-        for base, cantidad in expandido.items():
-            producto = inventario.buscar_producto(base)
-            avisos.append(
-                f"Faltan {cantidad:g} {producto.unidad} de '{base}' (elaboración base): hay que prepararlo, "
-                f"así que se compran sus ingredientes ({', '.join(producto.formula['ingredientes'])})."
-            )
+            for base in lista:
+                hechas.add(base)
+                faltas = faltas_de(base) if base in demandas else []
+                total = round(sum(c for _, c, _ in faltas), 3)
+                if total <= 1e-9:
+                    continue
+                producto = inventario.buscar_producto(base)
+                no_se_compran.add(base)
+                for fecha, cantidad, servicio_id in faltas:
+                    for otro, c in producto.ingredientes_para(cantidad).items():
+                        pedir(otro, fecha, c, servicio_id)
+                avisos.append(
+                    f"Faltan {total:g} {producto.unidad} de '{base}' (elaboración base): hay que prepararlo, "
+                    f"así que se compran sus ingredientes ({', '.join(producto.formula['ingredientes'])})."
+                )
 
         # --- Paso 2: productos limpios y subproductos ---
-        for ingrediente in list(necesidades_acumuladas):
+        for ingrediente in list(demandas):
             producto = inventario.buscar_producto(ingrediente)
-            if producto is None:
+            if producto is None or ingrediente in no_se_compran:
                 continue
-            faltante = necesidades_acumuladas[ingrediente] - producto.stock
-            if faltante <= 1e-9 or ingrediente in no_se_compran:
+            if not producto.es_subproducto and not producto.origen:
+                continue
+            faltas = faltas_de(ingrediente)
+            faltante = round(sum(c for _, c, _ in faltas), 3)
+            if faltante <= 1e-9:
                 continue
 
             if producto.es_subproducto:
                 no_se_compran.add(ingrediente)
                 avisos.append(
-                    f"Faltan {round(faltante, 3)} {producto.unidad} de '{ingrediente}': es un subproducto "
+                    f"Faltan {faltante} {producto.unidad} de '{ingrediente}': es un subproducto "
                     "(sale de limpiar otros productos), así que no se añade a la lista."
                 )
                 continue
 
-            origen = inventario.buscar_producto(producto.origen) if producto.origen else None
+            origen = inventario.buscar_producto(producto.origen)
             if origen is None:
-                continue  # se compra tal cual (o su bruto ya no existe)
+                continue  # se compra tal cual (su bruto ya no existe)
 
             rendimiento = inventario.rendimiento_medio(origen.nombre)
             if rendimiento is None:
@@ -196,17 +269,19 @@ class GestorCompras:
                     f"'{origen.nombre}' todavía no tiene limpiezas registradas: se calcula como si no tuviera "
                     "merma. Compra algo más de lo indicado."
                 )
-            kg_bruto = producto.peso_kg(faltante) / rendimiento
-            if origen.unidad == "unidades":
-                cantidad_bruto = kg_bruto / origen.peso_unitario
-            else:
-                cantidad_bruto = convertir(kg_bruto, "kg", origen.unidad)
+
+            def en_bruto(cantidad: float) -> float:
+                kg_bruto = producto.peso_kg(cantidad) / rendimiento
+                if origen.unidad == "unidades":
+                    return kg_bruto / origen.peso_unitario
+                return convertir(kg_bruto, "kg", origen.unidad)
 
             no_se_compran.add(ingrediente)
-            necesidades_acumuladas[origen.nombre] = necesidades_acumuladas.get(origen.nombre, 0) + cantidad_bruto
+            for fecha, cantidad, servicio_id in faltas:
+                pedir(origen.nombre, fecha, en_bruto(cantidad), servicio_id)
             avisos.append(
-                f"Faltan {round(faltante, 3)} {producto.unidad} de '{ingrediente}': salen de limpiar "
-                f"~{round(cantidad_bruto, 2)} {origen.unidad} de '{origen.nombre}' (rendimiento {rendimiento:.0%})."
+                f"Faltan {faltante} {producto.unidad} de '{ingrediente}': salen de limpiar "
+                f"~{round(en_bruto(faltante), 2)} {origen.unidad} de '{origen.nombre}' (rendimiento {rendimiento:.0%})."
             )
 
         # --- Paso 2b: limpieza y mantenimiento ---
@@ -214,22 +289,20 @@ class GestorCompras:
         # (se pide lo que falta para volver a llegar a él).
         for producto in inventario.mantenimiento():
             if producto.stock_minimo > 0 and producto.stock < producto.stock_minimo - 1e-9:
-                necesidades_acumuladas[producto.nombre] = max(
-                    necesidades_acumuladas.get(producto.nombre, 0), producto.stock_minimo
-                )
+                ya = sum(c for _, c, _ in demandas.get(producto.nombre, []))
+                pedir(producto.nombre, hoy, producto.stock_minimo - ya, None)
                 avisos.append(
                     f"'{producto.nombre}' (limpieza y mantenimiento) está por debajo de su mínimo "
                     f"({producto.stock:g} de {producto.stock_minimo:g} {producto.unidad}): se repone hasta el mínimo."
                 )
 
-        # --- Paso 3: comparar contra el stock ---
+        # --- Paso 3: comparar contra el stock bueno ---
         hacen_falta: set[str] = set()
-        for ingrediente, cantidad_necesaria in necesidades_acumuladas.items():
+        for ingrediente in demandas:
             if ingrediente in no_se_compran:
                 continue
             producto = inventario.buscar_producto(ingrediente)
-            stock_actual = producto.stock if producto else 0
-            faltante = round(cantidad_necesaria - stock_actual, 3)
+            faltante = round(sum(c for _, c, _ in faltas_de(ingrediente)), 3)
 
             if faltante <= 0:
                 continue  # hay suficiente stock, no hace falta comprar nada de esto

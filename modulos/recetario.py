@@ -413,7 +413,8 @@ class Recetario:
         `elecciones` dice, para cada ingrediente, de qué lotes sale y en qué
         orden: {"Secreto": [2, 1]} = "primero del lote 2 y, lo que no llegue,
         del lote 1". Lo decide quien usa el programa. Si un ingrediente no
-        aparece, se propone su lote que caduca antes (solo como sugerencia).
+        aparece, se propone su lote BUENO que caduca antes (solo como
+        sugerencia); los caducados se proponen solo si no queda otro.
 
         Cada fila es un diccionario con:
         - necesario, en_stock, a_descontar, faltante (lo que no había en
@@ -424,6 +425,8 @@ class Recetario:
           elegidos no cubren. Mientras sea > 0, hay que elegir otro lote
           (de lotes_restantes) para completarla.
         - lotes_restantes: lotes todavía no elegidos que tienen stock.
+        - caducados: [(lote_id, cantidad, fecha_caducidad)] de lo que se
+          sacaría de lotes YA CADUCADOS (para avisar antes de usarlos).
 
         Si en TOTAL no hay stock suficiente, se usan todos los lotes.
         """
@@ -451,9 +454,10 @@ class Recetario:
                 "reparto": [],
                 "sin_asignar": 0.0,
                 "lotes_restantes": [],
+                "caducados": [],
             }
             if producto is not None and a_descontar > 0:
-                ordenados = [l.id for l in producto.lotes_ordenados()]
+                ordenados = [l.id for l in producto.lotes_para_usar()]
                 if necesario >= en_stock - 1e-9:
                     elegidos = ordenados  # no llega ni con todo: se usa todo
                 else:
@@ -463,6 +467,10 @@ class Recetario:
                 fila["reparto"] = reparto
                 fila["sin_asignar"] = sin_asignar
                 fila["lotes_restantes"] = [i for i in ordenados if i not in elegidos]
+                for lote_id, cantidad in reparto:
+                    lote = producto.buscar_lote(lote_id)
+                    if lote.esta_caducado():
+                        fila["caducados"].append((lote_id, cantidad, lote.fecha_caducidad))
             filas.append(fila)
         return filas
 

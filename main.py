@@ -722,6 +722,9 @@ def accion_elaboraciones() -> None:
             prevista = pedir_numero(f"Cantidad a preparar ({producto.unidad}): ")
             filas = recetario.previsualizar_base(nombre, prevista, inventario)
             elecciones = pedir_lotes_filas(filas)
+            if not avisar_caducados(recetario.previsualizar_base(nombre, prevista, inventario, elecciones)):
+                print("Cancelado: no se ha preparado nada.")
+                return
             obtenida = pedir_numero(f"¿Cuánto ha salido de verdad? ({producto.unidad}): ")
             propuesta = producto.caducidad_propuesta(date.today())
             if propuesta and not pedir_si_no(f"¿Caduca el {propuesta.strftime('%d/%m/%Y')} (según su vida útil)?"):
@@ -744,6 +747,9 @@ def accion_elaboraciones() -> None:
             caducidad = propuesta or pedir_fecha("Fecha de caducidad")
             filas = recetario.previsualizar_elaboracion(nombre, raciones, inventario)
             elecciones = pedir_lotes_filas(filas)
+            if not avisar_caducados(recetario.previsualizar_elaboracion(nombre, raciones, inventario, elecciones)):
+                print("Cancelado: no se ha preparado nada.")
+                return
             tanda = recetario.preparar_elaboracion(nombre, raciones, inventario, elecciones, caducidad)
             print(f"✅ Preparadas {raciones:g} raciones ({tanda.coste_por_racion:.2f}€/ración).")
         elif accion in ("desechar", "corregir") and reg.tandas:
@@ -936,8 +942,11 @@ def menu_servicios():
                             )
                         else:
                             print(f"  ✅ {f['ingrediente']}: -{round(f['a_descontar'], 3)} {f['unidad']}")
+                        caducados = {lote_id for lote_id, _, _ in f["caducados"]}
                         for lote_id, cantidad in f["reparto"]:
-                            print(f"       · {round(cantidad, 3)} {f['unidad']} del lote {lote_id}")
+                            aviso = "  ⚠️ CADUCADO" if lote_id in caducados else ""
+                            print(f"       · {round(cantidad, 3)} {f['unidad']} del lote {lote_id}{aviso}")
+                    avisar_caducados(filas, preguntar=False)
                     if pedir_si_no("¿Confirmar y completar el servicio?"):
                         try:
                             recetario.completar_servicio(servicio, inventario, elecciones, plan)
@@ -1047,6 +1056,24 @@ def pedir_tandas_servicio(servicio: Servicio) -> dict[str, list[int]]:
     return plan
 
 
+def avisar_caducados(filas: list[dict], preguntar: bool = True) -> bool:
+    """
+    Si se va a gastar algo de un lote YA caducado, lo avisa (y, con
+    preguntar=True, pregunta si seguir). Devuelve False si el usuario no
+    quiere seguir. No se prohíbe: lo decide quien usa el programa.
+    """
+    partes = [
+        f"{round(cantidad, 3):g} {f['unidad']} de {f['ingrediente']} (lote {lote_id}, caducó el {caduca.strftime('%d/%m/%Y')})"
+        for f in filas for lote_id, cantidad, caduca in f.get("caducados", [])
+    ]
+    if not partes:
+        return True
+    print("\n⚠️  Vas a usar producto CADUCADO:")
+    for parte in partes:
+        print(f"   · {parte}")
+    return pedir_si_no("¿Usarlo igualmente?") if preguntar else True
+
+
 def pedir_lotes_filas(filas: list[dict]) -> dict[str, list[int]]:
     """Como pedir_lotes_servicio(), para cualquier lista de filas (por ejemplo, al preparar una elaboración)."""
     return pedir_lotes_servicio(None, filas)
@@ -1066,10 +1093,11 @@ def pedir_lotes_servicio(servicio: Servicio, filas: list[dict]) -> dict[str, lis
             continue
         ingrediente = fila["ingrediente"]
         print(f"\n{ingrediente}: hacen falta {round(fila['necesario'], 3)} {producto.unidad}. Lotes:")
-        elegidos = [pedir_lote(producto, "¿De qué lote sale?").id]
+        # Primero los lotes buenos (Enter = el que caduca antes); los caducados, al final.
+        elegidos = [pedir_lote(producto, "¿De qué lote sale?", producto.lotes_para_usar()).id]
         while True:
             _, pendiente = inventario.repartir(ingrediente, fila["necesario"], elegidos)
-            restantes = [l for l in producto.lotes_ordenados() if l.id not in elegidos]
+            restantes = [l for l in producto.lotes_para_usar() if l.id not in elegidos]
             if pendiente <= 1e-9 or not restantes:
                 break
             print(f"Ese lote no llega: faltan {round(pendiente, 3)} {producto.unidad}. Lotes que quedan:")

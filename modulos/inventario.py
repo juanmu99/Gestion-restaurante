@@ -344,9 +344,11 @@ class Lote(ConPrecio):
             return None
         return (self.fecha_caducidad - date.today()).days
 
-    def esta_caducado(self) -> bool:
-        dias = self.dias_para_caducar()
-        return dias is not None and dias < 0
+    def esta_caducado(self, en_fecha: Optional[date] = None) -> bool:
+        """True si ya ha caducado (o si habrá caducado en `en_fecha`, si se indica)."""
+        if self.fecha_caducidad is None:
+            return False
+        return self.fecha_caducidad < (en_fecha or date.today())
 
     def etiqueta(self) -> str:
         """Descripción corta para el historial y los desplegables: 'Lote 2 · cad. 15/10/2026 · Carnicería Pepe'."""
@@ -606,6 +608,15 @@ class Producto(ConNotas):
     def lotes_ordenados(self) -> list[Lote]:
         """Sus lotes, primero los que caducan antes (los sin caducidad al final)."""
         return sorted(self.lotes, key=_clave_caducidad)
+
+    def lotes_para_usar(self, en_fecha: Optional[date] = None) -> list[Lote]:
+        """
+        Sus lotes en el orden en que conviene gastarlos: primero los que
+        siguen buenos (los que caducan antes, primero) y al final los ya
+        caducados (en `en_fecha`, o hoy). Así nunca se propone un lote
+        caducado mientras quede uno bueno.
+        """
+        return sorted(self.lotes, key=lambda l: (l.esta_caducado(en_fecha),) + _clave_caducidad(l))
 
     def buscar_lote(self, lote_id: int) -> Optional[Lote]:
         for lote in self.lotes:

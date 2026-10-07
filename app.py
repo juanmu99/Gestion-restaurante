@@ -1568,6 +1568,7 @@ def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
         "De qué lotes": _texto_reparto(f),
         "Falta": f"{_num(f['faltante'])} {f['unidad']}" if f["faltante"] > 0 else "—",
     } for f in filas], width="stretch", hide_index=True)
+    _aviso_caducados(filas)
     if any(f["faltante"] > 1e-9 or not f["existe"] for f in filas):
         st.warning("No hay ingredientes suficientes para tantas raciones.")
 
@@ -1616,6 +1617,7 @@ def _preparar_base(inv: Inventario, rec: Recetario) -> None:
         "De qué lotes": _texto_reparto(fi),
         "Falta": f"{_num(fi['faltante'])} {fi['unidad']}" if fi["faltante"] > 0 else "—",
     } for fi in filas], width="stretch", hide_index=True)
+    _aviso_caducados(filas)
     if any(fi["faltante"] > 1e-9 or not fi["existe"] for fi in filas):
         st.warning("No hay ingredientes suficientes para preparar tanto.")
 
@@ -1852,7 +1854,8 @@ def _elegir_lotes_servicio(
 def _elegir_lotes(filas: list[dict], inv: Inventario, prefijo: str) -> dict[str, list[int]]:
     """
     Para cada ingrediente con varios lotes, el usuario elige de qué lote
-    sale (se propone el que caduca antes). Si ese lote no llega, aparece
+    sale (se propone el bueno que caduca antes; los caducados van al final
+    y se marcan). Si ese lote no llega, aparece
     otro desplegable, VACÍO, para que elija con qué lote completar lo que
     falta... y así hasta cubrirlo todo. Devuelve {ingrediente: [lotes en orden]}.
     Lo usan completar un servicio y preparar una elaboración.
@@ -1868,14 +1871,15 @@ def _elegir_lotes(filas: list[dict], inv: Inventario, prefijo: str) -> dict[str,
         ingrediente = fila["ingrediente"]
         base = f"{prefijo}_{ingrediente}"
         elegidos: list[int] = []
+        # Primero los lotes buenos (el que caduca antes, propuesto); los caducados, al final.
         primero = _elegir_lote(
             producto, f"{ingrediente}: ¿de qué lote sale? (hacen falta {_num(fila['necesario'])} {producto.unidad})",
-            f"{base}_0",
+            f"{base}_0", lotes=producto.lotes_para_usar(),
         )
         elegidos.append(primero)
         while True:
             _, pendiente = inv.repartir(ingrediente, fila["necesario"], elegidos)
-            restantes = [l for l in producto.lotes_ordenados() if l.id not in elegidos]
+            restantes = [l for l in producto.lotes_para_usar() if l.id not in elegidos]
             if pendiente <= 1e-9 or not restantes:
                 break
             siguiente = _elegir_lote(
@@ -2119,10 +2123,23 @@ def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> Non
 def _texto_reparto(fila: dict) -> str:
     if not fila["reparto"]:
         return "—"
-    partes = [f"{_num(cantidad)} {fila['unidad']} del lote {lote_id}" for lote_id, cantidad in fila["reparto"]]
+    caducados = {lote_id for lote_id, _, _ in fila.get("caducados", [])}
+    partes = [f"{_num(cantidad)} {fila['unidad']} del lote {lote_id}" + (" ⚠️ CADUCADO" if lote_id in caducados else "")
+              for lote_id, cantidad in fila["reparto"]]
     if fila["sin_asignar"] > 1e-9:
         partes.append(f"⚠️ {_num(fila['sin_asignar'])} {fila['unidad']} sin lote elegido")
     return " + ".join(partes)
+
+
+def _aviso_caducados(filas: list[dict]) -> None:
+    """Aviso en rojo si se va a gastar algo de un lote YA caducado (no se prohíbe: lo decide quien usa el programa)."""
+    partes = [
+        f"{_num(cantidad)} {f['unidad']} de {f['ingrediente']} (lote {lote_id}, caducó el {caduca.strftime('%d/%m/%Y')})"
+        for f in filas for lote_id, cantidad, caduca in f.get("caducados", [])
+    ]
+    if partes:
+        st.error("⚠️ Vas a usar producto **CADUCADO**: " + "; ".join(partes)
+                 + ". Si no quieres, elige otro lote (si lo hay) o desecha ese lote en el Inventario.")
 
 
 def _texto_euros(valor: Optional[float]) -> str:
@@ -2353,6 +2370,7 @@ def pagina_servicios() -> None:
                     "De qué lotes": _texto_reparto(f),
                     "Faltaba": f"{f['faltante']} {f['unidad']}" if f["faltante"] > 0 else "—",
                 } for f in filas], width="stretch", hide_index=True)
+                _aviso_caducados(filas)
 
                 cortos = [f for f in filas if f["faltante"] > 0]
                 if cortos:
