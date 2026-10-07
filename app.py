@@ -44,7 +44,7 @@ from recetario import Recetario, Receta, Menu
 from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import (
-    Sesion, carpeta_datos, cargar_sesion_segura, escribir_sesion, firma, sesion_a_dict,
+    Sesion, SesionIlegible, carpeta_datos, cargar_sesion_segura, escribir_sesion, firma, sesion_a_dict,
 )
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
@@ -210,7 +210,12 @@ def inicializar_estado() -> None:
     if "inventario" in st.session_state:
         return
 
-    sesion, aviso = cargar_sesion_segura(RUTA_SESION)
+    try:
+        sesion, aviso = cargar_sesion_segura(RUTA_SESION)
+    except SesionIlegible as error:
+        # No se arranca vacío encima de los datos: se para aquí (y no se guarda nada).
+        st.error(f"❌ {error}")
+        st.stop()
     if aviso:
         avisar("warning", aviso)
     if sesion is None:
@@ -912,21 +917,27 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
     # valor que ya tuviera guardado bajo esa key (el del producto
     # anterior) en vez de tomar el `value` nuevo que le pasamos aquí.
     k = lambda campo: f"edit_{campo}_{nombre_sel}"
+    # Los campos que se rellenan con datos del producto llevan su "huella" en
+    # la key: si el producto cambia en otra pestaña (una compra cambia el peso
+    # de referencia...), se vuelven a rellenar y al guardar no se deshace nada.
+    huella_p = _huella(producto.nombre, producto.categoria, producto.stock_minimo, producto.proveedor, producto.iva,
+                       producto.tipo, producto.tiene_merma, producto.peso_unitario_referencia, producto.peso_unitario)
+    kv = lambda campo: f"edit_{campo}_{nombre_sel}_{huella_p}"
 
     st.markdown("**Datos generales**")
-    nuevo_nombre = st.text_input("Nombre", value=producto.nombre, key=k("nombre"))
-    categoria = st.text_input("Categoría", value=producto.categoria, key=k("categoria"))
+    nuevo_nombre = st.text_input("Nombre", value=producto.nombre, key=kv("nombre"))
+    categoria = st.text_input("Categoría", value=producto.categoria, key=kv("categoria"))
     c1, c2 = st.columns(2)
-    stock_minimo = c1.number_input("Stock mínimo", value=float(producto.stock_minimo), min_value=0.0, step=0.1, key=k("stock_minimo"))
-    proveedor = c2.text_input("Proveedor habitual", value=producto.proveedor, key=k("proveedor"))
-    nuevo_iva = _elegir_iva(k("iva"), producto.iva)
+    stock_minimo = c1.number_input("Stock mínimo", value=float(producto.stock_minimo), min_value=0.0, step=0.1, key=kv("stock_minimo"))
+    proveedor = c2.text_input("Proveedor habitual", value=producto.proveedor, key=kv("proveedor"))
+    nuevo_iva = _elegir_iva(kv("iva"), producto.iva)
     if abs(nuevo_iva - producto.iva) > 1e-9:
         st.caption("El IVA nuevo se aplica a las compras de aquí en adelante: cada compra ya hecha conserva el suyo.")
 
     # El tipo se puede corregir (por si se dio de alta en la lista equivocada).
     tipos_texto = {nombre: tipo for tipo, nombre in Producto.NOMBRES_TIPOS.items()}
     nuevo_tipo = tipos_texto[st.radio(
-        "Tipo", list(tipos_texto), index=Producto.TIPOS.index(producto.tipo), horizontal=True, key=k("tipo"),
+        "Tipo", list(tipos_texto), index=Producto.TIPOS.index(producto.tipo), horizontal=True, key=kv("tipo"),
         help="Si lo cambias, el producto pasa a otra lista del inventario.",
     )]
     es_consumible = nuevo_tipo == "consumible"
@@ -936,10 +947,10 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
     if nuevo_tipo != "alimento":
         tiene_merma = False
     elif producto.unidad in UNIDADES_PESO + ("unidades",):
-        tiene_merma = st.checkbox("Producto con merma (se limpia o despieza)", value=producto.tiene_merma, key=k("merma"))
+        tiene_merma = st.checkbox("Producto con merma (se limpia o despieza)", value=producto.tiene_merma, key=kv("merma"))
         if tiene_merma and producto.unidad == "unidades":
             peso_unitario = _campo_peso(
-                "Peso por unidad de referencia (se propone al registrar compras)", k("peso"),
+                "Peso por unidad de referencia (se propone al registrar compras)", kv("peso"),
                 producto.peso_unitario_referencia or producto.peso_unitario or 0.0,
             )
     if producto.tipo_descripcion() in ("Subproducto",) or producto.origen:
@@ -2228,24 +2239,30 @@ def pagina_servicios() -> None:
     with tab_add:
         if not rec.menus:
             st.info("Para añadir un servicio, crea antes su menú en el Recetario.")
-        with st.form("form_add_servicio", clear_on_submit=True):
+        # Sin clear_on_submit: si falta algo, lo escrito no se borra; al añadir
+        # bien, la "versión" de las keys cambia y el formulario sale vacío.
+        vs = st.session_state.setdefault("servicio_form_version", 0)
+        ks = lambda campo: f"servicio_{campo}_{vs}"
+        with st.form("form_add_servicio"):
             c1, c2 = st.columns(2)
-            fecha = c1.date_input("Fecha", format="DD/MM/YYYY")
-            hora = c2.time_input("Hora")
-            comensales = st.number_input("Comensales", min_value=1, step=1)
+            fecha = c1.date_input("Fecha", format="DD/MM/YYYY", key=ks("fecha"))
+            hora = c2.time_input("Hora", key=ks("hora"))
+            comensales = st.number_input("Comensales", min_value=1, step=1, key=ks("comensales"))
             # El menú se ELIGE de los que existen: escrito a mano, una tilde o
             # un espacio de más dejaban el servicio fuera de todos los cálculos.
-            menu_nombre = st.selectbox("Menú", list(rec.menus), index=None, placeholder="Elige el menú...")
+            menu_nombre = st.selectbox("Menú", list(rec.menus), index=None, placeholder="Elige el menú...",
+                                       key=ks("menu"))
             c5, c6 = st.columns(2)
-            cliente = c5.text_input("Cliente (opcional)", placeholder="Ej: Familia García")
-            lugar = c6.text_input("Lugar (opcional)", placeholder="Ej: Finca Los Olivos, Écija")
-            notas = st.text_area("Notas (opcional)")
+            cliente = c5.text_input("Cliente (opcional)", placeholder="Ej: Familia García", key=ks("cliente"))
+            lugar = c6.text_input("Lugar (opcional)", placeholder="Ej: Finca Los Olivos, Écija", key=ks("lugar"))
+            notas = st.text_area("Notas (opcional)", key=ks("notas"))
             c3, c4 = st.columns(2)
             precio = c3.number_input(
-                "Precio de cobro (€, sin IVA, opcional)", min_value=0.0, step=10.0,
+                "Precio de cobro (€, sin IVA, opcional)", min_value=0.0, step=10.0, key=ks("precio"),
                 help="Déjalo en 0 si no quieres indicarlo. Solo sirve para calcular el margen del servicio.",
             )
-            forma_precio = c4.radio("El precio es", ["Total del servicio", "Por comensal"], horizontal=True)
+            forma_precio = c4.radio("El precio es", ["Total del servicio", "Por comensal"], horizontal=True,
+                                    key=ks("forma_precio"))
             enviado = st.form_submit_button("Añadir servicio", type="primary")
             if enviado:
                 precio_cobrado = None
@@ -2260,6 +2277,7 @@ def pagina_servicios() -> None:
                             cliente=cliente, lugar=lugar,
                         )
                         serv.agregar_servicio(nuevo)
+                        st.session_state.servicio_form_version = vs + 1
                         avisar("success", f"Servicio #{nuevo.id} añadido: {fecha.strftime('%d/%m/%Y')}, "
                                           f"{int(comensales)} comensales, {menu_nombre}.")
                         st.rerun()  # para que la tabla de arriba y las demás pestañas ya lo vean
@@ -2960,7 +2978,7 @@ def pagina_compras() -> None:
             avisos = comp.generar_lista_desde_servicios(servicios, rec, inv)
             avisar("success", "Lista de compra generada/actualizada.")
             for aviso in avisos:
-                avisar("info", aviso)
+                avisar("warning" if aviso.startswith("⚠️") else "info", aviso)
             st.rerun()
 
     st.divider()
@@ -3124,7 +3142,8 @@ def pagina_exportar() -> None:
 
     st.divider()
     st.subheader("Backup a Google Drive")
-    st.caption("Necesita credentials.json configurado junto a app.py (ver instrucciones en google_drive_backup.py).")
+    st.caption("Opcional y avanzado: necesita un archivo credentials.json de Google junto al programa. "
+               "Para tener una copia de tus datos basta con copiar la carpeta de datos de arriba.")
     if st.button("Subir a Google Drive"):
         if not st.session_state.get("ultima_exportacion"):
             st.error("Exporta a Excel primero.")
@@ -3442,28 +3461,30 @@ if _app_vacia() and st.sidebar.button("🧪 Cargar datos de ejemplo",
     avisar("success", "Datos de ejemplo cargados.")
     st.rerun()
 
-mostrar_avisos()
+# Se guarda SIEMPRE al terminar cada vuelta, también si la página hace
+# st.rerun() o si falla al dibujarse (finally se ejecuta en los dos casos).
+try:
+    mostrar_avisos()
 
-if pagina == "Dashboard":
-    pagina_dashboard()
-elif pagina == "Inventario":
-    pagina_inventario()
-elif pagina == "Servicios":
-    pagina_servicios()
-elif pagina == "Historial":
-    pagina_historial()
-elif pagina == "Recetario":
-    pagina_recetario()
-elif pagina == "Compras":
-    pagina_compras()
-elif pagina == "Gastos":
-    pagina_gastos()
-elif pagina == "Métricas":
-    pagina_metricas()
-elif pagina == "Exportar / Backup":
-    pagina_exportar()
-elif pagina == "Ajustes":
-    pagina_ajustes()
-
-# Al final de cada vuelta: guardar lo que haya cambiado.
-autoguardar(zona_guardado)
+    if pagina == "Dashboard":
+        pagina_dashboard()
+    elif pagina == "Inventario":
+        pagina_inventario()
+    elif pagina == "Servicios":
+        pagina_servicios()
+    elif pagina == "Historial":
+        pagina_historial()
+    elif pagina == "Recetario":
+        pagina_recetario()
+    elif pagina == "Compras":
+        pagina_compras()
+    elif pagina == "Gastos":
+        pagina_gastos()
+    elif pagina == "Métricas":
+        pagina_metricas()
+    elif pagina == "Exportar / Backup":
+        pagina_exportar()
+    elif pagina == "Ajustes":
+        pagina_ajustes()
+finally:
+    autoguardar(zona_guardado)

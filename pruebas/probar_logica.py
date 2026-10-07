@@ -936,6 +936,40 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar(sesion is not None and aviso is None, "Un archivo guardado con BOM también se carga")
     comprobar(firma(datos) == firma(sesion_a_dict(*args)) and firma(datos) != firma({}),
               "La huella de los datos sirve para saber si hay cambios sin guardar")
+from persistencia import SesionIlegible  # noqa: E402
+import time as _time  # noqa: E402
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = Path(carpeta) / "sesion.json"
+    inv = Inventario()
+    args = (inv, RegistroServicios(), Recetario(), GestorCompras(), ArchivoInformes())
+    silencio(inv.agregar_producto, Producto("Arroz", "Despensa", 5, "kg", 1.2, "Mayorista"))
+    silencio(guardar_sesion, *args, str(ruta))
+    _time.sleep(0.05)
+    silencio(inv.agregar_producto, Producto("Sal", "Despensa", 1, "kg", 0.5, "Mayorista"))
+    silencio(guardar_sesion, *args, str(ruta))  # .bak = solo arroz; copia de hoy = arroz + sal
+    ruta.write_text("{roto", encoding="utf-8")
+    sesion, aviso = silencio(cargar_sesion_segura, str(ruta))
+    comprobar(sesion is not None and "Sal" in sesion.inventario.productos,
+              "Al recuperar, se usa la copia MÁS RECIENTE (no se pierde lo último guardado)")
+    datos = _json.loads(ruta.read_text(encoding="utf-8"))
+    datos["inventario"]["productos"][0]["unidad"] = "cajas raras"  # JSON bueno, contenido que no se entiende
+    ruta.write_text(_json.dumps(datos), encoding="utf-8")
+    antes = ruta.read_text(encoding="utf-8")
+    try:
+        silencio(cargar_sesion_segura, str(ruta))
+        comprobar(False, "Un contenido que no se entiende no se trata como archivo roto")
+    except SesionIlegible:
+        comprobar(ruta.read_text(encoding="utf-8") == antes,
+                  "Si el archivo se lee pero no se entiende, se avisa y NO se aparta ni se sobrescribe")
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = Path(carpeta) / "sesion.json"
+    (Path(carpeta) / "copias").write_text("no soy una carpeta", encoding="utf-8")  # las copias no se pueden hacer
+    silencio(escribir_sesion, {"a": 1}, str(ruta))
+    comprobar(_json.loads(ruta.read_text(encoding="utf-8")) == {"a": 1},
+              "Si la copia del día falla, el guardado principal se hace igual")
+a1, a2 = Inventario(), Inventario()
+a1.iva_cobro = 21
+comprobar(a2.iva_cobro == 10, "Los ajustes de IVA son de cada sesión (dos ventanas no se los pisan)")
 _os.environ["GESTION_RESTAURANTE_DATOS"] = "/tmp/otra"
 comprobar(carpeta_datos(Path("/x")) == Path("/tmp/otra"), "La carpeta de datos se puede fijar (pruebas)")
 del _os.environ["GESTION_RESTAURANTE_DATOS"]

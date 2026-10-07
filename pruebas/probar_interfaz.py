@@ -438,13 +438,13 @@ def prueba_editar(at: AppTest) -> None:
     ir_a(at, "Inventario")
     inv = at.session_state["inventario"]
     at.selectbox(key="editar_select").select("Tomate").run()
-    at.checkbox(key="edit_merma_Tomate").check()
+    por_clave(at.checkbox, "edit_merma_Tomate_").check()
     at.button(key="edit_boton_Tomate").click().run()
     comprobar(inv.buscar_producto("Tomate").tiene_merma, "Editar: activar la merma de un producto")
 
     # Cambiar de producto en el desplegable rellena sus propios datos
     at.selectbox(key="editar_select").select("Aceite de oliva").run()
-    comprobar(at.text_input(key="edit_nombre_Aceite de oliva").value == "Aceite de oliva",
+    comprobar(por_clave(at.text_input, "edit_nombre_Aceite de oliva_").value == "Aceite de oliva",
               "Al cambiar de producto se cargan sus datos")
 
     # Producto con UN lote: sus datos de compra se corrigen directamente
@@ -458,7 +458,7 @@ def prueba_editar(at: AppTest) -> None:
     at.button(key="stock_boton_Aceite de oliva").click().run()
     comprobar(kl(at.number_input, "cantidad").value == 15,
               "Tras una salida, 'Editar producto' muestra la cantidad actual (15), no la de antes")
-    at.number_input(key="edit_stock_minimo_Aceite de oliva").set_value(6.0)
+    por_clave(at.number_input, "edit_stock_minimo_Aceite de oliva_").set_value(6.0)
     at.button(key="edit_boton_Aceite de oliva").click().run()
     comprobar(inv.buscar_producto("Aceite de oliva").stock == 15 and inv.buscar_producto("Aceite de oliva").stock_minimo == 6,
               "Guardar solo el stock mínimo no deshace la salida (sigue habiendo 15)")
@@ -468,7 +468,7 @@ def prueba_editar(at: AppTest) -> None:
     kl(at.text_input, "proveedor").input("Aceites Jaén")
     kl(at.checkbox, "tiene_fecha").check().run()
     kl(at.date_input, "fecha").set_value(date.today() + timedelta(days=200))
-    at.text_input(key="edit_categoria_Aceite de oliva").input("Aceites y grasas")
+    por_clave(at.text_input, "edit_categoria_Aceite de oliva_").input("Aceites y grasas")
     at.button(key="edit_boton_Aceite de oliva").click().run()
     aceite = inv.buscar_producto("Aceite de oliva")
     lote = aceite.lotes[0]

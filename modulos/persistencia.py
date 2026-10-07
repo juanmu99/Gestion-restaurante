@@ -133,15 +133,22 @@ def escribir_sesion(datos: dict, ruta: str) -> None:
         f.flush()
         os.fsync(f.fileno())
     if ruta.exists():
-        shutil.copy2(ruta, ruta.with_name(ruta.name + ".bak"))
-    os.replace(temporal, ruta)
+        try:
+            shutil.copy2(ruta, ruta.with_name(ruta.name + ".bak"))
+        except OSError as error:
+            print(f"⚠️  No se ha podido hacer la copia .bak: {error}")
+    os.replace(temporal, ruta)  # a partir de aquí, lo importante ya está guardado
 
-    copias = ruta.parent / "copias"
-    copias.mkdir(exist_ok=True)
-    copia_hoy = copias / f"sesion_{date.today().isoformat()}.json"
-    shutil.copy2(ruta, copia_hoy)  # la de hoy se va actualizando: queda la última del día
-    for vieja in sorted(copias.glob("sesion_*.json"))[:-COPIAS_A_CONSERVAR]:
-        vieja.unlink(missing_ok=True)
+    # Las copias son un extra: si fallan (archivo bloqueado...), el guardado sigue siendo bueno.
+    try:
+        copias = ruta.parent / "copias"
+        copias.mkdir(exist_ok=True)
+        copia_hoy = copias / f"sesion_{date.today().isoformat()}.json"
+        shutil.copy2(ruta, copia_hoy)  # la de hoy se va actualizando: queda la última del día
+        for vieja in sorted(copias.glob("sesion_*.json"))[:-COPIAS_A_CONSERVAR]:
+            vieja.unlink(missing_ok=True)
+    except OSError as error:
+        print(f"⚠️  No se ha podido hacer la copia de seguridad del día: {error}")
 
 
 def guardar_sesion(
@@ -163,26 +170,53 @@ def guardar_sesion(
 
 # ---------- Cargar ----------
 
+class SesionIlegible(Exception):
+    """
+    El archivo de datos se puede leer (no está roto), pero el programa no sabe
+    interpretar su contenido (un dato que no pasa una comprobación, un fallo
+    del programa...). En ese caso NO se aparta ni se sobrescribe nada: hay que
+    revisarlo. El mensaje explica qué hacer.
+    """
+
+
+def _leer_json(ruta: Path) -> dict:
+    # utf-8-sig: acepta también archivos guardados con BOM (Bloc de notas antiguo).
+    with open(ruta, encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
 def cargar_sesion_segura(ruta: str) -> tuple[Optional[Sesion], Optional[str]]:
     """
-    Carga la sesión y, si el archivo está dañado, prueba con la copia
-    sesion.json.bak y luego con las copias diarias (de la más reciente a la
-    más antigua). El archivo dañado se aparta (no se borra) para que no se
-    sobrescriba. Devuelve (sesión o None, aviso para el usuario o None).
+    Carga la sesión. Si el archivo está ROTO (no es un JSON completo: un
+    corte a mitad, un disco dañado...), prueba con las copias de seguridad
+    (sesion.json.bak y las diarias), de la más reciente a la más antigua, y
+    aparta el roto (no lo borra). Devuelve (sesión o None, aviso o None).
+
+    Si el archivo se lee bien pero su contenido no se puede interpretar,
+    lanza SesionIlegible y NO toca nada (así el programa no arranca vacío
+    encima de los datos buenos).
     """
     ruta = Path(ruta)
     if not ruta.exists():
         return None, None
     try:
-        return cargar_sesion(str(ruta)), None
-    except Exception as error:  # noqa: BLE001 -- cualquier fallo al leer = archivo dañado
-        print(f"❌ No se ha podido leer {ruta}: {error!r}")
+        _leer_json(ruta)
+    except (ValueError, UnicodeDecodeError) as error:  # JSON roto
+        print(f"❌ {ruta} está dañado: {error!r}")
+    else:
+        try:
+            return cargar_sesion(str(ruta)), None
+        except Exception as error:  # noqa: BLE001
+            raise SesionIlegible(
+                f"No se han podido abrir los datos guardados ({type(error).__name__}: {error}). No se ha tocado "
+                f"nada: el archivo sigue en {ruta}. Cierra el programa y avisa a quien te lo instaló, con este "
+                f"mensaje. Las copias de seguridad están en la carpeta «copias» de ese mismo sitio."
+            ) from error
     apartado = ruta.with_name(f"sesion_danada_{datetime.now():%Y-%m-%d_%H%M%S}.json")
     shutil.move(str(ruta), apartado)
-    candidatas = [ruta.with_name(ruta.name + ".bak")] + sorted((ruta.parent / "copias").glob("sesion_*.json"), reverse=True)
+    candidatas = [ruta.with_name(ruta.name + ".bak"), *(ruta.parent / "copias").glob("sesion_*.json")]
+    candidatas = sorted((c for c in candidatas if c.exists()), key=lambda c: c.stat().st_mtime, reverse=True)
     for copia in candidatas:
-        if not copia.exists():
-            continue
         try:
             sesion = cargar_sesion(str(copia))
         except Exception:  # noqa: BLE001
@@ -209,9 +243,7 @@ def cargar_sesion(ruta: str) -> Optional[Sesion]:
         print("No hay ninguna sesión guardada todavía.")
         return None
 
-    # utf-8-sig: acepta también archivos guardados con BOM (Bloc de notas antiguo).
-    with open(ruta, encoding="utf-8-sig") as f:
-        datos = json.load(f)
+    datos = _leer_json(Path(ruta))
 
     inventario = Inventario.from_dict(datos["inventario"])
     registro_servicios = RegistroServicios.from_dict(datos["servicios"])

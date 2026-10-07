@@ -983,25 +983,27 @@ class Inventario:
         # Historial de precios: una fila por compra (ver PrecioCompra).
         self.historial_precios: list[PrecioCompra] = []
 
+    # Los ajustes de IVA son de CADA inventario (AJUSTES solo da el valor
+    # inicial): si fueran globales, dos ventanas del programa se los pisarían.
     @property
     def iva_recuperable(self) -> bool:
         """Ajuste del negocio: ¿recupera el IVA de sus compras (régimen general)? Ver AJUSTES."""
-        return AJUSTES["iva_recuperable"]
+        return self.__dict__.setdefault("_iva_recuperable", AJUSTES["iva_recuperable"])
 
     @iva_recuperable.setter
     def iva_recuperable(self, valor: bool) -> None:
-        AJUSTES["iva_recuperable"] = bool(valor)
+        self._iva_recuperable = bool(valor)
 
     @property
     def iva_cobro(self) -> float:
         """IVA que se cobra a los clientes (10 % en catering), para estimar el IVA del trimestre."""
-        return AJUSTES["iva_cobro"]
+        return self.__dict__.setdefault("_iva_cobro", AJUSTES["iva_cobro"])
 
     @iva_cobro.setter
     def iva_cobro(self, valor: float) -> None:
         if valor < 0:
             raise ValueError("El IVA no puede ser negativo.")
-        AJUSTES["iva_cobro"] = float(valor)
+        self._iva_cobro = float(valor)
 
     def agregar_producto(self, producto: Producto) -> None:
         if producto.nombre in self.productos:

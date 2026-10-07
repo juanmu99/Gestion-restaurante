@@ -48,16 +48,22 @@ def _ruta_app_py() -> str:
     return str(base / "app.py")
 
 
-def _puerto_ocupado() -> bool:
-    """True si ya hay algo escuchando en el puerto (normalmente, el programa abierto antes)."""
+def _puerto_ocupado(puerto: int) -> bool:
+    """True si ya hay algo escuchando en ese puerto."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(1)
-        return s.connect_ex((DIRECCION, PUERTO)) == 0
+        return s.connect_ex((DIRECCION, puerto)) == 0
+
+
+# Sin proxy: en ordenadores con un proxy configurado en Windows, las
+# peticiones a 127.0.0.1 podrían ir al proxy y no llegar nunca.
+_SIN_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _servidor_listo(url: str) -> bool:
+    """True si en `url` responde un servidor de Streamlit (el de este programa)."""
     try:
-        with urllib.request.urlopen(f"{url}/_stcore/health", timeout=2) as respuesta:
+        with _SIN_PROXY.open(f"{url}/_stcore/health", timeout=2) as respuesta:
             return respuesta.read().decode().strip() == "ok"
     except OSError:
         return False
@@ -90,20 +96,24 @@ if __name__ == "__main__":
 
     from streamlit.web import cli as stcli
 
-    url = f"http://{DIRECCION}:{PUERTO}"
-
-    if _puerto_ocupado():
-        # Ya está abierto (por ejemplo, se cerró la pestaña pero no el
-        # programa): no se arranca otro, solo se vuelve a abrir la página.
-        print("El programa ya estaba abierto: abriendo el navegador...")
-        webbrowser.open(url)
-        sys.exit(0)
+    puerto = PUERTO
+    url = f"http://{DIRECCION}:{puerto}"
+    if _puerto_ocupado(puerto):
+        if _servidor_listo(url):
+            # Ya está abierto (por ejemplo, se cerró la pestaña pero no el
+            # programa): no se arranca otro, solo se vuelve a abrir la página.
+            print("El programa ya estaba abierto: abriendo el navegador...")
+            webbrowser.open(url)
+            sys.exit(0)
+        # El puerto lo usa OTRO programa: se busca uno libre.
+        puerto = next((p for p in range(PUERTO + 1, PUERTO + 20) if not _puerto_ocupado(p)), PUERTO)
+        url = f"http://{DIRECCION}:{puerto}"
 
     threading.Thread(target=_abrir_navegador, args=(url,), daemon=True).start()
 
     sys.argv = [
         "streamlit", "run", _ruta_app_py(),
-        "--server.port", str(PUERTO),
+        "--server.port", str(puerto),
         "--server.address", DIRECCION,
         "--server.headless", "true",
         "--server.fileWatcherType", "none",

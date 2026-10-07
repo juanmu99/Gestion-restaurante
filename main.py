@@ -34,7 +34,7 @@ from recetario import Recetario, Receta, Menu
 from compras import GestorCompras, ItemCompra
 from dashboard import Dashboard
 from exportador import exportar_todo
-from persistencia import guardar_sesion, cargar_sesion, cargar_sesion_segura, carpeta_datos
+from persistencia import guardar_sesion, cargar_sesion, cargar_sesion_segura, carpeta_datos, SesionIlegible
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
@@ -1435,7 +1435,11 @@ def accion_cargar_sesion():
     global inventario, registro_servicios, recetario, gestor_compras, dashboard, archivo_informes, registro_gastos
     global registro_material
 
-    sesion, aviso = cargar_sesion_segura(RUTA_SESION)
+    try:
+        sesion, aviso = cargar_sesion_segura(RUTA_SESION)
+    except SesionIlegible as error:
+        print(f"❌ {error}")
+        sys.exit(1)
     if aviso:
         print(f"⚠️  {aviso}")
     if sesion is None:
