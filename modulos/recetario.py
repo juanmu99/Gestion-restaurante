@@ -334,11 +334,31 @@ class Recetario:
         self.recetas: dict[str, Receta] = {}
         self.menus: dict[str, Menu] = {}
 
+    @staticmethod
+    def _nombre_libre(nombre: str, existentes: dict, que: str, llamado: str) -> str:
+        """
+        Comprueba que el nombre no está vacío ni repetido (sin distinguir
+        mayúsculas ni espacios de más). Lo devuelve sin espacios sobrantes.
+        que: "una receta" / "un menú"; llamado: "llamada" / "llamado".
+        """
+        nombre = (nombre or "").strip()
+        if not nombre:
+            raise ValueError(f"Ponle un nombre a {que}.")
+        repetido = next((n for n in existentes if n.strip().lower() == nombre.lower()), None)
+        if repetido is not None:
+            raise ValueError(f"Ya existe {que} {llamado} «{repetido}». Ponle otro nombre "
+                             "(si es una versión nueva, por ejemplo «… v2»).")
+        return nombre
+
     def agregar_receta(self, receta: Receta) -> None:
+        # Un nombre repetido SUSTITUÍA la receta sin avisar, y los menús seguían
+        # usando la vieja hasta reiniciar: ahora se rechaza.
+        receta.nombre = self._nombre_libre(receta.nombre, self.recetas, "una receta", "llamada")
         self.recetas[receta.nombre] = receta
         print(f"✅ Receta añadida: {receta.nombre}")
 
     def agregar_menu(self, menu: Menu) -> None:
+        menu.nombre = self._nombre_libre(menu.nombre, self.menus, "un menú", "llamado")
         self.menus[menu.nombre] = menu
         print(f"✅ Menú añadido: {menu.nombre}")
 

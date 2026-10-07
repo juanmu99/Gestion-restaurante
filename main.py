@@ -34,7 +34,7 @@ from recetario import Recetario, Receta, Menu
 from compras import GestorCompras, ItemCompra
 from dashboard import Dashboard
 from exportador import exportar_todo
-from persistencia import guardar_sesion, cargar_sesion
+from persistencia import guardar_sesion, cargar_sesion, cargar_sesion_segura, carpeta_datos
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
@@ -57,7 +57,8 @@ def _carpeta_base() -> Path:
     return Path(__file__).parent
 
 
-RUTA_SESION = str(_carpeta_base() / "datos" / "sesion.json")
+CARPETA_DATOS = carpeta_datos(_carpeta_base())
+RUTA_SESION = str(CARPETA_DATOS / "sesion.json")
 
 
 # --- Estado global de la aplicación (vive mientras el programa esté abierto) ---
@@ -406,7 +407,11 @@ def menu_inventario():
                 if tiene_merma and unidad == "unidades":
                     peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
             iva = pedir_iva()
-            precio = pedir_precio(unidad, stock, iva=iva) or 0.0
+            precio = pedir_precio(unidad, stock, iva=iva)
+            while precio is None and stock > 0:
+                print("⚠️  Con stock inicial hace falta el precio (si no, ese stock costaría 0 €).")
+                precio = pedir_precio(unidad, stock, iva=iva)
+            precio = precio or 0.0
             proveedor = pedir_texto_no_numerico("Proveedor habitual: ")
             stock_minimo = pedir_numero("Stock mínimo: ")
             fecha_caducidad = None
@@ -863,10 +868,14 @@ def menu_servicios():
         if opcion == "1":
             registro_servicios.listar_todos()
         elif opcion == "2":
+            if not recetario.menus:
+                print("⚠️  Crea antes el menú del servicio en el Recetario.")
+                pausa()
+                continue
             fecha = pedir_fecha("Fecha del servicio")
             hora = pedir_hora("Hora del servicio")
             comensales = pedir_entero("Número de comensales: ")
-            menu_nombre = pedir_texto("Nombre del menú: ")
+            menu_nombre = pedir_opcion("Menú", tuple(recetario.menus))
             cliente = pedir_texto("Cliente (opcional): ")
             lugar = pedir_texto("Lugar (opcional): ")
             notas = pedir_texto("Notas (opcional): ")
@@ -880,7 +889,11 @@ def menu_servicios():
                 print(f"❌ {e}")
         elif opcion == "3":
             id_servicio = pedir_entero("ID del servicio a cancelar: ")
-            registro_servicios.cancelar_servicio(id_servicio)
+            if pedir_si_no(f"¿Seguro que quieres cancelar el servicio #{id_servicio}? No se puede deshacer."):
+                try:
+                    registro_servicios.cancelar_servicio(id_servicio)
+                except ValueError as e:
+                    print(f"❌ {e}")
         elif opcion == "4":
             servicios = registro_servicios.servicios_proximos()
             print("✅ No hay servicios próximos." if not servicios else "")
@@ -1234,7 +1247,7 @@ def menu_recetario():
         print("2. Listar menús")
         print("3. Crear receta")
         print("4. Crear menú (combinando recetas existentes)")
-        print("5. Cargar recetas y menú de ejemplo")
+        print("5. (Los datos de ejemplo están en el menú principal, opción 8)")
         print("6. Recomendar menú (según caducidad)")
         print("7. Elaboraciones base (sofritos, fondos, salsas...)")
         print("8. Anotaciones (notas de bases, recetas y menús)")
@@ -1275,7 +1288,13 @@ def menu_recetario():
                     continue
                 ingredientes[producto.nombre] = pedir_cantidad_ingrediente(producto)
             vida = pedir_numero_opcional("Vida útil una vez hecha, en días (vacío si no se indica): ")
-            recetario.agregar_receta(Receta(nombre, categoria, ingredientes, int(vida) if vida else None))
+            if not ingredientes:
+                print("⚠️  Una receta necesita al menos un ingrediente: no se ha creado.")
+            else:
+                try:
+                    recetario.agregar_receta(Receta(nombre, categoria, ingredientes, int(vida) if vida else None))
+                except ValueError as e:
+                    print(f"❌ {e}")
         elif opcion == "4":
             if not recetario.recetas:
                 print("⚠️  Primero crea al menos una receta.")
@@ -1291,13 +1310,15 @@ def menu_recetario():
                     else:
                         recetas_menu.append(receta)
                 if recetas_menu:
-                    recetario.agregar_menu(Menu(nombre_menu, recetas_menu, pedir_consumibles_menu(), pedir_material_menu()))
+                    try:
+                        recetario.agregar_menu(Menu(nombre_menu, recetas_menu, pedir_consumibles_menu(),
+                                                    pedir_material_menu()))
+                    except ValueError as e:
+                        print(f"❌ {e}")
         elif opcion == "5":
-            pan_casero = Receta("Pan casero", "Panadería", {"Harina de trigo": 0.15, "Aceite de oliva": 0.01})
-            ensalada = Receta("Ensalada de tomate", "Entrantes", {"Tomate": 0.1, "Aceite de oliva": 0.005})
-            recetario.agregar_receta(pan_casero)
-            recetario.agregar_receta(ensalada)
-            recetario.agregar_menu(Menu("Menú del día", [pan_casero, ensalada]))
+            # Mezclaba recetas inventadas con las reales: los datos de ejemplo
+            # se cargan ahora solo con el programa vacío (menú principal, opción 8).
+            print("Los datos de ejemplo se cargan desde el menú principal (opción 8), con el programa vacío.")
         elif opcion == "7":
             accion_bases_recetario()
         elif opcion == "8":
@@ -1390,9 +1411,9 @@ def menu_compras():
 
 def accion_exportar_excel():
     global ultima_exportacion
-    carpeta_datos = str(_carpeta_base() / "datos")
+    carpeta = str(CARPETA_DATOS)
     ruta = exportar_todo(
-        inventario, registro_servicios, gestor_compras, carpeta_datos, registro_gastos, recetario, registro_material,
+        inventario, registro_servicios, gestor_compras, carpeta, registro_gastos, recetario, registro_material,
     )
     ultima_exportacion = ruta
     print(f"✅ Exportado a: {ruta}")
@@ -1414,7 +1435,9 @@ def accion_cargar_sesion():
     global inventario, registro_servicios, recetario, gestor_compras, dashboard, archivo_informes, registro_gastos
     global registro_material
 
-    sesion = cargar_sesion(RUTA_SESION)
+    sesion, aviso = cargar_sesion_segura(RUTA_SESION)
+    if aviso:
+        print(f"⚠️  {aviso}")
     if sesion is None:
         return
 
@@ -1443,6 +1466,11 @@ def accion_backup_drive():
 
 
 def accion_cargar_datos_ejemplo():
+    # Solo con el programa vacío: así los datos inventados nunca se mezclan con los reales.
+    if inventario.productos or recetario.recetas or recetario.menus or registro_servicios.servicios \
+            or registro_gastos.gastos or registro_material.materiales:
+        print("⚠️  Los datos de ejemplo solo se pueden cargar con el programa vacío (para no mezclarlos con los tuyos).")
+        return
     inventario.agregar_producto(Producto("Harina de trigo", "Panadería", 1, "kg", 1.2, "Harinas del Sur", stock_minimo=2))
     inventario.agregar_producto(Producto("Aceite de oliva", "Aceites", 20, "litros", 4.5, "Oleícola Andaluza", stock_minimo=5))
     # Fechas relativas a hoy, para que los datos de ejemplo no "caduquen" con el tiempo.

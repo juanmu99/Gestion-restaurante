@@ -93,6 +93,10 @@ class RegistroGastos:
         self.gastos: list[Gasto] = []
 
     def agregar_gasto(self, gasto: Gasto) -> None:
+        usados = {g.id for g in self.gastos}  # el número no se puede repetir (ver RegistroServicios)
+        if gasto.id in usados:
+            gasto.id = max(usados) + 1
+        Gasto._siguiente_id = max(Gasto._siguiente_id, gasto.id + 1)
         self.gastos.append(gasto)
         print(f"💶 Gasto registrado: {gasto}")
 

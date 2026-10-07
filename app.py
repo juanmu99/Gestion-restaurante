@@ -21,9 +21,10 @@ Conceptos nuevos en este archivo:
   un botón, en vez de recargar la página en cada campo individual.
 """
 
+import os
 import sys
 from pathlib import Path
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 # insert(0, ...) y no append(): así Python busca PRIMERO en nuestra carpeta
@@ -42,7 +43,9 @@ from servicios import RegistroServicios, Servicio
 from recetario import Recetario, Receta, Menu
 from compras import GestorCompras
 from exportador import exportar_todo
-from persistencia import guardar_sesion, cargar_sesion, Sesion
+from persistencia import (
+    Sesion, carpeta_datos, cargar_sesion_segura, escribir_sesion, firma, sesion_a_dict,
+)
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
@@ -66,7 +69,8 @@ def _carpeta_base() -> Path:
     return Path(__file__).parent
 
 
-RUTA_SESION = str(_carpeta_base() / "datos" / "sesion.json")
+CARPETA_DATOS = carpeta_datos(_carpeta_base())
+RUTA_SESION = str(CARPETA_DATOS / "sesion.json")
 
 # set_page_config DEBE ser el primer comando de Streamlit del script.
 st.set_page_config(page_title="Gestión Restaurante", page_icon="🍽️", layout="wide")
@@ -206,7 +210,9 @@ def inicializar_estado() -> None:
     if "inventario" in st.session_state:
         return
 
-    sesion = cargar_sesion(RUTA_SESION) if Path(RUTA_SESION).exists() else None
+    sesion, aviso = cargar_sesion_segura(RUTA_SESION)
+    if aviso:
+        avisar("warning", aviso)
     if sesion is None:
         sesion = Sesion(Inventario(), RegistroServicios(), Recetario(), GestorCompras(), ArchivoInformes())
 
@@ -219,6 +225,67 @@ def inicializar_estado() -> None:
     st.session_state.registro_material = sesion.registro_material
     st.session_state.ultima_exportacion = None
     st.session_state.receta_ingredientes = {}  # ingredientes acumulados al crear una receta
+    # Guardado automático: huella de lo último guardado y fecha del archivo en
+    # disco en ese momento (para notar si OTRA ventana del programa lo cambió).
+    st.session_state._firma_guardada = firma(_datos_sesion())
+    st.session_state._mtime_guardado = _mtime_sesion()
+    st.session_state._hora_guardado = None
+
+
+def _datos_sesion() -> dict:
+    ss = st.session_state
+    return sesion_a_dict(ss.inventario, ss.registro_servicios, ss.recetario, ss.gestor_compras, ss.archivo_informes,
+                         ss.registro_gastos, ss.registro_material)
+
+
+def _mtime_sesion() -> Optional[float]:
+    ruta = Path(RUTA_SESION)
+    return ruta.stat().st_mtime if ruta.exists() else None
+
+
+def autoguardar(zona) -> None:
+    """
+    GUARDADO AUTOMÁTICO: se ejecuta al final de cada vuelta del programa. Si
+    los datos han cambiado desde el último guardado, se escriben en disco
+    (de forma segura, con copia: ver persistencia.escribir_sesion).
+
+    Si el archivo lo ha cambiado OTRA ventana del programa desde la última
+    vez, no se sobrescribe sin preguntar: se avisa en la barra lateral.
+    `zona` es el hueco de la barra lateral donde se muestra el estado.
+    """
+    ss = st.session_state
+    datos = _datos_sesion()
+    huella = firma(datos)
+    if huella != ss._firma_guardada:
+        if _mtime_sesion() != ss._mtime_guardado:
+            with zona.container():
+                st.error("⚠️ Los datos se han cambiado desde **otra ventana** del programa. Para no perder nada, "
+                         "esta ventana ha dejado de guardar.")
+                if st.button("🔄 Cargar los datos de la otra ventana (se pierde lo de esta)", key="conflicto_recargar"):
+                    for clave in list(ss.keys()):
+                        del ss[clave]
+                    st.rerun()
+                if st.button("💾 Guardar los de esta ventana (se pierde lo de la otra)", key="conflicto_guardar"):
+                    ss._mtime_guardado = _mtime_sesion()
+                    st.rerun()
+            return
+        try:
+            escribir_sesion(datos, RUTA_SESION)
+        except OSError as error:
+            zona.error(f"❌ No se han podido guardar los cambios: {error}. Comprueba que hay espacio en el disco.")
+            return
+        ss._firma_guardada = huella
+        ss._mtime_guardado = _mtime_sesion()
+        ss._hora_guardado = datetime.now()
+    hora = f" · {ss._hora_guardado:%H:%M:%S}" if ss._hora_guardado else ""
+    zona.caption(f"💾 Los cambios se guardan solos{hora}")
+
+
+def _app_vacia() -> bool:
+    """True si todavía no hay ningún dato (ni productos, ni recetas, ni servicios, ni gastos, ni material)."""
+    ss = st.session_state
+    return not (ss.inventario.productos or ss.recetario.recetas or ss.recetario.menus
+                or ss.registro_servicios.servicios or ss.registro_gastos.gastos or ss.registro_material.materiales)
 
 
 def cargar_datos_ejemplo() -> None:
@@ -411,6 +478,12 @@ AVISO_FISCAL = (
 )
 
 
+def _huella(*valores) -> str:
+    """Código corto que cambia si cambia cualquiera de los valores (para las keys de los widgets)."""
+    import hashlib
+    return hashlib.md5(repr(valores).encode("utf-8")).hexdigest()[:8]
+
+
 def _criterio_rentabilidad() -> str:
     """'sin IVA' o 'con IVA': cómo se calcula el coste de los servicios para su margen (Ajustes)."""
     return "sin IVA" if st.session_state.inventario.iva_recuperable else "con IVA"
@@ -502,7 +575,7 @@ def _campos_entrada(producto: Producto, k, cantidad: Optional[float] = None) -> 
             st.caption(f"La última vez: {_num(producto.peso_unitario)} kg por unidad.")
     fecha = None
     if not producto.es_consumible() and st.checkbox("¿Este lote tiene fecha de caducidad?", key=k("tiene_fecha")):
-        fecha = st.date_input("Fecha de caducidad de este lote", key=k("fecha"))
+        fecha = st.date_input("Fecha de caducidad de este lote", key=k("fecha"), format="DD/MM/YYYY")
     return {"precio": precio, "proveedor": proveedor, "peso": peso, "fecha": fecha, "necesita_peso": necesita_peso}
 
 
@@ -517,7 +590,7 @@ def _filas_lotes(producto: Producto) -> list[dict]:
         else:
             estado = f"Caduca en {dias} día(s)"
         fila = {
-            "Lote": l.id, "Cantidad": f"{_num(l.cantidad)} {producto.unidad}",
+            "Lote": str(l.id), "Cantidad": f"{_num(l.cantidad)} {producto.unidad}",
             "Precio (€, con IVA)": _num(l.precio_unitario), "IVA": nombre_iva(l.iva).split(" (")[0],
             "Valor (€)": _num(l.valor()), "Proveedor": l.proveedor, "Entrada": l.fecha_entrada.strftime("%d/%m/%Y"),
         }
@@ -788,7 +861,7 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
     iva = _elegir_iva(f"add_iva_{v}")
     c3, c4 = st.columns(2)
     with c3:
-        precio = _campo_precio(unidad, stock, lambda campo: f"add_{campo}_{v}", iva=iva) or 0.0
+        precio = _campo_precio(unidad, stock, lambda campo: f"add_{campo}_{v}", iva=iva)
     stock_minimo = c4.number_input("Stock mínimo", min_value=0.0, step=0.1, key=f"add_stock_minimo_{v}")
     proveedor = st.text_input("Proveedor habitual", key=f"add_proveedor_{v}")
     fecha_caducidad = None
@@ -798,17 +871,25 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
         pass  # los consumibles no caducan
     elif stock > 0:
         if st.checkbox("¿Este primer lote tiene fecha de caducidad?", key=f"add_tiene_caducidad_{v}"):
-            fecha_caducidad = st.date_input("Fecha de caducidad", key=f"add_fecha_{v}")
+            fecha_caducidad = st.date_input("Fecha de caducidad", key=f"add_fecha_{v}", format="DD/MM/YYYY")
     else:
         st.caption("Sin stock inicial: la caducidad se indicará en cada compra (cada compra es un lote).")
 
     if st.button("Añadir producto", type="primary", key=f"add_boton_{v}"):
         nombre = nombre.strip()
+        repetido = next((n for n in inv.productos if n.lower() == nombre.lower()), None)
         if not nombre:
             st.error("Ponle un nombre al producto.")
-        elif nombre in inv.productos:
-            st.error(f"Ya existe un producto llamado '{nombre}'. Para añadir otra compra usa 'Actualizar stock'.")
+        elif repetido is not None:
+            otro = inv.buscar_producto(repetido)
+            lista = {"alimento": "Alimentos", "consumible": "Consumibles", "mantenimiento": "Limpieza y mantenimiento"}
+            st.error(f"Ya existe un producto llamado '{repetido}' (en la lista {lista[otro.tipo]}). "
+                     "Para añadir otra compra usa 'Actualizar stock' en esa lista.")
+        elif stock > 0 and precio is None:
+            # Sin precio, el lote entraba a 0 € y todo lo que saliera de él costaría 0 €.
+            st.error("Indica el precio de este stock inicial (lo que te costó).")
         else:
+            precio = precio or 0.0
             try:
                 inv.agregar_producto(Producto(
                     nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad,
@@ -877,7 +958,12 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             lote = producto.buscar_lote(_elegir_lote(
                 producto, f"Este producto tiene {len(producto.lotes)} lotes: ¿cuál corriges?", k("lote"),
             ))
-        kl = lambda campo: f"edit_lote_{campo}_{nombre_sel}_{lote.id}"
+        # La "huella" del lote va en la key: si el lote cambia desde otra
+        # pestaña (una salida, una compra corregida...), los campos se
+        # vuelven a rellenar con los datos ACTUALES. Sin ella, Streamlit
+        # conservaría los valores de antes y al guardar se deshaceria el cambio.
+        huella = _huella(lote.cantidad, lote.precio_base, lote.iva, lote.proveedor, lote.fecha_caducidad, lote.peso_unitario)
+        kl = lambda campo: f"edit_lote_{campo}_{nombre_sel}_{lote.id}_{huella}"
         c3, c4 = st.columns(2)
         datos_lote["cantidad"] = c3.number_input(
             f"Cantidad ({producto.unidad})", min_value=0.0, value=float(lote.cantidad), step=0.1, key=kl("cantidad"),
@@ -898,8 +984,7 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             )
             datos_lote["fecha"] = st.date_input(
                 "Fecha de caducidad", value=lote.fecha_caducidad or date.today(), key=kl("fecha"),
-                disabled=not datos_lote["tiene_fecha"],
-            )
+                disabled=not datos_lote["tiene_fecha"], format="DD/MM/YYYY")
         st.caption(
             "Corregir no es un movimiento de stock: no queda en el historial. Si algo se ha gastado o tirado, "
             "regístralo como salida en 'Actualizar stock'. Poner la cantidad a 0 elimina este lote."
@@ -1111,7 +1196,7 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
         "Fecha": c.fecha.strftime("%d/%m/%Y"), "Proveedor": c.proveedor,
         "Cantidad": f"{_num(c.cantidad)} {c.unidad}", f"Precio sin IVA (€/{unidad_txt})": _num(round(c.precio_base, 4)),
         "IVA": nombre_iva(c.iva).split(" (")[0], f"Precio con IVA (€/{unidad_txt})": _num(round(c.precio_con_iva, 4)),
-        "Total pagado (€)": f"{c.total:.2f}", "Lote": c.lote_id or "—",
+        "Total pagado (€)": f"{c.total:.2f}", "Lote": str(c.lote_id or "—"),
         "Origen": "Stock inicial" if c.origen == "inicial" else "Compra",
     } for c in reversed(compras)], width="stretch", hide_index=True)
 
@@ -1124,7 +1209,8 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
             for c in reversed(compras)
         }
         compra = opciones[st.selectbox("Compra", list(opciones), key=f"corregir_compra_{nombre}")]
-        kc = lambda campo: f"corregir_compra_{campo}_{nombre}_{compras.index(compra)}"
+        huella = _huella(compra.precio_base, compra.iva, compra.proveedor)
+        kc = lambda campo: f"corregir_compra_{campo}_{nombre}_{compras.index(compra)}_{huella}"
         c1, c2 = st.columns(2)
         nuevo_precio = c1.number_input(f"Precio correcto (€/{unidad_txt}, con IVA)", min_value=0.0, step=0.1,
                                        value=float(compra.precio_unitario), key=kc("precio"))
@@ -1231,7 +1317,7 @@ def _pestana_limpiar(inv: Inventario) -> None:
                                   step=0.1, key=k("peso_limpio")) or 0.0
     fecha_caducidad = None
     if st.checkbox("Poner fecha de caducidad al producto limpio", key=k("tiene_fecha")):
-        fecha_caducidad = st.date_input("Fecha de caducidad del producto limpio", key=k("fecha"))
+        fecha_caducidad = st.date_input("Fecha de caducidad del producto limpio", key=k("fecha"), format="DD/MM/YYYY")
 
     st.markdown("**Derivados que se aprovechan**")
     st.caption("Una fila por cada parte que se reaprovecha, con su peso. Lo que no pongas aquí se registra como merma.")
@@ -1323,7 +1409,7 @@ def _pestana_limpiezas(inv: Inventario) -> None:
     st.dataframe([{
         "Fecha": l.fecha.strftime("%d/%m/%Y"),
         "Producto": l.producto_origen,
-        "Lote": l.lote_origen or "—",
+        "Lote": str(l.lote_origen or "—"),
         "Cantidad": f"{l.cantidad_origen:g} {l.unidad_origen}",
         "Bruto (kg)": round(l.peso_bruto_kg, 3),
         "Producto limpio": l.producto_limpio,
@@ -1403,7 +1489,7 @@ def _seccion_elaboraciones() -> None:
                 "Prevista": f"{_num(p.prevista)} {p.unidad}", "Obtenida": f"{_num(p.obtenida)} {p.unidad}",
                 "Diferencia": f"{p.diferencia:+g} {p.unidad}",
                 "Coste (€)": f"{p.coste:.2f}", "Coste/unidad (€)": f"{p.coste_por_unidad:.2f}",
-                "Lote": p.lote_id or "—",
+                "Lote": str(p.lote_id or "—"),
             } for p in preparaciones], width="stretch", hide_index=True)
             st.caption("Prevista = lo que debía salir según la fórmula. Obtenida = lo que salió de verdad.")
 
@@ -1413,11 +1499,12 @@ def _seccion_elaboraciones() -> None:
             return
         opciones = {f"{t.receta} · {t.descripcion()}": t for t in sorted(reg.tandas, key=lambda t: (t.receta, t.id))}
         tanda = opciones[st.selectbox("Tanda", list(opciones), key="elab_corregir_select")]
-        k = lambda campo: f"elab_corr_{campo}_{tanda.id}"
+        huella = _huella(tanda.raciones, tanda.fecha_caducidad)  # ver _pestana_editar
+        k = lambda campo: f"elab_corr_{campo}_{tanda.id}_{huella}"
         st.caption("Corregir sirve para arreglar un dato mal apuntado. No cuenta como consumo ni como desperdicio.")
         c1, c2 = st.columns(2)
         raciones = c1.number_input("Raciones que quedan", min_value=0.0, step=1.0, value=float(tanda.raciones), key=k("raciones"))
-        caducidad = c2.date_input("Caducidad", value=tanda.fecha_caducidad, key=k("caducidad"))
+        caducidad = c2.date_input("Caducidad", value=tanda.fecha_caducidad, key=k("caducidad"), format="DD/MM/YYYY")
         b1, b2 = st.columns(2)
         if b1.button("Guardar corrección", type="primary", key=k("guardar")):
             reg.corregir(tanda.id, raciones=raciones, fecha_caducidad=caducidad)
@@ -1437,10 +1524,10 @@ def _preparar_elaboracion(inv: Inventario, rec: Recetario) -> None:
     _mostrar_nota(receta)
     c1, c2, c3 = st.columns(3)
     raciones = c1.number_input("Raciones", min_value=0.0, step=1.0, value=None, placeholder="0", key=k("raciones")) or 0.0
-    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"))
+    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"), format="DD/MM/YYYY")
     propuesta = receta.caducidad_propuesta(fecha_prep)
     # La key lleva la fecha de preparación: si se cambia, se vuelve a proponer la caducidad.
-    caducidad = c3.date_input("Caduca el", value=propuesta, key=k(f"caducidad_{fecha_prep.isoformat()}"))
+    caducidad = c3.date_input("Caduca el", value=propuesta, key=k(f"caducidad_{fecha_prep.isoformat()}"), format="DD/MM/YYYY")
     if receta.vida_util_dias is not None:
         st.caption(f"'{nombre}' dura {receta.vida_util_dias} día(s) una vez hecha: se propone la caducidad según eso.")
     else:
@@ -1489,9 +1576,9 @@ def _preparar_base(inv: Inventario, rec: Recetario) -> None:
     c1, c2, c3 = st.columns(3)
     prevista = c1.number_input(f"Cantidad a preparar ({producto.unidad})", min_value=0.0, step=0.5, value=None,
                                placeholder="0", key=k("prevista")) or 0.0
-    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"))
+    fecha_prep = c2.date_input("Preparada el", value=date.today(), key=k("fecha_prep"), format="DD/MM/YYYY")
     caducidad = c3.date_input("Caduca el", value=producto.caducidad_propuesta(fecha_prep),
-                              key=k(f"caducidad_{fecha_prep.isoformat()}"))
+                              key=k(f"caducidad_{fecha_prep.isoformat()}"), format="DD/MM/YYYY")
     if producto.vida_util_dias is None:
         st.caption(f"'{nombre}' no tiene vida útil: indica la caducidad a mano (puedes ponérsela en el Recetario).")
     if prevista <= 0:
@@ -1592,7 +1679,9 @@ def _seccion_material() -> None:
     with tab_edit:
         nombre_sel = st.selectbox("Material a editar", nombres, key="mat_editar_select")
         material = reg.buscar(nombre_sel)
-        k = lambda campo: f"mat_edit_{campo}_{nombre_sel}"
+        huella = _huella(material.nombre, material.categoria, material.cantidad_total, material.precio_reposicion,
+                         material.proveedor)  # ver _pestana_editar
+        k = lambda campo: f"mat_edit_{campo}_{nombre_sel}_{huella}"
         c1, c2 = st.columns(2)
         nuevo_nombre = c1.text_input("Nombre", value=material.nombre, key=k("nombre"))
         categoria = c2.text_input("Categoría", value=material.categoria, key=k("categoria"))
@@ -1899,7 +1988,7 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
         if not es_consumible and comprada > usada and st.checkbox(
             "Lo que sobra tiene fecha de caducidad", key=k("tiene_fecha")
         ):
-            fecha = st.date_input("Fecha de caducidad", key=k("fecha"))
+            fecha = st.date_input("Fecha de caducidad", key=k("fecha"), format="DD/MM/YYYY")
         if comprada > 0 and usada > comprada:
             st.error("Lo usado no puede ser más que lo comprado.")
         nuevo = {"concepto": f"{nombre} (compra no prevista)", "categoria": "Otros", "importe": importe,
@@ -2085,6 +2174,29 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
     st.caption("Pon 0 para quitar el precio de cobro.")
 
 
+def _texto_servicio(s: Servicio) -> str:
+    """'#3 · 12/10/2026 21:00 · Menú del día · García' (para los desplegables de servicios)."""
+    cliente = f" · {s.cliente}" if s.cliente else ""
+    return f"#{s.id} · {s.fecha.strftime('%d/%m/%Y')} {s.hora.strftime('%H:%M')} · {s.menu}{cliente}"
+
+
+def _arreglar_menus_inexistentes(serv: RegistroServicios, rec: Recetario) -> None:
+    """Servicios pendientes cuyo menú ya no existe (o se escribió mal): se avisa y se deja elegir otro."""
+    malos = [s for s in serv.servicios if s.estado in ("pendiente", "confirmado") and rec.buscar_menu(s.menu) is None]
+    for s in malos:
+        with st.container(border=True):
+            st.warning(f"⚠️ El servicio **{_texto_servicio(s)}** tiene un menú que no existe en el Recetario "
+                       f"(«{s.menu}»): no cuenta en la lista de la compra ni en la rentabilidad.")
+            if rec.menus:
+                c1, c2 = st.columns([3, 1])
+                nuevo = c1.selectbox("Menú correcto", list(rec.menus), index=None, placeholder="Elige el menú...",
+                                     key=f"arreglar_menu_{s.id}")
+                if c2.button("Cambiar menú", key=f"arreglar_menu_boton_{s.id}", disabled=not nuevo):
+                    s.menu = nuevo
+                    avisar("success", f"Menú del servicio #{s.id} cambiado a «{nuevo}».")
+                    st.rerun()
+
+
 def pagina_servicios() -> None:
     st.header("📅 Servicios")
     serv = st.session_state.registro_servicios
@@ -2101,6 +2213,7 @@ def pagina_servicios() -> None:
         st.dataframe(filas, width="stretch", hide_index=True)
     else:
         st.info("No hay servicios registrados.")
+    _arreglar_menus_inexistentes(serv, rec)
 
     st.divider()
     tab_add, tab_cancel, tab_completar, tab_material, tab_rentabilidad = st.tabs(
@@ -2113,12 +2226,16 @@ def pagina_servicios() -> None:
         _pestana_rentabilidad(serv, inv, rec)
 
     with tab_add:
+        if not rec.menus:
+            st.info("Para añadir un servicio, crea antes su menú en el Recetario.")
         with st.form("form_add_servicio", clear_on_submit=True):
             c1, c2 = st.columns(2)
-            fecha = c1.date_input("Fecha")
+            fecha = c1.date_input("Fecha", format="DD/MM/YYYY")
             hora = c2.time_input("Hora")
             comensales = st.number_input("Comensales", min_value=1, step=1)
-            menu_nombre = st.text_input("Nombre del menú")
+            # El menú se ELIGE de los que existen: escrito a mano, una tilde o
+            # un espacio de más dejaban el servicio fuera de todos los cálculos.
+            menu_nombre = st.selectbox("Menú", list(rec.menus), index=None, placeholder="Elige el menú...")
             c5, c6 = st.columns(2)
             cliente = c5.text_input("Cliente (opcional)", placeholder="Ej: Familia García")
             lugar = c6.text_input("Lugar (opcional)", placeholder="Ej: Finca Los Olivos, Écija")
@@ -2134,24 +2251,36 @@ def pagina_servicios() -> None:
                 precio_cobrado = None
                 if precio > 0:
                     precio_cobrado = round(precio * comensales, 2) if forma_precio == "Por comensal" else precio
-                try:
-                    serv.agregar_servicio(Servicio(
-                        fecha, hora, int(comensales), menu_nombre, notas, precio_cobrado=precio_cobrado,
-                        cliente=cliente, lugar=lugar,
-                    ))
-                    st.success("Servicio añadido.")
-                except ValueError as e:
-                    st.error(str(e))
+                if not menu_nombre:
+                    st.error("Elige el menú del servicio.")
+                else:
+                    try:
+                        nuevo = Servicio(
+                            fecha, hora, int(comensales), menu_nombre, notas, precio_cobrado=precio_cobrado,
+                            cliente=cliente, lugar=lugar,
+                        )
+                        serv.agregar_servicio(nuevo)
+                        avisar("success", f"Servicio #{nuevo.id} añadido: {fecha.strftime('%d/%m/%Y')}, "
+                                          f"{int(comensales)} comensales, {menu_nombre}.")
+                        st.rerun()  # para que la tabla de arriba y las demás pestañas ya lo vean
+                    except ValueError as e:
+                        st.error(str(e))
 
     with tab_cancel:
-        if not serv.servicios:
-            st.info("No hay servicios.")
+        # Solo los que aún no se han hecho: uno completado ya gastó su stock y sus costes son reales.
+        cancelables = sorted((s for s in serv.servicios if s.estado in ("pendiente", "confirmado")),
+                             key=lambda s: (s.fecha, s.hora))
+        if not cancelables:
+            st.info("No hay servicios pendientes que cancelar.")
         else:
-            opciones = {f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}": s.id for s in serv.servicios}
-            elegido = st.selectbox("Servicio a cancelar", list(opciones.keys()), key="cancelar_select")
-            if st.button("Cancelar servicio"):
+            opciones = {_texto_servicio(s): s.id for s in cancelables}
+            elegido = st.selectbox("Servicio a cancelar", list(opciones.keys()), key="cancelar_select",
+                                   index=None, placeholder="Elige el servicio...")
+            confirmar = st.checkbox("Sí, quiero cancelar este servicio (no se puede deshacer)", key="cancelar_confirmar")
+            if st.button("Cancelar servicio", disabled=not (elegido and confirmar)):
                 serv.cancelar_servicio(opciones[elegido])
-                avisar("success", "Servicio cancelado.")
+                avisar("success", f"Servicio {elegido} cancelado.")
+                vaciar_campos("cancelar_")
                 st.rerun()
 
     with tab_completar:
@@ -2401,7 +2530,7 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
     st.markdown("**🔁 Repetir este servicio**")
     st.caption("Crea un servicio nuevo con el mismo menú, comensales, precio, cliente y lugar.")
     c3, c4, c5 = st.columns([2, 2, 1])
-    fecha = c3.date_input("Fecha", key=k("repetir_fecha"))
+    fecha = c3.date_input("Fecha", key=k("repetir_fecha"), format="DD/MM/YYYY")
     hora = c4.time_input("Hora", value=servicio.hora, key=k("repetir_hora"))
     if c5.button("Repetir", key=k("repetir")):
         nuevo = historial.repetir_servicio(st.session_state.registro_servicios, servicio, fecha, hora)
@@ -2430,7 +2559,7 @@ def _editor_consumibles(inv: Inventario, clave: str, actuales: dict[str, float])
         return {}
     elegidos = st.multiselect(
         "🧻 Consumibles por comensal (opcional)", disponibles,
-        default=[n for n in actuales if n in disponibles], key=f"{clave}_consumibles",
+        default=[n for n in actuales if n in disponibles], key=f"{clave}_consumibles", placeholder="Elige consumibles...",
         help="Lo que se gasta por cada comensal y no es comida: servilletas, vasos desechables...",
     )
     resultado = {}
@@ -2454,7 +2583,7 @@ def _editor_material(clave: str, actuales: dict[str, float]) -> dict[str, float]
         return {}
     elegidos = st.multiselect(
         "🍽️ Material por comensal (opcional)", disponibles,
-        default=[n for n in actuales if n in disponibles], key=f"{clave}_materiales",
+        default=[n for n in actuales if n in disponibles], key=f"{clave}_materiales", placeholder="Elige el material...",
         help="Platos, copas, cubiertos... por cada comensal. Sirve para proponer la lista de carga del servicio.",
     )
     resultado = {}
@@ -2585,12 +2714,16 @@ def pagina_recetario() -> None:
             # el radio podría arrastrar un valor ("g") que ya no es una
             # opción válida al cambiar a un ingrediente en litros/ml.
             if producto_ing.unidad in ("kg", "g"):
+                # Se propone la unidad del propio producto (antes siempre "kg":
+                # escribir 5 para un azafrán en gramos guardaba 5.000 g).
                 unidad_elegida = st.radio(
-                    "Unidad para esta cantidad", ("kg", "g"), key=f"unidad_ing_{nombre_ing}", horizontal=True
+                    "Unidad para esta cantidad", ("kg", "g"), key=f"unidad_ing_{nombre_ing}", horizontal=True,
+                    index=("kg", "g").index(producto_ing.unidad),
                 )
             elif producto_ing.unidad in ("litros", "ml"):
                 unidad_elegida = st.radio(
-                    "Unidad para esta cantidad", ("litros", "ml"), key=f"unidad_ing_{nombre_ing}", horizontal=True
+                    "Unidad para esta cantidad", ("litros", "ml"), key=f"unidad_ing_{nombre_ing}", horizontal=True,
+                    index=("litros", "ml").index(producto_ing.unidad),
                 )
             else:
                 unidad_elegida = producto_ing.unidad
@@ -2613,16 +2746,26 @@ def pagina_recetario() -> None:
 
             if st.session_state.receta_ingredientes:
                 st.write("Ingredientes añadidos hasta ahora:")
-                st.json(st.session_state.receta_ingredientes)
+                st.dataframe([{
+                    "Ingrediente": n,
+                    "Por comensal": f"{_num(c)} {inv.buscar_producto(n).unidad if inv.buscar_producto(n) else ''}",
+                } for n, c in st.session_state.receta_ingredientes.items()], width="stretch", hide_index=True)
+                if st.button("Empezar de nuevo (quitar los ingredientes añadidos)", key="receta_vaciar"):
+                    st.session_state.receta_ingredientes = {}
+                    st.rerun()
 
-            with st.form("form_finalizar_receta", clear_on_submit=True):
-                nombre_receta = st.text_input("Nombre de la receta")
-                categoria_receta = st.text_input("Categoría")
+            # Sin clear_on_submit: si falta algo, lo escrito NO se borra. Al
+            # guardar bien, se cambia la "versión" de las keys y el formulario sale vacío.
+            vr = st.session_state.setdefault("receta_form_version", 0)
+            with st.form("form_finalizar_receta"):
+                nombre_receta = st.text_input("Nombre de la receta", key=f"receta_nombre_{vr}")
+                categoria_receta = st.text_input("Categoría", key=f"receta_categoria_{vr}")
                 vida_util = st.number_input(
                     "Vida útil una vez hecha, en días (opcional, 0 = sin indicar)", min_value=0, step=1,
                     help="Cuántos días dura el plato preparado. Sirve para proponer la caducidad de las elaboraciones.",
+                    key=f"receta_vida_{vr}",
                 )
-                notas_receta = st.text_area("Anotaciones (opcional)",
+                notas_receta = st.text_area("Anotaciones (opcional)", key=f"receta_notas_{vr}",
                                             placeholder="Cómo se hace, trucos, emplatado... para tus compañeros")
                 crear = st.form_submit_button("Guardar receta", type="primary")
                 if crear:
@@ -2634,17 +2777,23 @@ def pagina_recetario() -> None:
                         nueva = Receta(nombre_receta, categoria_receta, dict(st.session_state.receta_ingredientes),
                                        vida_util_dias=int(vida_util) or None)
                         nueva.poner_nota(notas_receta)
-                        rec.agregar_receta(nueva)
-                        st.session_state.receta_ingredientes = {}
-                        avisar("success", f"Receta '{nombre_receta}' creada.")
-                        st.rerun()
+                        try:
+                            rec.agregar_receta(nueva)
+                        except ValueError as e:
+                            st.error(str(e))
+                        else:
+                            st.session_state.receta_ingredientes = {}
+                            st.session_state.receta_form_version = vr + 1
+                            avisar("success", f"Receta '{nueva.nombre}' creada.")
+                            st.rerun()
 
     with tab_crear_menu:
         if not rec.recetas:
             st.warning("Crea al menos una receta primero.")
         else:
             nombre_menu = st.text_input("Nombre del menú", key="nombre_menu_input")
-            recetas_elegidas = st.multiselect("Recetas a incluir", list(rec.recetas.keys()), key="recetas_multiselect")
+            recetas_elegidas = st.multiselect("Recetas a incluir", list(rec.recetas.keys()), key="recetas_multiselect",
+                                              placeholder="Elige las recetas...")
             consumibles = _editor_consumibles(inv, "nuevo_menu", {})
             materiales = _editor_material("nuevo_menu", {})
             notas_menu = st.text_area("Anotaciones (opcional)", key="nuevo_menu_notas",
@@ -2656,11 +2805,15 @@ def pagina_recetario() -> None:
                     recetas_obj = [rec.recetas[n] for n in recetas_elegidas]
                     nuevo_menu = Menu(nombre_menu, recetas_obj, consumibles, materiales)
                     nuevo_menu.poner_nota(notas_menu)
-                    rec.agregar_menu(nuevo_menu)
-                    avisar("success", f"Menú '{nombre_menu}' creado.")
-                    for prefijo in ("nombre_menu_input", "recetas_multiselect", "nuevo_menu_"):
-                        vaciar_campos(prefijo)
-                    st.rerun()
+                    try:
+                        rec.agregar_menu(nuevo_menu)
+                    except ValueError as e:
+                        st.error(str(e))
+                    else:
+                        avisar("success", f"Menú '{nuevo_menu.nombre}' creado.")
+                        for prefijo in ("nombre_menu_input", "recetas_multiselect", "nuevo_menu_"):
+                            vaciar_campos(prefijo)
+                        st.rerun()
 
     with tab_recomendar:
         if not rec.menus:
@@ -2698,6 +2851,7 @@ def _editor_formula(inv: Inventario, clave: str, actuales: dict[str, float], exc
     disponibles = [p.nombre for p in inv.alimentos() if p.nombre != excluir]
     elegidos = st.multiselect(
         "Ingredientes", disponibles, default=[n for n in actuales if n in disponibles], key=f"{clave}_ingredientes",
+        placeholder="Elige los ingredientes...",
         help="Pueden ser otras elaboraciones base (un fondo dentro de una salsa).",
     )
     resultado = {}
@@ -2838,7 +2992,7 @@ def pagina_compras() -> None:
             cantidad_real = st.number_input(
                 f"Cantidad realmente comprada (en {item_marcar.unidad})",
                 min_value=0.0, value=float(item_marcar.cantidad), step=0.1,
-                key=f"cantidad_real_{nombre_marcar}",
+                key=f"cantidad_real_{nombre_marcar}_{_huella(item_marcar.cantidad)}",
             )
             producto_marcar = inv.buscar_producto(nombre_marcar)
             if producto_marcar is None:
@@ -2896,7 +3050,7 @@ def pagina_gastos() -> None:
         categoria = c2.selectbox("Categoría", Gasto.CATEGORIAS, key=k("categoria"))
         c3, c4 = st.columns(2)
         importe = c3.number_input("Importe (€)", min_value=0.0, step=1.0, key=k("importe"))
-        fecha = c4.date_input("Fecha", key=k("fecha"))
+        fecha = c4.date_input("Fecha", key=k("fecha"), format="DD/MM/YYYY")
         general = "Gasto general del negocio (no es de un servicio)"
         opciones = {general: None}
         for s in sorted(serv.servicios, key=lambda s: (s.fecha, s.hora), reverse=True):
@@ -2943,9 +3097,19 @@ def pagina_gastos() -> None:
 def pagina_exportar() -> None:
     st.header("📁 Exportar y backup")
 
+    st.subheader("Dónde se guardan tus datos")
+    st.write("Los cambios se guardan **solos**, al momento. Además, cada día se deja una copia de seguridad con fecha "
+             f"(se conservan las últimas 30). Todo está en esta carpeta:")
+    st.code(str(CARPETA_DATOS), language=None)
+    st.caption("Para tener una copia fuera del ordenador, copia esa carpeta entera a un pendrive o a la nube de vez en cuando.")
+    if os.name == "nt" and st.button("📂 Abrir la carpeta de datos"):
+        CARPETA_DATOS.mkdir(parents=True, exist_ok=True)
+        os.startfile(CARPETA_DATOS)  # solo existe en Windows
+
+    st.divider()
     st.subheader("Exportar a Excel")
     if st.button("Generar Excel", type="primary"):
-        carpeta = str(_carpeta_base() / "datos")
+        carpeta = str(CARPETA_DATOS)
         ruta = exportar_todo(
             st.session_state.inventario, st.session_state.registro_servicios,
             st.session_state.gestor_compras, carpeta,
@@ -2954,7 +3118,7 @@ def pagina_exportar() -> None:
         st.session_state.ultima_exportacion = ruta
         st.success(f"Exportado a {ruta}")
 
-    if st.session_state.get("ultima_exportacion"):
+    if st.session_state.get("ultima_exportacion") and Path(st.session_state.ultima_exportacion).exists():
         with open(st.session_state.ultima_exportacion, "rb") as f:
             st.download_button("⬇️ Descargar Excel", f, file_name=Path(st.session_state.ultima_exportacion).name)
 
@@ -3267,18 +3431,15 @@ pagina = st.sidebar.radio(
 )
 
 st.sidebar.divider()
-if st.sidebar.button("💾 Guardar sesión"):
-    guardar_sesion(
-        st.session_state.inventario, st.session_state.registro_servicios,
-        st.session_state.recetario, st.session_state.gestor_compras,
-        st.session_state.archivo_informes, RUTA_SESION, st.session_state.registro_gastos,
-        st.session_state.registro_material,
-    )
-    st.sidebar.success("Sesión guardada")
+zona_guardado = st.sidebar.empty()
 
-if st.sidebar.button("🧪 Cargar datos de ejemplo"):
+# Los datos de ejemplo solo se ofrecen con el programa VACÍO: así nunca se
+# mezclan con los datos reales de un negocio.
+if _app_vacia() and st.sidebar.button("🧪 Cargar datos de ejemplo",
+                                      help="Rellena el programa con datos inventados para probarlo. "
+                                           "Solo aparece mientras el programa está vacío."):
     cargar_datos_ejemplo()
-    st.sidebar.success("Datos de ejemplo cargados")
+    avisar("success", "Datos de ejemplo cargados.")
     st.rerun()
 
 mostrar_avisos()
@@ -3303,3 +3464,6 @@ elif pagina == "Exportar / Backup":
     pagina_exportar()
 elif pagina == "Ajustes":
     pagina_ajustes()
+
+# Al final de cada vuelta: guardar lo que haya cambiado.
+autoguardar(zona_guardado)

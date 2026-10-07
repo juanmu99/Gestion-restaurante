@@ -17,15 +17,24 @@ Cómo funciona (para que lo entiendas si algo falla):
 2. Cuando el .exe arranca, PyInstaller lo descomprime todo (incluido
    ese app.py suelto) en una carpeta temporal. sys._MEIPASS apunta a
    esa carpeta -- ahí es donde buscamos app.py en tiempo de ejecución.
-3. Streamlit arranca en segundo plano en un hilo aparte, mientras el
-   hilo principal espera un par de segundos y abre el navegador.
+3. Streamlit arranca, y un hilo aparte espera a que responda de verdad
+   antes de abrir el navegador (en un PC lento puede tardar).
+4. Si el programa YA estaba abierto (puerto ocupado), no se arranca otro:
+   solo se abre el navegador en el que ya está funcionando.
+5. Solo escucha en este ordenador (127.0.0.1): nadie de la misma red wifi
+   puede abrirlo, y Windows no pide permiso al Firewall.
 """
 
+import socket
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
+
+PUERTO = 8501
+DIRECCION = "127.0.0.1"
 
 
 def _ruta_app_py() -> str:
@@ -39,10 +48,26 @@ def _ruta_app_py() -> str:
     return str(base / "app.py")
 
 
-def _abrir_navegador(url: str) -> None:
-    # Pequeña espera para dar tiempo a que el servidor de Streamlit
-    # esté escuchando antes de intentar abrir la página.
-    time.sleep(2)
+def _puerto_ocupado() -> bool:
+    """True si ya hay algo escuchando en el puerto (normalmente, el programa abierto antes)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        return s.connect_ex((DIRECCION, PUERTO)) == 0
+
+
+def _servidor_listo(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(f"{url}/_stcore/health", timeout=2) as respuesta:
+            return respuesta.read().decode().strip() == "ok"
+    except OSError:
+        return False
+
+
+def _abrir_navegador(url: str, espera_maxima: int = 120) -> None:
+    """Abre el navegador cuando el servidor ya responde (o, como mucho, pasados `espera_maxima` segundos)."""
+    limite = time.time() + espera_maxima
+    while time.time() < limite and not _servidor_listo(url):
+        time.sleep(0.5)
     webbrowser.open(url)
 
 
@@ -65,16 +90,25 @@ if __name__ == "__main__":
 
     from streamlit.web import cli as stcli
 
-    puerto = "8501"
-    url = f"http://localhost:{puerto}"
+    url = f"http://{DIRECCION}:{PUERTO}"
+
+    if _puerto_ocupado():
+        # Ya está abierto (por ejemplo, se cerró la pestaña pero no el
+        # programa): no se arranca otro, solo se vuelve a abrir la página.
+        print("El programa ya estaba abierto: abriendo el navegador...")
+        webbrowser.open(url)
+        sys.exit(0)
 
     threading.Thread(target=_abrir_navegador, args=(url,), daemon=True).start()
 
     sys.argv = [
         "streamlit", "run", _ruta_app_py(),
-        "--server.port", puerto,
+        "--server.port", str(PUERTO),
+        "--server.address", DIRECCION,
         "--server.headless", "true",
+        "--server.fileWatcherType", "none",
         "--global.developmentMode", "false",
         "--browser.gatherUsageStats", "false",
+        "--client.toolbarMode", "minimal",
     ]
     sys.exit(stcli.main())

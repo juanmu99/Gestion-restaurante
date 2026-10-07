@@ -5,3 +5,7 @@ backgroundColor = "#1C1A17"
 secondaryBackgroundColor = "#262320"
 textColor = "#EDE6D9"
 font = "sans serif"
+
+[client]
+# Sin el botón "Deploy" ni el menú de desarrollador (en inglés) arriba a la derecha.
+toolbarMode = "minimal"

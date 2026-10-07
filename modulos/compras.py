@@ -114,7 +114,9 @@ class GestorCompras:
         for servicio in sorted(servicios, key=lambda s: (s.fecha, s.hora)):
             menu = recetario.buscar_menu(servicio.menu)
             if menu is None:
-                print(f"⚠️  Menú '{servicio.menu}' no encontrado, se omite el servicio #{servicio.id}")
+                avisos.append(f"⚠️ Servicio #{servicio.id} ({servicio.fecha.strftime('%d/%m/%Y')}): su menú "
+                              f"'{servicio.menu}' no existe en el Recetario, así que NO se ha tenido en cuenta. "
+                              "Cámbiale el menú.")
                 continue
             preparadas: dict[str, float] = {}
             for receta in menu.recetas:

@@ -14,8 +14,13 @@ Conceptos de Python nuevos en este módulo:
   solos automáticamente, incluso si algo falla a mitad de la lectura)
 """
 
+import hashlib
 import json
+import os
+import shutil
+import sys
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +50,100 @@ class Sesion:
     registro_material: RegistroMaterial = field(default_factory=RegistroMaterial)
 
 
+# ---------- Dónde se guardan los datos ----------
+
+NOMBRE_CARPETA_WINDOWS = "GestionRestaurante"
+COPIAS_A_CONSERVAR = 30  # copias diarias (una por día con cambios)
+
+
+def carpeta_datos(carpeta_programa: Path) -> Path:
+    """
+    La carpeta donde viven los datos (sesión, copias, excels).
+
+    - Variable de entorno GESTION_RESTAURANTE_DATOS: esa carpeta (pruebas).
+    - Programa empaquetado (.exe) en Windows: %LOCALAPPDATA%\\GestionRestaurante.
+      NO junto al .exe: si el .exe se abre desde dentro del ZIP o se mueve
+      de carpeta, los datos se quedarían atrás. Si ya había datos junto al
+      .exe (versiones anteriores), se copian aquí la primera vez.
+    - Resto (python / streamlit run): carpeta_programa/datos, como siempre.
+    """
+    forzada = os.environ.get("GESTION_RESTAURANTE_DATOS")
+    if forzada:
+        return Path(forzada)
+    if getattr(sys, "frozen", False) and os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        destino = Path(os.environ["LOCALAPPDATA"]) / NOMBRE_CARPETA_WINDOWS
+        antigua = carpeta_programa / "datos"
+        if (antigua / "sesion.json").exists() and not (destino / "sesion.json").exists():
+            destino.mkdir(parents=True, exist_ok=True)
+            for archivo in antigua.iterdir():
+                if archivo.is_file():
+                    shutil.copy2(archivo, destino / archivo.name)
+        return destino
+    return carpeta_programa / "datos"
+
+
+# ---------- Guardar ----------
+
+def sesion_a_dict(
+    inventario: Inventario,
+    registro_servicios: RegistroServicios,
+    recetario: Recetario,
+    gestor_compras: GestorCompras,
+    archivo_informes: ArchivoInformes,
+    registro_gastos: Optional[RegistroGastos] = None,
+    registro_material: Optional[RegistroMaterial] = None,
+) -> dict:
+    """Todo el estado de la aplicación, como diccionario listo para JSON."""
+    return {
+        "inventario": inventario.to_dict(),
+        "servicios": registro_servicios.to_dict(),
+        "recetario": recetario.to_dict(),
+        "compras": gestor_compras.to_dict(),
+        "informes": archivo_informes.to_dict(),
+        "gastos": (registro_gastos or RegistroGastos()).to_dict(),
+        "material": (registro_material or RegistroMaterial()).to_dict(),
+    }
+
+
+def texto_json(datos: dict) -> str:
+    # indent=2 -> legible para humanos; ensure_ascii=False -> conserva tildes y eñes.
+    return json.dumps(datos, indent=2, ensure_ascii=False)
+
+
+def firma(datos: dict) -> str:
+    """Una "huella" corta del contenido: si no cambia, no hace falta volver a guardar."""
+    return hashlib.sha256(texto_json(datos).encode("utf-8")).hexdigest()
+
+
+def escribir_sesion(datos: dict, ruta: str) -> None:
+    """
+    Escribe la sesión de forma SEGURA:
+    1. Se escribe primero en un archivo temporal y, solo cuando está
+       completo, sustituye al bueno (os.replace es instantáneo). Si algo
+       falla a mitad (corte de luz, disco lleno...), el archivo bueno sigue intacto.
+    2. Antes, la versión anterior se guarda como sesion.json.bak.
+    3. Una vez al día se deja una copia con fecha en copias/ (se conservan
+       las COPIAS_A_CONSERVAR más recientes).
+    """
+    ruta = Path(ruta)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    temporal = ruta.with_name(ruta.name + ".tmp")
+    with open(temporal, "w", encoding="utf-8") as f:
+        f.write(texto_json(datos))
+        f.flush()
+        os.fsync(f.fileno())
+    if ruta.exists():
+        shutil.copy2(ruta, ruta.with_name(ruta.name + ".bak"))
+    os.replace(temporal, ruta)
+
+    copias = ruta.parent / "copias"
+    copias.mkdir(exist_ok=True)
+    copia_hoy = copias / f"sesion_{date.today().isoformat()}.json"
+    shutil.copy2(ruta, copia_hoy)  # la de hoy se va actualizando: queda la última del día
+    for vieja in sorted(copias.glob("sesion_*.json"))[:-COPIAS_A_CONSERVAR]:
+        vieja.unlink(missing_ok=True)
+
+
 def guardar_sesion(
     inventario: Inventario,
     registro_servicios: RegistroServicios,
@@ -55,36 +154,63 @@ def guardar_sesion(
     registro_gastos: Optional[RegistroGastos] = None,
     registro_material: Optional[RegistroMaterial] = None,
 ) -> None:
-    """Guarda el estado completo de todos los módulos en un archivo JSON."""
-    datos = {
-        "inventario": inventario.to_dict(),
-        "servicios": registro_servicios.to_dict(),
-        "recetario": recetario.to_dict(),
-        "compras": gestor_compras.to_dict(),
-        "informes": archivo_informes.to_dict(),
-        "gastos": (registro_gastos or RegistroGastos()).to_dict(),
-        "material": (registro_material or RegistroMaterial()).to_dict(),
-    }
-
-    Path(ruta).parent.mkdir(parents=True, exist_ok=True)
-    with open(ruta, "w", encoding="utf-8") as f:
-        # indent=2 -> el JSON queda legible para humanos, no en una sola línea
-        # ensure_ascii=False -> conserva tildes y eñes tal cual, en vez de \u00e9...
-        json.dump(datos, f, indent=2, ensure_ascii=False)
-
+    """Guarda el estado completo de todos los módulos en un archivo JSON (de forma segura)."""
+    datos = sesion_a_dict(inventario, registro_servicios, recetario, gestor_compras, archivo_informes,
+                          registro_gastos, registro_material)
+    escribir_sesion(datos, ruta)
     print(f"💾 Sesión guardada en {ruta}")
+
+
+# ---------- Cargar ----------
+
+def cargar_sesion_segura(ruta: str) -> tuple[Optional[Sesion], Optional[str]]:
+    """
+    Carga la sesión y, si el archivo está dañado, prueba con la copia
+    sesion.json.bak y luego con las copias diarias (de la más reciente a la
+    más antigua). El archivo dañado se aparta (no se borra) para que no se
+    sobrescriba. Devuelve (sesión o None, aviso para el usuario o None).
+    """
+    ruta = Path(ruta)
+    if not ruta.exists():
+        return None, None
+    try:
+        return cargar_sesion(str(ruta)), None
+    except Exception as error:  # noqa: BLE001 -- cualquier fallo al leer = archivo dañado
+        print(f"❌ No se ha podido leer {ruta}: {error!r}")
+    apartado = ruta.with_name(f"sesion_danada_{datetime.now():%Y-%m-%d_%H%M%S}.json")
+    shutil.move(str(ruta), apartado)
+    candidatas = [ruta.with_name(ruta.name + ".bak")] + sorted((ruta.parent / "copias").glob("sesion_*.json"), reverse=True)
+    for copia in candidatas:
+        if not copia.exists():
+            continue
+        try:
+            sesion = cargar_sesion(str(copia))
+        except Exception:  # noqa: BLE001
+            continue
+        shutil.copy2(copia, ruta)
+        return sesion, (
+            f"Los datos guardados estaban dañados y se han recuperado de la copia de seguridad «{copia.name}». "
+            f"Revisa que esté todo: puede faltar lo último que hiciste. El archivo dañado se ha apartado como "
+            f"«{apartado.name}»."
+        )
+    return None, (
+        f"Los datos guardados estaban dañados y no había ninguna copia de seguridad válida. El programa empieza "
+        f"vacío. El archivo dañado se ha apartado como «{apartado.name}» en {ruta.parent}: no lo borres."
+    )
 
 
 def cargar_sesion(ruta: str) -> Optional[Sesion]:
     """
     Carga una sesión guardada previamente. Devuelve None si el archivo
     no existe todavía (por ejemplo, la primera vez que se usa la app).
+    Si el archivo está dañado, lanza la excepción (ver cargar_sesion_segura).
     """
     if not Path(ruta).exists():
         print("No hay ninguna sesión guardada todavía.")
         return None
 
-    with open(ruta, encoding="utf-8") as f:
+    # utf-8-sig: acepta también archivos guardados con BOM (Bloc de notas antiguo).
+    with open(ruta, encoding="utf-8-sig") as f:
         datos = json.load(f)
 
     inventario = Inventario.from_dict(datos["inventario"])

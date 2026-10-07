@@ -87,6 +87,9 @@ class Servicio:
         self.estado = "confirmado"
 
     def cancelar(self) -> None:
+        # Un servicio ya hecho no se cancela: su stock ya salió y sus costes son reales.
+        if self.estado == "completado":
+            raise ValueError("Este servicio ya está completado: no se puede cancelar.")
         self.estado = "cancelado"
 
     def completar(self) -> None:
@@ -150,6 +153,12 @@ class RegistroServicios:
         self.servicios: list[Servicio] = []
 
     def agregar_servicio(self, servicio: Servicio) -> None:
+        # El número de servicio no se puede repetir (si el programa se abre en
+        # dos ventanas, el contador compartido podría dar uno ya usado).
+        usados = {s.id for s in self.servicios}
+        if servicio.id in usados:
+            servicio.id = max(usados) + 1
+        Servicio._siguiente_id = max(Servicio._siguiente_id, servicio.id + 1)
         self.servicios.append(servicio)
         print(f"✅ Servicio añadido: {servicio}")
 
@@ -164,7 +173,7 @@ class RegistroServicios:
         if servicio is None:
             print(f"❌ No existe un servicio con id {id_servicio}")
             return
-        servicio.cancelar()
+        servicio.cancelar()  # lanza ValueError si ya está completado
         print(f"🚫 Servicio #{id_servicio} cancelado")
 
     def servicios_por_fecha(self, fecha: date) -> list[Servicio]:

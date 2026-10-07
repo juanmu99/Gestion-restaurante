@@ -1567,7 +1567,15 @@ class Inventario:
             existente = self.productos.get(nombre)
             if existente is not None and not existente.es_alimento():
                 raise ValueError(f"'{nombre}' no es un alimento: no puede salir de una limpieza.")
+            if existente is not None and existente.es_base():
+                raise ValueError(f"'{nombre}' es una elaboración base: no puede salir de una limpieza. "
+                                 "Elige otro nombre.")
         if principal is not None:
+            # Una elaboración base no sale de una limpieza: aceptarlo dejaba la
+            # sesión imposible de volver a abrir.
+            if principal.es_base():
+                raise ValueError(f"'{producto_limpio}' es una elaboración base: no puede salir de una limpieza. "
+                                 "Elige otro nombre para el producto limpio.")
             if principal.unidad not in UNIDADES_PESO:
                 raise ValueError(f"'{producto_limpio}' ya existe y no se mide en kg o g.")
             if principal.es_subproducto:

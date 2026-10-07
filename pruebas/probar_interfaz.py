@@ -78,6 +78,14 @@ def opcion(selectbox, prefijo: str) -> str:
     raise AssertionError(f"No encuentro la opción '{prefijo}...' en {selectbox.options}")
 
 
+def por_clave(lista, prefijo: str):
+    """El widget cuya key empieza por `prefijo` (para las keys que llevan una huella al final)."""
+    for w in lista:
+        if w.key and w.key.startswith(prefijo):
+            return w
+    raise AssertionError(f"No encuentro ningún campo cuya clave empiece por '{prefijo}'")
+
+
 def por_etiqueta(lista, etiqueta: str):
     """El widget de una lista cuya etiqueta es `etiqueta` (para los que están dentro de un formulario, sin key)."""
     for w in lista:
@@ -120,6 +128,10 @@ def prueba_arranque(at: AppTest) -> None:
     boton(at.sidebar.button, "🧪 Cargar datos de ejemplo").click().run()
     inv = at.session_state["inventario"]
     comprobar("Pata de cerdo" in inv.productos and "Tomate" in inv.productos, "Datos de ejemplo cargados")
+    comprobar(not any("ejemplo" in b.label for b in at.sidebar.button),
+              "Con datos, el botón de datos de ejemplo desaparece (no se pueden mezclar con los reales)")
+    comprobar((RAIZ / "datos" / "sesion.json").exists() and any("se guardan solos" in t for t in textos(at.sidebar.caption)),
+              "Los cambios se guardan solos en disco, sin pulsar nada")
 
 
 @prueba("Todas las páginas se muestran")
@@ -167,7 +179,7 @@ def prueba_precios(at: AppTest) -> None:
 
     at.selectbox(key="editar_select").select(nombre).run()
     lote_2()
-    at.number_input(key=f"edit_lote_precio_{nombre}_2").set_value(4.0).run()
+    por_clave(at.number_input, f"edit_lote_precio_{nombre}_2_").set_value(4.0).run()
     at.button(key=f"edit_boton_{nombre}").click().run()
     compra_mov = next(m for m in inv.historial if m.producto_nombre == nombre and m.lote_id == 2 and m.es_compra())
     comprobar(sin_excepciones(at, "corregir precio sin salidas") and inv.precios_de(nombre)[-1].precio_unitario == 4.0
@@ -180,8 +192,8 @@ def prueba_precios(at: AppTest) -> None:
     caja.select(opcion(caja, "Lote 2 ·")).run()
     at.button(key=f"stock_boton_{nombre}").click().run()
     lote_2()
-    at.number_input(key=f"edit_lote_precio_{nombre}_2").set_value(3.5).run()
-    pregunta = at.radio(key=f"edit_lote_corregir_{nombre}_2")
+    por_clave(at.number_input, f"edit_lote_precio_{nombre}_2_").set_value(3.5).run()
+    pregunta = por_clave(at.radio, f"edit_lote_corregir_{nombre}_2_")
     comprobar(any("salida de 1 kg" in t for t in textos(at.info)),
               "Si ya ha salido algo del lote, se avisa de lo registrado y se pregunta qué hacer")
     pregunta.set_value(next(o for o in pregunta.options if o.startswith("Dejarlo"))).run()
@@ -193,8 +205,8 @@ def prueba_precios(at: AppTest) -> None:
 
     at.selectbox(key="precios_select").select(nombre).run()
     indice = inv.precios_de(nombre).index(inv.precios_de(nombre)[-1])
-    at.number_input(key=f"corregir_compra_precio_{nombre}_{indice}").set_value(3.5).run()
-    at.button(key=f"corregir_compra_guardar_{nombre}_{indice}").click().run()
+    por_clave(at.number_input, f"corregir_compra_precio_{nombre}_{indice}_").set_value(3.5).run()
+    por_clave(at.button, f"corregir_compra_guardar_{nombre}_{indice}_").click().run()
     comprobar(sin_excepciones(at, "corregir compra") and inv.precios_de(nombre)[-1].precio_unitario == 3.5
               and salida.precio_unitario == 3.5,
               "Desde el historial de precios se corrige una compra y lo que ya salió de ella")
@@ -288,6 +300,10 @@ def prueba_anadir(at: AppTest) -> None:
     at.number_input(key=f"add_stock_{v}").set_value(2.0).run()
     at.checkbox(key=f"add_tiene_caducidad_{v}").check().run()
     at.date_input(key=f"add_fecha_{v}").set_value(fecha)
+    at.button(key=f"add_boton_{v}").click().run()
+    comprobar("Nata" not in inv.productos and any("precio" in t for t in textos(at.error)),
+              "Con stock inicial y sin precio no se añade (antes entraba a 0 €)")
+    at.number_input(key=f"add_precio_{v}").set_value(1.5)
     at.button(key=f"add_boton_{v}").click().run()
     nata = inv.buscar_producto("Nata")
     comprobar(nata is not None and nata.fecha_caducidad == fecha and nata.lotes[0].fecha_caducidad == fecha,
@@ -432,13 +448,26 @@ def prueba_editar(at: AppTest) -> None:
               "Al cambiar de producto se cargan sus datos")
 
     # Producto con UN lote: sus datos de compra se corrigen directamente
-    kl = lambda campo: f"edit_lote_{campo}_Aceite de oliva_1"
-    comprobar(at.number_input(key=kl("cantidad")).value == 20, "Con un solo lote, sus datos aparecen sin elegir nada")
-    at.number_input(key=kl("cantidad")).set_value(18.0)
-    at.number_input(key=kl("precio")).set_value(5.0)
-    at.text_input(key=kl("proveedor")).input("Aceites Jaén")
-    at.checkbox(key=kl("tiene_fecha")).check().run()
-    at.date_input(key=kl("fecha")).set_value(date.today() + timedelta(days=200))
+    kl = lambda lista, campo: por_clave(lista, f"edit_lote_{campo}_Aceite de oliva_1_")
+    comprobar(kl(at.number_input, "cantidad").value == 20, "Con un solo lote, sus datos aparecen sin elegir nada")
+
+    # Una salida de stock hecha DESPUÉS de abrir 'Editar producto' no se deshace al guardar (fallo de la revisión)
+    at.selectbox(key="stock_select").select("Aceite de oliva").run()
+    at.radio(key="stock_tipo_Aceite de oliva").set_value("Salida").run()
+    at.number_input(key="stock_cantidad_Aceite de oliva").set_value(5.0)
+    at.button(key="stock_boton_Aceite de oliva").click().run()
+    comprobar(kl(at.number_input, "cantidad").value == 15,
+              "Tras una salida, 'Editar producto' muestra la cantidad actual (15), no la de antes")
+    at.number_input(key="edit_stock_minimo_Aceite de oliva").set_value(6.0)
+    at.button(key="edit_boton_Aceite de oliva").click().run()
+    comprobar(inv.buscar_producto("Aceite de oliva").stock == 15 and inv.buscar_producto("Aceite de oliva").stock_minimo == 6,
+              "Guardar solo el stock mínimo no deshace la salida (sigue habiendo 15)")
+
+    kl(at.number_input, "cantidad").set_value(18.0)
+    kl(at.number_input, "precio").set_value(5.0)
+    kl(at.text_input, "proveedor").input("Aceites Jaén")
+    kl(at.checkbox, "tiene_fecha").check().run()
+    kl(at.date_input, "fecha").set_value(date.today() + timedelta(days=200))
     at.text_input(key="edit_categoria_Aceite de oliva").input("Aceites y grasas")
     at.button(key="edit_boton_Aceite de oliva").click().run()
     aceite = inv.buscar_producto("Aceite de oliva")
@@ -460,7 +489,7 @@ def prueba_lotes(at: AppTest) -> None:
     at.selectbox(key="editar_select").select("Secreto ibérico").run()
     lote_sb = at.selectbox(key="edit_lote_Secreto ibérico")
     lote_sb.select(opcion(lote_sb, "Lote 1 ·")).run()
-    at.date_input(key="edit_lote_fecha_Secreto ibérico_1").set_value(date.today() - timedelta(days=1))
+    por_clave(at.date_input, "edit_lote_fecha_Secreto ibérico_1_").set_value(date.today() - timedelta(days=1))
     at.button(key="edit_boton_Secreto ibérico").click().run()
     comprobar(sin_excepciones(at, "corregir lote") and secreto.buscar_lote(1).esta_caducado()
               and not secreto.buscar_lote(2).esta_caducado(),
@@ -874,7 +903,7 @@ def prueba_gastos(at: AppTest) -> None:
     # Añadir un servicio con precio POR COMENSAL (25 € x 10 = 250 €)
     ir_a(at, "Servicios")
     por_etiqueta(at.number_input, "Comensales").set_value(10)
-    por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
+    por_etiqueta(at.selectbox, "Menú").select("Menú del día")
     por_etiqueta(at.number_input, "Precio de cobro (€, sin IVA, opcional)").set_value(25.0)
     por_etiqueta(at.radio, "El precio es").set_value("Por comensal")
     por_etiqueta(at.text_input, "Cliente (opcional)").input("Familia García")
@@ -891,7 +920,7 @@ def prueba_gastos(at: AppTest) -> None:
     por_etiqueta(at.text_input, "Cliente (opcional)").input("")
     por_etiqueta(at.text_input, "Lugar (opcional)").input("")
     por_etiqueta(at.number_input, "Comensales").set_value(4)
-    por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
+    por_etiqueta(at.selectbox, "Menú").select("Menú del día")
     boton(at.button, "Añadir servicio").click().run()
     comprobar(serv.servicios[-1].precio_cobrado is None, "El precio de cobro es opcional")
 
@@ -930,6 +959,70 @@ def prueba_gastos(at: AppTest) -> None:
     at.number_input(key=f"cobro_precio_{nuevo.id}").set_value(300.0)
     at.button(key=f"cobro_guardar_{nuevo.id}").click().run()
     comprobar(nuevo.precio_cobrado == 300, "Se puede cambiar el precio de cobro después")
+
+
+@prueba("Fase 1: servicios, recetas y guardado")
+def prueba_fase1(at: AppTest) -> None:
+    import os
+    serv = at.session_state["registro_servicios"]
+    rec = at.session_state["recetario"]
+    inv = at.session_state["inventario"]
+
+    # Cancelar: solo pendientes, y hay que confirmarlo
+    from servicios import Servicio as _Servicio
+    pendiente = _Servicio(date.today() + timedelta(days=9), time(20, 0), 6, "Menú del día", cliente="Para cancelar")
+    serv.agregar_servicio(pendiente)
+    ir_a(at, "Servicios")
+    caja = at.selectbox(key="cancelar_select")
+    completados = [s for s in serv.servicios if s.estado == "completado"]
+    comprobar(completados and not any(o.startswith(f"#{s.id} ·") for o in caja.options for s in completados),
+              "Los servicios completados no aparecen para cancelar")
+    caja.select(opcion(caja, f"#{pendiente.id} ·")).run()
+    boton(at.button, "Cancelar servicio").click().run()
+    comprobar(pendiente.estado == "pendiente", "Sin marcar la confirmación no se cancela")
+    at.checkbox(key="cancelar_confirmar").check().run()
+    boton(at.button, "Cancelar servicio").click().run()
+    comprobar(pendiente.estado == "cancelado", "Marcando la confirmación, se cancela")
+
+    # Un servicio con un menú que no existe: aviso y forma de arreglarlo
+    malo = _Servicio(date.today() + timedelta(days=4), time(13, 0), 12, "Menu del dia")
+    serv.agregar_servicio(malo)
+    ir_a(at, "Servicios")
+    comprobar(any("no existe" in t and f"#{malo.id}" in t for t in textos(at.warning)),
+              "Se avisa de un servicio con un menú que no existe")
+    at.selectbox(key=f"arreglar_menu_{malo.id}").select("Menú del día").run()
+    at.button(key=f"arreglar_menu_boton_{malo.id}").click().run()
+    comprobar(malo.menu == "Menú del día", "Se le puede elegir el menú correcto")
+
+    # Receta con un nombre que ya existe: error y lo escrito no se borra
+    ir_a(at, "Recetario")
+    at.session_state["receta_ingredientes"] = {"Tomate": 0.1}
+    at.run()
+    por_etiqueta(at.text_input, "Nombre de la receta").input("Pan casero")
+    boton(at.button, "Guardar receta").click().run()
+    comprobar(any("Ya existe" in t for t in textos(at.error)) and len(rec.recetas["Pan casero"].ingredientes_por_comensal) == 2
+              and por_etiqueta(at.text_input, "Nombre de la receta").value == "Pan casero",
+              "Una receta con un nombre que ya existe no sustituye a la otra, y lo escrito no se borra")
+    at.session_state["receta_ingredientes"] = {}
+
+    # La unidad propuesta es la del producto
+    from inventario import Producto
+    inv.agregar_producto(Producto("Azafrán", "Especias", 50, "g", 3, "Especias SA"))
+    at.run()
+    at.selectbox(key="ing_select").select("Azafrán").run()
+    comprobar(at.radio(key="unidad_ing_Azafrán").value == "g", "Para un ingrediente en gramos se propone 'g' (no 'kg')")
+
+    # Otra ventana del programa guarda: esta deja de guardar y avisa
+    ruta = RAIZ / "datos" / "sesion.json"
+    os.utime(ruta, (ruta.stat().st_atime, ruta.stat().st_mtime + 100))  # "otra ventana" lo acaba de guardar
+    antes = ruta.read_text(encoding="utf-8")
+    inv.agregar_producto(Producto("Orégano", "Especias", 1, "kg", 9, "Especias SA"))
+    at.run()
+    comprobar(ruta.read_text(encoding="utf-8") == antes and any("otra ventana" in t for t in textos(at.sidebar.error)),
+              "Si otra ventana guardó, esta no sobrescribe sin preguntar y lo avisa")
+    at.button(key="conflicto_guardar").click().run()
+    at.run()
+    comprobar("Orégano" in ruta.read_text(encoding="utf-8"), "...y se puede elegir guardar lo de esta ventana")
 
 
 @prueba("Material reutilizable")
@@ -1078,9 +1171,9 @@ def prueba_metricas_y_guardado(at: AppTest) -> None:
     ir_a(at, "Dashboard")
     comprobar(sin_excepciones(at, "Dashboard") and not at.error, "Dashboard con todos los datos sin errores")
 
-    boton(at.sidebar.button, "💾 Guardar sesión").click().run()
     ruta = RAIZ / "datos" / "sesion.json"
-    comprobar(ruta.exists(), "Guardar sesión crea datos/sesion.json")
+    comprobar(ruta.exists() and "Cuchillo" in ruta.read_text(encoding="utf-8"),
+              "Todo lo hecho ya está guardado en datos/sesion.json, sin pulsar ningún botón")
 
     # Una app NUEVA (como al volver a abrir el programa) carga la sesión guardada
     at2 = nueva_app()
@@ -1118,6 +1211,7 @@ def main() -> int:
     prueba_completar(at)
     prueba_completar_lotes(at)
     prueba_gastos(at)
+    prueba_fase1(at)
     prueba_material(at)
     prueba_compras(at)
     prueba_historial(at)

@@ -902,6 +902,91 @@ with tempfile.TemporaryDirectory() as carpeta:
               "El Excel separa precio sin IVA, IVA y precio con IVA")
 AJUSTES["iva_recuperable"] = False
 
+print("\n--- Fase 1: guardado seguro ---")
+import json as _json  # noqa: E402
+import os as _os  # noqa: E402
+from persistencia import (  # noqa: E402
+    guardar_sesion, cargar_sesion_segura, carpeta_datos, escribir_sesion, sesion_a_dict, firma,
+)
+from metricas import ArchivoInformes  # noqa: E402
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = Path(carpeta) / "sesion.json"
+    inv = Inventario()
+    silencio(inv.agregar_producto, Producto("Arroz", "Despensa", 5, "kg", 1.2, "Mayorista"))
+    args = (inv, RegistroServicios(), Recetario(), GestorCompras(), ArchivoInformes())
+    silencio(guardar_sesion, *args, str(ruta))
+    silencio(inv.agregar_producto, Producto("Sal", "Despensa", 1, "kg", 0.5, "Mayorista"))
+    silencio(guardar_sesion, *args, str(ruta))
+    bak = ruta.with_name("sesion.json.bak")
+    comprobar(ruta.exists() and bak.exists() and "Sal" not in bak.read_text(encoding="utf-8")
+              and any((Path(carpeta) / "copias").glob("sesion_*.json")) and not ruta.with_name("sesion.json.tmp").exists(),
+              "Guardar deja la versión anterior en .bak y una copia del día en copias/")
+    ruta.write_text('{"inventario": {"productos": [', encoding="utf-8")  # archivo cortado a mitad
+    sesion, aviso = silencio(cargar_sesion_segura, str(ruta))
+    comprobar(sesion is not None and "Arroz" in sesion.inventario.productos and aviso and "recuperado" in aviso
+              and any(Path(carpeta).glob("sesion_danada_*.json")),
+              "Si sesion.json está dañado, se recupera de la copia y el dañado se aparta (no se borra)")
+    for f in list(Path(carpeta).rglob("*.json*")):
+        f.write_text("basura", encoding="utf-8")
+    sesion, aviso = silencio(cargar_sesion_segura, str(ruta))
+    comprobar(sesion is None and aviso and "vacío" in aviso, "Sin ninguna copia válida, se avisa y se empieza vacío")
+    datos = sesion_a_dict(*args)
+    ruta.write_text("\ufeff" + _json.dumps(datos), encoding="utf-8")  # con BOM (Bloc de notas)
+    sesion, aviso = silencio(cargar_sesion_segura, str(ruta))
+    comprobar(sesion is not None and aviso is None, "Un archivo guardado con BOM también se carga")
+    comprobar(firma(datos) == firma(sesion_a_dict(*args)) and firma(datos) != firma({}),
+              "La huella de los datos sirve para saber si hay cambios sin guardar")
+_os.environ["GESTION_RESTAURANTE_DATOS"] = "/tmp/otra"
+comprobar(carpeta_datos(Path("/x")) == Path("/tmp/otra"), "La carpeta de datos se puede fijar (pruebas)")
+del _os.environ["GESTION_RESTAURANTE_DATOS"]
+comprobar(carpeta_datos(Path("/x")) == Path("/x/datos"), "Fuera del .exe, los datos siguen en la carpeta 'datos'")
+
+print("\n--- Fase 1: servicios, recetas y limpiezas ---")
+registro = RegistroServicios()
+s1 = Servicio(HOY, time(14, 0), 10, "Menú A")
+s2 = Servicio(HOY, time(14, 0), 10, "Menú A")
+s2.id = s1.id  # como si otra ventana hubiera dado el mismo número
+silencio(registro.agregar_servicio, s1)
+silencio(registro.agregar_servicio, s2)
+comprobar(s1.id != s2.id, "Dos servicios nunca tienen el mismo número")
+s1.completar()
+try:
+    registro.cancelar_servicio(s1.id)
+    comprobar(False, "Un servicio completado no se puede cancelar")
+except ValueError:
+    comprobar(s1.estado == "completado", "Un servicio completado no se puede cancelar")
+rec = Recetario()
+silencio(rec.agregar_receta, Receta("Paella", "Arroces", {"Arroz": 0.1}))
+for nombre in ("Paella", "paella ", " PAELLA"):
+    try:
+        rec.agregar_receta(Receta(nombre, "Arroces", {"Arroz": 0.2}))
+        comprobar(False, f"No se puede crear otra receta '{nombre}'")
+    except ValueError:
+        pass
+comprobar(rec.recetas["Paella"].ingredientes_por_comensal == {"Arroz": 0.1},
+          "Una receta con un nombre que ya existe (aunque cambien mayúsculas o espacios) no sustituye a la otra")
+silencio(rec.agregar_menu, Menu("Menú A", [rec.recetas["Paella"]]))
+try:
+    rec.agregar_menu(Menu("menú a", []))
+    comprobar(False, "No se puede repetir un menú")
+except ValueError:
+    comprobar(True, "Un menú con un nombre que ya existe no sustituye al otro")
+avisos = silencio(GestorCompras().generar_lista_desde_servicios,
+                  [Servicio(HOY + timedelta(days=1), time(14, 0), 10, "Menu A")], rec, Inventario())
+comprobar(any("no existe" in a for a in avisos), "La lista de la compra AVISA de un servicio cuyo menú no existe")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Pata", "Carnes", 2, "unidades", 40, "Carnicería", tiene_merma=True, peso_unitario=7))
+silencio(inv.agregar_producto, Producto("Cebolla", "Verduras", 5, "kg", 1, "Huerta"))
+silencio(inv.definir_base, "Fondo", "Elaboraciones", "litros", 1, {"Cebolla": 1})
+silencio(inv.definir_base, "Sofrito", "Elaboraciones", "kg", 1, {"Cebolla": 1})
+try:
+    silencio(inv.limpiar_producto, "Pata", 1, "Sofrito", 5, lote_id=1)
+    comprobar(False, "Una limpieza no puede dar una elaboración base")
+except ValueError:
+    copia = Inventario.from_dict(inv.to_dict())
+    comprobar(inv.buscar_producto("Pata").stock == 2 and copia.buscar_producto("Sofrito").es_base(),
+              "Una limpieza no puede dar una elaboración base (antes dejaba la sesión imposible de abrir)")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

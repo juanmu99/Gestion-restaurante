@@ -11,19 +11,23 @@ empaquetado. En concreto:
 
   1. El .exe arranca y la app responde en el navegador.
   2. Todas las páginas se abren sin errores (con datos de ejemplo).
-  3. "Guardar sesión" crea datos/sesion.json JUNTO AL .EXE (no en la
-     carpeta temporal donde PyInstaller se descomprime, que se borra).
-  4. "Generar Excel" crea el .xlsx junto al .exe.
+  3. Los cambios se guardan SOLOS en %LOCALAPPDATA%\\GestionRestaurante
+     (no junto al .exe: así no se pierden si el .exe se abre desde el ZIP o
+     se mueve). En la prueba, LOCALAPPDATA apunta a una carpeta temporal.
+  4. "Generar Excel" crea el .xlsx en esa misma carpeta de datos.
   5. Las librerías de Google Drive están dentro del .exe: al pulsar
      "Subir a Google Drive" sin credentials.json debe pedir ese archivo
      (junto al .exe), y NO decir que faltan librerías.
-  6. Al cerrar y volver a abrir el .exe, los datos guardados siguen ahí.
+  6. Si se vuelve a abrir el .exe con el programa ya abierto, no arranca otro:
+     se cierra solo enseguida (solo abre el navegador).
+  7. Al cerrar y volver a abrir el .exe, los datos guardados siguen ahí.
 
 Uso:  python pruebas/probar_exe.py dist/GestionRestaurante.exe
 Deja el informe en resultados/resultado_exe.txt y capturas en
 resultados/capturas_exe/.
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -34,7 +38,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-URL = "http://localhost:8501"
+URL = "http://127.0.0.1:8501"
 RAIZ = Path(__file__).resolve().parent.parent
 RESULTADOS = RAIZ / "resultados"
 CAPTURAS = RESULTADOS / "capturas_exe"
@@ -55,10 +59,16 @@ def comprobar(condicion: bool, descripcion: str, detalle: str = "") -> bool:
     return condicion
 
 
+LOCALAPPDATA_PRUEBA = Path(tempfile.mkdtemp(prefix="localappdata_"))
+
+
 def arrancar_exe(exe: Path, log: Path) -> subprocess.Popen:
     # Se ejecuta desde SU carpeta, como cuando el cliente hace doble clic.
+    # LOCALAPPDATA apunta a una carpeta temporal: así la prueba no toca nada
+    # del ordenador y se sabe exactamente dónde deben aparecer los datos.
     salida = open(log, "a", encoding="utf-8", errors="replace")
-    return subprocess.Popen([str(exe)], cwd=exe.parent, stdout=salida, stderr=subprocess.STDOUT)
+    entorno = {**os.environ, "LOCALAPPDATA": str(LOCALAPPDATA_PRUEBA)}
+    return subprocess.Popen([str(exe)], cwd=exe.parent, stdout=salida, stderr=subprocess.STDOUT, env=entorno)
 
 
 def esperar_servidor(proceso: subprocess.Popen, segundos: int = 180) -> bool:
@@ -127,7 +137,7 @@ def probar(exe_original: Path) -> None:
     exe = carpeta / exe_original.name
     shutil.copy2(exe_original, exe)
     log = RESULTADOS / "exe_consola.log"
-    datos = carpeta / "datos"
+    datos = LOCALAPPDATA_PRUEBA / "GestionRestaurante"
 
     # --- Primer arranque ---
     proceso = arrancar_exe(exe, log)
@@ -157,17 +167,27 @@ def probar(exe_original: Path) -> None:
                 except Exception as e:  # noqa: BLE001
                     comprobar(False, f"Página '{pagina}' se puede abrir", str(e)[:300])
 
-            # Guardar sesión -> datos/sesion.json junto al .exe
-            page.get_by_role("button", name="💾 Guardar sesión").click()
-            esperar(page)
-            comprobar((datos / "sesion.json").exists(), "'Guardar sesión' crea datos/sesion.json junto al .exe")
+            # Guardado automático -> sesion.json en %LOCALAPPDATA%\\GestionRestaurante
+            comprobar((datos / "sesion.json").exists() and not (carpeta / "datos" / "sesion.json").exists(),
+                      "Los cambios se guardan solos en %LOCALAPPDATA%\\GestionRestaurante (no junto al .exe)")
+            comprobar(any((datos / "copias").glob("sesion_*.json")), "Se crea la copia de seguridad del día")
+
+            # Volver a abrir el .exe con el programa abierto: la segunda copia se cierra sola
+            segunda = arrancar_exe(exe, log)
+            try:
+                segunda.wait(timeout=90)
+                comprobar(segunda.returncode == 0, "Abrirlo otra vez no arranca un segundo programa (se cierra solo)")
+            except subprocess.TimeoutExpired:
+                comprobar(False, "Abrirlo otra vez no arranca un segundo programa (se cierra solo)",
+                          "la segunda copia sigue abierta")
+                cerrar_exe(segunda)
 
             # Exportar a Excel -> .xlsx junto al .exe
             ir_a(page, "Exportar / Backup")
             page.get_by_role("button", name="Generar Excel").click()
             esperar(page)
             excels = list(datos.glob("*.xlsx")) if datos.exists() else []
-            comprobar(bool(excels), "'Generar Excel' crea el .xlsx junto al .exe")
+            comprobar(bool(excels), "'Generar Excel' crea el .xlsx en la carpeta de datos")
 
             # Google Drive sin credentials.json: debe pedir el archivo
             page.get_by_role("button", name="Subir a Google Drive").click()
@@ -203,6 +223,7 @@ def probar(exe_original: Path) -> None:
     finally:
         cerrar_exe(proceso)
         shutil.rmtree(carpeta, ignore_errors=True)
+        shutil.rmtree(LOCALAPPDATA_PRUEBA, ignore_errors=True)
 
 
 def main() -> int:
