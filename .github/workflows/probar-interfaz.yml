@@ -60,7 +60,8 @@ jobs:
         run: |
           mkdir -p resultados
           streamlit run app.py --server.headless true --server.port 8501 --browser.gatherUsageStats false > resultados/servidor.log 2>&1 &
-          python pruebas/capturas.py
+          set -o pipefail
+          python pruebas/capturas.py 2>&1 | tee resultados/capturas.txt
 
       # Los "artefactos" normales de GitHub no se pueden descargar desde el
       # entorno de Claude, así que los resultados se publican también en una
