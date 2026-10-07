@@ -362,6 +362,80 @@ class Recetario:
         self.menus[menu.nombre] = menu
         print(f"✅ Menú añadido: {menu.nombre}")
 
+    # ---------- Editar y borrar recetas y menús ----------
+
+    def menus_con_receta(self, nombre: str) -> list[str]:
+        """Los menús que llevan esta receta."""
+        return [m.nombre for m in self.menus.values() if any(r.nombre == nombre for r in m.recetas)]
+
+    def editar_receta(
+        self, nombre: str, ingredientes: Optional[dict[str, float]] = None, categoria: Optional[str] = None,
+    ) -> None:
+        """
+        Cambia los ingredientes (cantidad por comensal; los que no aparecen se
+        quitan) y/o la categoría de una receta. Los menús que la llevan ven el
+        cambio (comparten la misma receta); los servicios ya completados no,
+        porque guardan una foto de cómo era el menú al hacerlos.
+        """
+        receta = self.recetas.get(nombre)
+        if receta is None:
+            raise ValueError(f"No existe la receta '{nombre}'.")
+        if ingredientes is not None:
+            limpios = {n: float(c) for n, c in ingredientes.items() if c and c > 0}
+            if any(c < 0 for c in ingredientes.values()):
+                raise ValueError("Las cantidades no pueden ser negativas.")
+            if not limpios:
+                raise ValueError("Una receta necesita al menos un ingrediente.")
+            receta.ingredientes_por_comensal = limpios
+        if categoria is not None:
+            receta.categoria = categoria.strip()
+        print(f"✏️  Receta editada: {receta}")
+
+    def eliminar_receta(self, nombre: str, inventario: Optional[Inventario] = None) -> None:
+        """
+        Borra una receta. No se puede si algún menú la lleva (hay que quitarla
+        antes del menú) ni si quedan raciones preparadas de ella.
+        """
+        if nombre not in self.recetas:
+            raise ValueError(f"No existe la receta '{nombre}'.")
+        menus = self.menus_con_receta(nombre)
+        if menus:
+            raise ValueError(f"La receta '{nombre}' está en estos menús: {', '.join(menus)}. "
+                             "Quítala de ellos antes de borrarla.")
+        if inventario is not None and inventario.elaboraciones.raciones_disponibles(nombre) > 0:
+            raise ValueError(f"Quedan raciones preparadas de '{nombre}'. Úsalas o deséchalas antes de borrar la receta.")
+        del self.recetas[nombre]
+        print(f"🗑️  Receta borrada: {nombre}")
+
+    def editar_recetas_menu(self, nombre: str, recetas: list[str]) -> None:
+        """Cambia las recetas de un menú (por sus nombres, en el orden dado)."""
+        menu = self.menus.get(nombre)
+        if menu is None:
+            raise ValueError(f"No existe el menú '{nombre}'.")
+        if not recetas:
+            raise ValueError("Un menú necesita al menos una receta.")
+        faltan = [r for r in recetas if r not in self.recetas]
+        if faltan:
+            raise ValueError(f"No existen estas recetas: {', '.join(faltan)}.")
+        menu.recetas = [self.recetas[r] for r in recetas]
+        print(f"✏️  Menú editado: {menu}")
+
+    def eliminar_menu(self, nombre: str, servicios: Optional[list] = None) -> None:
+        """
+        Borra un menú. No se puede si un servicio PENDIENTE o CONFIRMADO lo
+        usa (hay que cambiarle el menú antes). Los servicios ya completados no
+        importan: guardan una foto de cómo era el menú.
+        """
+        if nombre not in self.menus:
+            raise ValueError(f"No existe el menú '{nombre}'.")
+        usan = [s for s in (servicios or []) if s.menu == nombre and s.estado in ("pendiente", "confirmado")]
+        if usan:
+            raise ValueError(f"El menú '{nombre}' lo usan estos servicios pendientes: "
+                             + ", ".join(f"#{s.id} ({s.fecha.strftime('%d/%m/%Y')})" for s in usan)
+                             + ". Cámbiales el menú antes de borrarlo.")
+        del self.menus[nombre]
+        print(f"🗑️  Menú borrado: {nombre}")
+
     def renombrar_producto(self, antiguo: str, nuevo: str) -> list[str]:
         """
         Al renombrar un producto del inventario, lo renombra también en las

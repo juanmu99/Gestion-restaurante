@@ -888,6 +888,36 @@ def mostrar_historial_limpiezas() -> None:
 
 # ---------- Menú: Servicios ----------
 
+def accion_editar_servicio() -> None:
+    editables = [s for s in registro_servicios.servicios if s.estado in ("pendiente", "confirmado")]
+    if not editables:
+        print("No hay servicios pendientes que editar (uno completado o cancelado ya no se edita).")
+        return
+    for s in sorted(editables, key=lambda s: (s.fecha, s.hora)):
+        print(s)
+    servicio = registro_servicios.buscar_por_id(pedir_entero("Nº del servicio a editar: "))
+    if servicio is None or servicio not in editables:
+        print("❌ Ese servicio no existe o ya no se puede editar.")
+        return
+    print("Deja vacío lo que no cambie.")
+    fecha = pedir_fecha("Nueva fecha") if pedir_si_no("¿Cambiar la fecha?") else None
+    hora = pedir_hora("Nueva hora") if pedir_si_no("¿Cambiar la hora?") else None
+    comensales = pedir_numero_opcional(f"Comensales [{servicio.comensales}]: ")
+    menu = pedir_opcion("Menú", tuple(recetario.menus)) if recetario.menus and pedir_si_no(
+        f"¿Cambiar el menú? (ahora: {servicio.menu})") else None
+    cliente = pedir_texto(f"Cliente [{servicio.cliente or '-'}]: ") or None
+    lugar = pedir_texto(f"Lugar [{servicio.lugar or '-'}]: ") or None
+    notas = pedir_texto("Notas (vacío = no cambiar): ") or None
+    precio = pedir_numero_opcional(f"Precio de cobro total, sin IVA (0 = sin indicar) [{servicio.precio_cobrado or '-'}]: ")
+    estado = pedir_opcion("Estado", ("pendiente", "confirmado"))
+    try:
+        servicio.editar(fecha=fecha, hora=hora, comensales=int(comensales) if comensales is not None else None,
+                        menu=menu, notas=notas, cliente=cliente, lugar=lugar,
+                        precio_cobrado=precio if precio else None, quitar_precio=precio == 0, estado=estado)
+    except ValueError as e:
+        print(f"❌ {e}")
+
+
 def menu_servicios():
     while True:
         print("\n--- SERVICIOS ---")
@@ -896,6 +926,7 @@ def menu_servicios():
         print("3. Cancelar servicio")
         print("4. Ver próximos servicios (7 días)")
         print("5. Completar servicio (descuenta stock automáticamente)")
+        print("6. Editar un servicio pendiente (fecha, comensales, menú, confirmado...)")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -985,6 +1016,8 @@ def menu_servicios():
                             servicio.valoracion = pedir_texto("¿Cómo fue? (opcional, para el historial): ")
                         except ValueError as e:
                             print(f"❌ {e}")
+        elif opcion == "6":
+            accion_editar_servicio()
         elif opcion == "0":
             return
         else:
@@ -1299,6 +1332,62 @@ def accion_bases_recetario() -> None:
         print(f"❌ {e}")
 
 
+def accion_editar_receta() -> None:
+    if not recetario.recetas:
+        print("No hay recetas todavía.")
+        return
+    nombre = pedir_opcion("Receta", tuple(recetario.recetas))
+    receta = recetario.recetas[nombre]
+    if pedir_opcion("¿Qué quieres hacer?", ("editar", "borrar")) == "borrar":
+        if pedir_si_no(f"¿Seguro que quieres borrar la receta '{nombre}'?"):
+            try:
+                recetario.eliminar_receta(nombre, inventario)
+            except ValueError as e:
+                print(f"❌ {e}")
+        return
+    categoria = pedir_texto(f"Categoría [{receta.categoria}]: ") or receta.categoria
+    print("Cantidad por comensal de cada ingrediente (Enter = igual, 0 = quitarlo):")
+    ingredientes = {}
+    for ingrediente, cantidad in receta.ingredientes_por_comensal.items():
+        producto = inventario.buscar_producto(ingrediente)
+        unidad = producto.unidad if producto else "?"
+        valor = pedir_numero_opcional(f"  {ingrediente} ({unidad}) [{cantidad:g}]: ")
+        ingredientes[ingrediente] = cantidad if valor is None else valor
+    while pedir_si_no("¿Añadir otro ingrediente?"):
+        nombre_ing = pedir_texto("  Ingrediente: ")
+        producto = inventario.buscar_producto(nombre_ing)
+        if producto is None or not producto.es_alimento():
+            print(f"⚠️  '{nombre_ing}' no es un alimento del inventario.")
+            continue
+        ingredientes[producto.nombre] = pedir_numero(f"  Cantidad por comensal ({producto.unidad}): ")
+    try:
+        recetario.editar_receta(nombre, ingredientes=ingredientes, categoria=categoria)
+    except ValueError as e:
+        print(f"❌ {e}")
+
+
+def accion_editar_menu() -> None:
+    if not recetario.menus:
+        print("No hay menús todavía.")
+        return
+    nombre = pedir_opcion("Menú", tuple(recetario.menus))
+    if pedir_opcion("¿Qué quieres hacer?", ("recetas", "borrar")) == "borrar":
+        if pedir_si_no(f"¿Seguro que quieres borrar el menú '{nombre}'?"):
+            try:
+                recetario.eliminar_menu(nombre, registro_servicios.servicios)
+            except ValueError as e:
+                print(f"❌ {e}")
+        return
+    print(f"Recetas ahora: {', '.join(r.nombre for r in recetario.menus[nombre].recetas)}")
+    print(f"Disponibles: {', '.join(recetario.recetas)}")
+    texto = pedir_texto("Recetas del menú, separadas por comas: ")
+    recetas = [r.strip() for r in texto.split(",") if r.strip()]
+    try:
+        recetario.editar_recetas_menu(nombre, recetas)
+    except ValueError as e:
+        print(f"❌ {e}")
+
+
 def menu_recetario():
     while True:
         print("\n--- RECETARIO ---")
@@ -1310,6 +1399,8 @@ def menu_recetario():
         print("6. Recomendar menú (según caducidad)")
         print("7. Elaboraciones base (sofritos, fondos, salsas...)")
         print("8. Anotaciones (notas de bases, recetas y menús)")
+        print("9. Editar o borrar una receta")
+        print("10. Cambiar las recetas de un menú o borrarlo")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1409,6 +1500,10 @@ def menu_recetario():
                             print(f"   📦 Por exceso de stock: {detalle}")
                     else:
                         print(f"   {menu.nombre} | sin urgencia | {disponibilidad}")
+        elif opcion == "9":
+            accion_editar_receta()
+        elif opcion == "10":
+            accion_editar_menu()
         elif opcion == "0":
             return
         else:

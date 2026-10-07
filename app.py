@@ -2324,6 +2324,55 @@ def _texto_servicio(s: Servicio) -> str:
     return f"#{s.id} · {s.fecha.strftime('%d/%m/%Y')} {s.hora.strftime('%H:%M')} · {s.menu}{cliente}"
 
 
+def _pestana_editar_servicio(serv: RegistroServicios, rec: Recetario) -> None:
+    """Cambiar los datos de un servicio que todavía no se ha hecho (pendiente o confirmado)."""
+    editables = sorted((s for s in serv.servicios if s.estado in ("pendiente", "confirmado")),
+                       key=lambda s: (s.fecha, s.hora))
+    if not editables:
+        st.info("No hay servicios pendientes que editar. (Uno completado o cancelado ya no se edita.)")
+        return
+    opciones = {_texto_servicio(s): s for s in editables}
+    elegido = st.selectbox("Servicio a editar", list(opciones), index=None, placeholder="Elige el servicio...",
+                           key="editar_servicio_select")
+    if not elegido:
+        return
+    s = opciones[elegido]
+    # La huella en las keys: si el servicio cambia (desde aquí o desde otra
+    # pestaña), los campos se vuelven a rellenar con sus datos actuales.
+    huella = _huella(s.fecha, s.hora, s.comensales, s.menu, s.notas, s.cliente, s.lugar, s.precio_cobrado, s.estado)
+    k = lambda campo: f"editar_servicio_{campo}_{s.id}_{huella}"
+    c1, c2 = st.columns(2)
+    fecha = c1.date_input("Fecha", value=s.fecha, format="DD/MM/YYYY", key=k("fecha"))
+    hora = c2.time_input("Hora", value=s.hora, key=k("hora"))
+    c3, c4 = st.columns(2)
+    comensales = c3.number_input("Comensales", min_value=1, step=1, value=int(s.comensales), key=k("comensales"))
+    menus = list(rec.menus)
+    menu = c4.selectbox("Menú", menus, index=menus.index(s.menu) if s.menu in menus else None,
+                        placeholder="Elige el menú...", key=k("menu"))
+    c5, c6 = st.columns(2)
+    cliente = c5.text_input("Cliente", value=s.cliente, key=k("cliente"))
+    lugar = c6.text_input("Lugar", value=s.lugar, key=k("lugar"))
+    notas = st.text_area("Notas", value=s.notas, key=k("notas"))
+    c7, c8 = st.columns(2)
+    precio = c7.number_input("Precio de cobro (€, total del servicio, sin IVA; 0 = sin indicar)", min_value=0.0,
+                             step=10.0, value=float(s.precio_cobrado or 0.0), key=k("precio"))
+    confirmado = c8.checkbox("✔️ Confirmado por el cliente", value=s.estado == "confirmado", key=k("confirmado"))
+    if comensales != s.comensales and s.precio_cobrado:
+        st.caption("Ojo: el precio de cobro es el total del servicio. Si cobras por comensal, cámbialo también.")
+    if st.button("Guardar cambios", type="primary", key=k("guardar")):
+        if not menu:
+            st.error("Elige el menú del servicio.")
+            return
+        try:
+            s.editar(fecha=fecha, hora=hora, comensales=int(comensales), menu=menu, notas=notas, cliente=cliente,
+                     lugar=lugar, precio_cobrado=precio if precio > 0 else None, quitar_precio=precio <= 0,
+                     estado="confirmado" if confirmado else "pendiente")
+            avisar("success", f"Servicio #{s.id} actualizado.")
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+
 def _arreglar_menus_inexistentes(serv: RegistroServicios, rec: Recetario) -> None:
     """Servicios pendientes cuyo menú ya no existe (o se escribió mal): se avisa y se deja elegir otro."""
     malos = [s for s in serv.servicios if s.estado in ("pendiente", "confirmado") and rec.buscar_menu(s.menu) is None]
@@ -2360,10 +2409,13 @@ def pagina_servicios() -> None:
     _arreglar_menus_inexistentes(serv, rec)
 
     st.divider()
-    tab_add, tab_cancel, tab_completar, tab_material, tab_rentabilidad = st.tabs(
-        ["➕ Añadir servicio", "🚫 Cancelar servicio", "✅ Completar servicio", "🚚 Material", "💶 Rentabilidad"]
+    tab_add, tab_editar, tab_cancel, tab_completar, tab_material, tab_rentabilidad = st.tabs(
+        ["➕ Añadir servicio", "✏️ Editar servicio", "🚫 Cancelar servicio", "✅ Completar servicio", "🚚 Material",
+         "💶 Rentabilidad"]
     )
 
+    with tab_editar:
+        _pestana_editar_servicio(serv, rec)
     with tab_material:
         _pestana_material_servicio(serv, rec)
     with tab_rentabilidad:
@@ -2758,6 +2810,64 @@ def _editor_material(clave: str, actuales: dict[str, float]) -> dict[str, float]
     return resultado
 
 
+def _editar_receta(inv: Inventario, rec: Recetario) -> None:
+    """Cambiar las cantidades, quitar o añadir ingredientes, cambiar la categoría o borrar una receta."""
+    st.markdown("**✏️ Editar o borrar una receta**")
+    nombre = st.selectbox("Receta", list(rec.recetas), index=None, placeholder="Elige la receta...",
+                          key="editar_receta_select")
+    if not nombre:
+        return
+    receta = rec.recetas[nombre]
+    huella = _huella(receta.categoria, sorted(receta.ingredientes_por_comensal.items()))
+    k = lambda campo: f"editar_receta_{campo}_{nombre}_{huella}"
+    categoria = st.text_input("Categoría", value=receta.categoria, key=k("categoria"))
+    st.caption("Cantidad por comensal, en la unidad de cada producto. Pon 0 para quitar un ingrediente.")
+    nuevos: dict[str, float] = {}
+    for ingrediente, cantidad in receta.ingredientes_por_comensal.items():
+        producto = inv.buscar_producto(ingrediente)
+        unidad = producto.unidad if producto else "?"
+        nuevos[ingrediente] = st.number_input(
+            f"{ingrediente} ({unidad})", min_value=0.0, step=0.01, format="%g", value=float(cantidad),
+            key=k(f"ing_{ingrediente}"),
+        )
+    otros = [p.nombre for p in inv.alimentos() if p.nombre not in receta.ingredientes_por_comensal]
+    if otros:
+        c1, c2 = st.columns([2, 1])
+        anadir = c1.selectbox("Añadir otro ingrediente (opcional)", otros, index=None, placeholder="Elige...",
+                              key=k("anadir"))
+        if anadir:
+            nuevos[anadir] = c2.number_input(f"Cantidad ({inv.buscar_producto(anadir).unidad})", min_value=0.0,
+                                             step=0.01, format="%g", key=k(f"anadir_cantidad_{anadir}"))
+    quitados = [n for n, c in nuevos.items() if c <= 0 and n in receta.ingredientes_por_comensal]
+    if quitados:
+        st.caption("Se quitarán: " + ", ".join(quitados))
+    menus = rec.menus_con_receta(nombre)
+    if menus:
+        st.caption(f"Los cambios se verán en los menús que la llevan ({', '.join(menus)}). Los servicios ya hechos "
+                   "no cambian: guardan cómo era el menú.")
+    if st.button("Guardar cambios", type="primary", key=k("guardar")):
+        try:
+            rec.editar_receta(nombre, ingredientes=nuevos, categoria=categoria)
+            avisar("success", f"Receta '{nombre}' actualizada.")
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+    with st.expander(f"🗑️ Borrar la receta '{nombre}'"):
+        if menus:
+            st.caption(f"No se puede borrar: está en estos menús: {', '.join(menus)}. Quítala de ellos antes.")
+            return
+        confirmar = st.checkbox(f"Sí, quiero borrar la receta '{nombre}'", key=k("borrar_confirmar"))
+        if st.button("Borrar receta", key=k("borrar"), disabled=not confirmar):
+            try:
+                rec.eliminar_receta(nombre, inv)
+                avisar("success", f"Receta '{nombre}' borrada.")
+                vaciar_campos("editar_receta_")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
+
 def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
     """Un menú: a simple vista, su comida; al entrar, el detalle de cada receta y sus consumibles."""
     with st.container(border=True):
@@ -2822,6 +2932,38 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                 avisar("success", f"Material del menú '{menu.nombre}' guardado.")
                 st.rerun()
 
+        with st.expander("✏️ Cambiar las recetas o borrar el menú"):
+            actuales = [r.nombre for r in menu.recetas]
+            recetas = st.multiselect(
+                "Recetas del menú", list(rec.recetas), default=[r for r in actuales if r in rec.recetas],
+                key=f"menu_{menu.nombre}_recetas_{_huella(actuales)}", placeholder="Elige las recetas...",
+            )
+            if st.button("Guardar recetas", key=f"menu_{menu.nombre}_guardar_recetas", disabled=recetas == actuales):
+                try:
+                    rec.editar_recetas_menu(menu.nombre, recetas)
+                    avisar("success", f"Recetas del menú '{menu.nombre}' guardadas.")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
+            st.caption("Los servicios ya hechos no cambian: guardan cómo era el menú al hacerlos.")
+
+            st.markdown("**🗑️ Borrar el menú**")
+            usan = [s for s in st.session_state.registro_servicios.servicios
+                    if s.menu == menu.nombre and s.estado in ("pendiente", "confirmado")]
+            if usan:
+                st.caption("No se puede borrar: lo usan estos servicios pendientes: "
+                           + ", ".join(_texto_servicio(s) for s in usan) + ". Cámbiales el menú antes "
+                           "(Servicios › Editar servicio).")
+            else:
+                confirmar = st.checkbox(f"Sí, quiero borrar el menú '{menu.nombre}'", key=f"menu_{menu.nombre}_borrar_confirmar")
+                if st.button("Borrar menú", key=f"menu_{menu.nombre}_borrar", disabled=not confirmar):
+                    try:
+                        rec.eliminar_menu(menu.nombre, st.session_state.registro_servicios.servicios)
+                        avisar("success", f"Menú '{menu.nombre}' borrado.")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
+
 
 def pagina_recetario() -> None:
     st.header("👩‍🍳 Recetario")
@@ -2855,10 +2997,14 @@ def pagina_recetario() -> None:
                 avisar("success", f"Vida útil de '{nombre_vida}' guardada.")
                 st.rerun()
 
+        if rec.recetas:
+            st.divider()
+            _editar_receta(inv, rec)
+
     with tab_menus:
         if not rec.menus:
             st.info("No hay menús todavía.")
-        for m in rec.menus.values():
+        for m in list(rec.menus.values()):
             _tarjeta_menu(m, inv, rec)
 
     with tab_crear_receta:

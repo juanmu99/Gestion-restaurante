@@ -92,6 +92,58 @@ class Servicio:
             raise ValueError("Este servicio ya está completado: no se puede cancelar.")
         self.estado = "cancelado"
 
+    def editar(
+        self,
+        fecha: Optional[date] = None,
+        hora: Optional[time] = None,
+        comensales: Optional[int] = None,
+        menu: Optional[str] = None,
+        notas: Optional[str] = None,
+        cliente: Optional[str] = None,
+        lugar: Optional[str] = None,
+        precio_cobrado: Optional[float] = None,
+        quitar_precio: bool = False,
+        estado: Optional[str] = None,
+    ) -> None:
+        """
+        Cambia los datos de un servicio que TODAVÍA NO SE HA HECHO (pendiente o
+        confirmado). None = "no lo toques". `estado` solo puede ser
+        "pendiente" o "confirmado" (para cancelar o completar están sus
+        propias acciones). quitar_precio=True deja el servicio sin precio de cobro.
+        Uno completado o cancelado no se edita: su stock y sus costes ya son reales.
+        """
+        if self.estado not in ("pendiente", "confirmado"):
+            raise ValueError(f"El servicio #{self.id} está {self.estado}: ya no se puede editar.")
+        if comensales is not None and comensales <= 0:
+            raise ValueError("El número de comensales debe ser mayor que 0")
+        if menu is not None and not menu.strip():
+            raise ValueError("Elige el menú del servicio.")
+        if precio_cobrado is not None and precio_cobrado < 0:
+            raise ValueError("El precio cobrado no puede ser negativo")
+        if estado is not None and estado not in ("pendiente", "confirmado"):
+            raise ValueError("Aquí el estado solo puede ser 'pendiente' o 'confirmado'.")
+        if fecha is not None:
+            self.fecha = fecha
+        if hora is not None:
+            self.hora = hora
+        if comensales is not None:
+            self.comensales = int(comensales)
+        if menu is not None:
+            self.menu = menu.strip()
+        if notas is not None:
+            self.notas = notas
+        if cliente is not None:
+            self.cliente = cliente.strip()
+        if lugar is not None:
+            self.lugar = lugar.strip()
+        if quitar_precio:
+            self.precio_cobrado = None
+        elif precio_cobrado is not None:
+            self.precio_cobrado = precio_cobrado
+        if estado is not None:
+            self.estado = estado
+        print(f"✏️  Servicio editado: {self}")
+
     def completar(self) -> None:
         self.estado = "completado"
         self.fecha_completado = date.today()

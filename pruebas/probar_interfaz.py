@@ -1306,6 +1306,52 @@ def prueba_bloque4(at: AppTest) -> None:
               "Se registra la vuelta del material de un servicio cancelado (deja de estar 'en uso')")
 
 
+@prueba("Editar y borrar servicios, recetas y menús (Fase 3, bloque 1)")
+def prueba_fase3_bloque1(at: AppTest) -> None:
+    from recetario import Menu
+
+    serv = at.session_state["registro_servicios"]
+    rec = at.session_state["recetario"]
+
+    servicio = Servicio(date.today() + timedelta(days=5), time(20, 0), 6, "Menú del día")
+    serv.agregar_servicio(servicio)
+    ir_a(at, "Servicios")
+    sb = at.selectbox(key="editar_servicio_select")
+    sb.select(opcion(sb, f"#{servicio.id} ·")).run()
+    por_clave(at.number_input, f"editar_servicio_comensales_{servicio.id}_").set_value(9)
+    por_clave(at.checkbox, f"editar_servicio_confirmado_{servicio.id}_").check().run()
+    por_clave(at.button, f"editar_servicio_guardar_{servicio.id}_").click().run()
+    comprobar(sin_excepciones(at, "editar servicio") and servicio.comensales == 9 and servicio.estado == "confirmado",
+              "Editar un servicio pendiente: comensales (6 -> 9) y marcarlo como confirmado")
+
+    ir_a(at, "Recetario")
+    at.selectbox(key="editar_receta_select").select("Crema montada").run()
+    por_clave(at.number_input, "editar_receta_ing_Nata para montar_Crema montada_").set_value(0.2).run()
+    por_clave(at.button, "editar_receta_guardar_Crema montada_").click().run()
+    comprobar(sin_excepciones(at, "editar receta") and rec.recetas["Crema montada"].ingredientes_por_comensal
+              == {"Nata para montar": 0.2}, "Editar la cantidad de un ingrediente de una receta")
+    por_clave(at.checkbox, "editar_receta_borrar_confirmar_Crema montada_").check().run()
+    por_clave(at.button, "editar_receta_borrar_Crema montada_").click().run()
+    comprobar(sin_excepciones(at, "borrar receta") and "Crema montada" not in rec.recetas,
+              "Borrar una receta que no está en ningún menú")
+    at.selectbox(key="editar_receta_select").select("Pan casero").run()
+    comprobar(any("No se puede borrar" in t for t in textos(at.caption)),
+              "Una receta que está en un menú no se puede borrar (y dice en cuál)")
+
+    rec.agregar_menu(Menu("Menú prueba", [rec.recetas["Pan casero"]]))
+    ir_a(at, "Recetario")
+    por_clave(at.multiselect, "menu_Menú prueba_recetas_").set_value(["Pan casero", "Ensalada de tomate"]).run()
+    at.button(key="menu_Menú prueba_guardar_recetas").click().run()
+    comprobar(sin_excepciones(at, "recetas del menú")
+              and [r.nombre for r in rec.menus["Menú prueba"].recetas] == ["Pan casero", "Ensalada de tomate"],
+              "Cambiar las recetas de un menú")
+    comprobar(any("No se puede borrar" in t and "#" in t for t in textos(at.caption)),
+              "Un menú que usa un servicio pendiente no se puede borrar (y dice cuál)")
+    at.checkbox(key="menu_Menú prueba_borrar_confirmar").check().run()
+    at.button(key="menu_Menú prueba_borrar").click().run()
+    comprobar(sin_excepciones(at, "borrar menú") and "Menú prueba" not in rec.menus, "Borrar un menú que no se usa")
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1338,6 +1384,7 @@ def main() -> int:
     prueba_historial(at)
     prueba_metricas_y_guardado(at)
     prueba_bloque4(at)
+    prueba_fase3_bloque1(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

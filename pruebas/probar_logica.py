@@ -1297,6 +1297,74 @@ silencio(compras.agregar_item, ItemCompra("Cebolla", 2, "kg", "Huerta", 1))
 compras.renombrar_producto("Cebolla", "Cebolla dulce")
 comprobar(compras.pendiente_de("Cebolla dulce") is not None, "La lista de la compra pasa a usar el nombre nuevo")
 
+print("\n--- Fase 3, bloque 1: editar servicios ---")
+serv = Servicio(HOY, time(14, 0), 10, "Menú A", precio_cobrado=300)
+silencio(serv.editar, fecha=HOY + timedelta(days=2), comensales=12, menu="Menú B", estado="confirmado", cliente=" Ruiz ")
+comprobar(serv.fecha == HOY + timedelta(days=2) and serv.comensales == 12 and serv.menu == "Menú B"
+          and serv.estado == "confirmado" and serv.cliente == "Ruiz" and serv.precio_cobrado == 300,
+          "Un servicio pendiente se puede editar (fecha, comensales, menú, cliente) y marcar como confirmado")
+silencio(serv.editar, quitar_precio=True)
+comprobar(serv.precio_cobrado is None, "Se le puede quitar el precio de cobro")
+for cambio, texto in (({"comensales": 0}, "comensales"), ({"estado": "completado"}, "estado")):
+    try:
+        serv.editar(**cambio)
+        comprobar(False, f"Editar rechaza un valor no válido ({texto})")
+    except ValueError:
+        comprobar(serv.comensales == 12 and serv.estado == "confirmado", f"Editar rechaza un valor no válido ({texto})")
+serv.completar()
+try:
+    serv.editar(comensales=5)
+    comprobar(False, "Un servicio completado no se edita")
+except ValueError:
+    comprobar(serv.comensales == 12, "Un servicio completado no se edita")
+
+print("\n--- Fase 3, bloque 1: editar y borrar recetas y menús ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 5, "kg", 2, "Huerta"))
+silencio(inv.agregar_producto, Producto("Aceite", "Despensa", 5, "litros", 4, "Mayorista"))
+rec = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1, "Aceite": 0.01})
+gazpacho = Receta("Gazpacho", "Entrantes", {"Tomate": 0.2})
+silencio(rec.agregar_receta, ensalada)
+silencio(rec.agregar_receta, gazpacho)
+silencio(rec.agregar_menu, Menu("Menú verano", [ensalada]))
+silencio(rec.editar_receta, "Ensalada", ingredientes={"Tomate": 0.15, "Aceite": 0}, categoria="Primeros")
+comprobar(ensalada.ingredientes_por_comensal == {"Tomate": 0.15} and ensalada.categoria == "Primeros"
+          and rec.menus["Menú verano"].ingredientes_por_comensal() == {"Tomate": 0.15},
+          "Editar una receta cambia cantidades, quita ingredientes (a 0) y el menú lo ve")
+try:
+    rec.editar_receta("Ensalada", ingredientes={"Tomate": 0})
+    comprobar(False, "Una receta no se queda sin ingredientes")
+except ValueError:
+    comprobar(ensalada.ingredientes_por_comensal == {"Tomate": 0.15}, "Una receta no se queda sin ingredientes")
+try:
+    rec.eliminar_receta("Ensalada", inv)
+    comprobar(False, "No se borra una receta que está en un menú")
+except ValueError as e:
+    comprobar("Menú verano" in str(e) and "Ensalada" in rec.recetas, "No se borra una receta que está en un menú (y dice cuál)")
+silencio(inv.elaboraciones.nueva_tanda, "Gazpacho", 5, 1.0)
+try:
+    rec.eliminar_receta("Gazpacho", inv)
+    comprobar(False, "No se borra una receta con raciones preparadas")
+except ValueError:
+    comprobar("Gazpacho" in rec.recetas, "No se borra una receta con raciones preparadas")
+silencio(rec.editar_recetas_menu, "Menú verano", ["Ensalada", "Gazpacho"])
+comprobar([r.nombre for r in rec.menus["Menú verano"].recetas] == ["Ensalada", "Gazpacho"], "Se pueden cambiar las recetas de un menú")
+silencio(rec.editar_recetas_menu, "Menú verano", ["Gazpacho"])
+silencio(rec.eliminar_receta, "Ensalada", inv)
+comprobar("Ensalada" not in rec.recetas, "Quitada del menú, la receta ya se puede borrar")
+pendiente = Servicio(HOY, time(14, 0), 10, "Menú verano")
+hecho = Servicio(HOY, time(14, 0), 10, "Menú verano")
+hecho.completar()
+try:
+    rec.eliminar_menu("Menú verano", [pendiente, hecho])
+    comprobar(False, "No se borra un menú que usa un servicio pendiente")
+except ValueError as e:
+    comprobar(f"#{pendiente.id}" in str(e) and "Menú verano" in rec.menus,
+              "No se borra un menú que usa un servicio pendiente (y dice cuál)")
+silencio(rec.eliminar_menu, "Menú verano", [hecho])
+comprobar("Menú verano" not in rec.menus, "Un menú que solo usan servicios ya hechos sí se puede borrar")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")
