@@ -1459,32 +1459,139 @@ class Inventario:
             "derivados": [m for m in salidas if m.motivo in ("elaboración", "limpieza")],
         }
 
-    def corregir_compra(self, compra: "PrecioCompra", precio_unitario: float, proveedor: Optional[str] = None) -> None:
+    def corregir_compra(
+        self, compra: "PrecioCompra", precio_unitario: Optional[float] = None, proveedor: Optional[str] = None,
+        cantidad: Optional[float] = None, iva: Optional[float] = None, iva_tambien_producto: bool = True,
+    ) -> None:
         """
-        Corrige el precio (y el proveedor) de una compra del HISTORIAL DE
-        PRECIOS, aunque su lote ya se haya gastado entero: se corrige todo lo
-        registrado con ese lote (ver _corregir_registrado) y el lote, si sigue.
+        Corrige una compra del HISTORIAL DE PRECIOS (un error al apuntarla),
+        aunque su lote ya se haya gastado: se corrige todo lo registrado con
+        ese lote (Métricas, IVA, historial de precios, coste de lo que ya
+        salió) y el lote, si sigue. None = "no lo toques".
+
+        - precio_unitario / proveedor: ver _corregir_registrado.
+        - cantidad: lo que se compró de verdad. Lo que queda en el lote se
+          ajusta en la diferencia (se compraron 5 kg, no 50, y se usaron 2:
+          quedan 3). No puede ser menos de lo que ya se ha usado.
+        - iva: el tipo de IVA correcto. Se mantiene lo que se pagó (con IVA)
+          y se recalcula la parte sin IVA y el IVA soportado. Con
+          iva_tambien_producto, el producto usa ese IVA en las próximas compras.
+
         Las compras sin número de lote (sesiones muy antiguas) solo se
         corrigen en el historial de precios.
         """
-        if precio_unitario < 0:
+        if precio_unitario is not None and precio_unitario < 0:
             raise ValueError("El precio no puede ser negativo.")
         if proveedor is not None and (not proveedor.strip() or _es_numero(proveedor)):
             raise ValueError("El proveedor debe ser texto descriptivo, no puede estar vacío ni ser un número")
+        if cantidad is not None and cantidad <= 0:
+            raise ValueError("La cantidad comprada debe ser mayor que 0. Si la compra no existió, anúlala.")
+        if iva is not None and iva < 0:
+            raise ValueError("El IVA no puede ser negativo.")
+        producto = self.productos.get(compra.producto)
+        lote = producto.buscar_lote(compra.lote_id) if producto and compra.lote_id is not None else None
+
+        if cantidad is not None and abs(cantidad - compra.cantidad) > 1e-9 and compra.lote_id is not None:
+            diferencia = cantidad - compra.cantidad
+            if lote is None:
+                raise ValueError(
+                    "Ese lote ya se ha gastado entero, así que su cantidad ya no se puede corregir aquí "
+                    "(el precio y el IVA sí)."
+                )
+            if lote.cantidad + diferencia < -1e-9:
+                usado = compra.cantidad - lote.cantidad
+                raise ValueError(
+                    f"De esta compra ya se han usado {_numero(usado)} {producto.unidad}: no puede ser de "
+                    f"{_numero(cantidad)}. Revisa la cantidad."
+                )
+
+        # --- Validado: se aplica ---
         if compra.lote_id is None:
-            compra.precio_unitario = precio_unitario
+            if iva is not None:
+                pagado = compra.precio_unitario
+                compra.iva = iva
+                compra.precio_unitario = pagado
+            if precio_unitario is not None:
+                compra.precio_unitario = precio_unitario
             if proveedor is not None:
                 compra.proveedor = proveedor.strip()
+            if cantidad is not None:
+                compra.cantidad = cantidad
             return
+
+        nombre = compra.producto
+        if iva is not None:
+            self._corregir_iva_registrado(nombre, compra.lote_id, iva)
+            if producto is not None and iva_tambien_producto:
+                pagado = producto.precio_referencia
+                producto.iva = iva
+                producto.precio_referencia = pagado
+        if cantidad is not None and abs(cantidad - compra.cantidad) > 1e-9:
+            diferencia = cantidad - compra.cantidad
+            for m in self.historial:
+                if m.producto_nombre == nombre and m.lote_id == compra.lote_id and m.es_compra():
+                    m.cantidad = cantidad
+            for p in self.historial_precios:
+                if p.producto == nombre and p.lote_id == compra.lote_id:
+                    p.cantidad = cantidad
+            lote.cantidad = max(0.0, round(lote.cantidad + diferencia, 6))
+        if lote is not None and (precio_unitario is not None or proveedor is not None):
+            self.editar_lote(nombre, compra.lote_id, precio_unitario=precio_unitario, proveedor=proveedor,
+                             corregir_registrado=True)
+        elif precio_unitario is not None or proveedor is not None:
+            self._corregir_registrado(nombre, compra.lote_id, precio_unitario, proveedor)
+        if producto is not None and self._es_ultima_compra(nombre, compra.lote_id):
+            producto.precio_referencia = compra.precio_unitario
+        if producto is not None:
+            producto.quitar_lotes_vacios()
+
+    def _corregir_iva_registrado(self, nombre: str, lote_id: int, iva: float) -> None:
+        """Cambia el IVA de un lote y de todo lo registrado con él, manteniendo lo pagado (con IVA)."""
+        producto = self.productos.get(nombre)
+        lote = producto.buscar_lote(lote_id) if producto else None
+        registros = [m for m in self.historial if m.producto_nombre == nombre and m.lote_id == lote_id]
+        registros += [p for p in self.historial_precios if p.producto == nombre and p.lote_id == lote_id]
+        if lote is not None:
+            registros.append(lote)
+        for r in registros:
+            pagado = r.precio_unitario
+            r.iva = iva
+            r.precio_unitario = pagado
+
+    def se_puede_anular(self, compra: "PrecioCompra") -> tuple[bool, str]:
+        """(True, "") si la compra se puede anular; si no, (False, por qué)."""
+        if compra.lote_id is None:
+            return False, "Es una compra muy antigua (sin número de lote): no se puede anular."
         producto = self.productos.get(compra.producto)
         lote = producto.buscar_lote(compra.lote_id) if producto else None
-        if lote is not None:
-            self.editar_lote(compra.producto, compra.lote_id, precio_unitario=precio_unitario, proveedor=proveedor,
-                             corregir_registrado=True)
-        else:
-            self._corregir_registrado(compra.producto, compra.lote_id, precio_unitario, proveedor)
-            if producto is not None and self._es_ultima_compra(compra.producto, compra.lote_id):
-                producto.precio_referencia_base = compra.precio_base
+        usada = any(m.producto_nombre == compra.producto and m.lote_id == compra.lote_id and m.tipo == "salida"
+                    for m in self.historial)
+        if lote is None or usada or abs(lote.cantidad - compra.cantidad) > 1e-9:
+            return False, ("De esta compra ya se ha usado algo: no se puede anular sin descuadrar lo ya "
+                           "registrado. Corrígela (cantidad, precio o IVA) en su lugar.")
+        return True, ""
+
+    def anular_compra(self, compra: "PrecioCompra") -> None:
+        """
+        Borra una compra apuntada por error (o dos veces): su lote, su gasto
+        (Métricas e IVA) y su línea del historial de precios. "La última
+        compra fue a…" vuelve a la compra anterior. Solo si de ese lote no ha
+        salido nada todavía (ver se_puede_anular).
+        """
+        posible, motivo = self.se_puede_anular(compra)
+        if not posible:
+            raise ValueError(motivo)
+        nombre, lote_id = compra.producto, compra.lote_id
+        producto = self.productos[nombre]
+        era_la_ultima = self._es_ultima_compra(nombre, lote_id)
+        producto.lotes = [l for l in producto.lotes if l.id != lote_id]
+        self.historial = [m for m in self.historial if not (m.producto_nombre == nombre and m.lote_id == lote_id)]
+        self.historial_precios = [p for p in self.historial_precios
+                                  if not (p.producto == nombre and p.lote_id == lote_id)]
+        anteriores = self.precios_de(nombre)
+        if era_la_ultima and anteriores:
+            producto.precio_referencia = anteriores[-1].precio_unitario
+        print(f"🗑️  Compra anulada: lote {lote_id} de '{nombre}'.")
 
     def _es_ultima_compra(self, nombre: str, lote_id: Optional[int]) -> bool:
         """True si ese lote es la compra más reciente del producto (la de "la última compra fue a…")."""
@@ -1633,8 +1740,10 @@ class Inventario:
         etiqueta_origen = lote.etiqueta()
 
         if principal is None:
+            # Nace con el IVA del producto en bruto (pata al 10 % -> carne limpia al 10 %).
             principal = Producto(
-                producto_limpio, origen.categoria, 0, unidad_nueva, 0, "Elaboración propia", origen=nombre_origen
+                producto_limpio, origen.categoria, 0, unidad_nueva, 0, "Elaboración propia", origen=nombre_origen,
+                iva=origen.iva,
             )
             self.agregar_producto(principal)
         elif principal.origen is None:
@@ -1643,7 +1752,8 @@ class Inventario:
         for nombre in derivados_kg:
             if nombre not in self.productos:
                 self.agregar_producto(Producto(
-                    nombre, origen.categoria, 0, unidad_nueva, 0, "Elaboración propia", es_subproducto=True
+                    nombre, origen.categoria, 0, unidad_nueva, 0, "Elaboración propia", es_subproducto=True,
+                    iva=origen.iva,
                 ))
 
         self.salida_stock(nombre_origen, cantidad, "limpieza", lote_id)
@@ -1811,10 +1921,12 @@ class Inventario:
         if stock_minimo is not None:
             producto.stock_minimo = stock_minimo
         if iva is not None:
-            # Solo para las compras de aquí en adelante: cada lote ya comprado guarda su IVA.
-            referencia = producto.precio_referencia_base
+            # Solo para las compras de aquí en adelante: cada lote ya comprado
+            # guarda su IVA. "La última compra fue a…" sigue siendo lo que se
+            # pagó (con IVA): solo cambia cómo se reparte entre base e IVA.
+            pagado = producto.precio_referencia
             producto.iva = iva
-            producto.precio_referencia_base = referencia
+            producto.precio_referencia = pagado
 
         print(f"✏️  Producto actualizado: {producto}")
         return True

@@ -204,9 +204,9 @@ def prueba_precios(at: AppTest) -> None:
               "'Dejarlo como estaba': cambia el lote, pero no lo ya registrado")
 
     at.selectbox(key="precios_select").select(nombre).run()
-    indice = inv.precios_de(nombre).index(inv.precios_de(nombre)[-1])
-    por_clave(at.number_input, f"corregir_compra_precio_{nombre}_{indice}_").set_value(3.5).run()
-    por_clave(at.button, f"corregir_compra_guardar_{nombre}_{indice}_").click().run()
+    lote_id = inv.precios_de(nombre)[-1].lote_id
+    por_clave(at.number_input, f"corregir_compra_precio_{nombre}_{lote_id}_").set_value(3.5).run()
+    por_clave(at.button, f"corregir_compra_guardar_{nombre}_{lote_id}_").click().run()
     comprobar(sin_excepciones(at, "corregir compra") and inv.precios_de(nombre)[-1].precio_unitario == 3.5
               and salida.precio_unitario == 3.5,
               "Desde el historial de precios se corrige una compra y lo que ya salió de ella")
@@ -1161,6 +1161,42 @@ def prueba_caducados(at: AppTest) -> None:
     inv.desechar_lote("Nata para montar", caducado)  # para no dejar avisos de caducados en el resto de pruebas
 
 
+@prueba("Corregir y anular compras (Fase 2, bloque 3)")
+def prueba_corregir_compras(at: AppTest) -> None:
+    inv = at.session_state["inventario"]
+    nombre = "Nata para montar"
+    lote = inv.entrada_stock(nombre, 50, precio_unitario=2, fecha_caducidad=date.today() + timedelta(days=5))  # eran 5
+
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🍅 Alimentos").run()
+    at.selectbox(key="editar_select").select(nombre).run()
+    caja = at.selectbox(key=f"edit_lote_{nombre}")
+    caja.select(opcion(caja, f"Lote {lote.id} ·")).run()
+    por_clave(at.number_input, f"edit_lote_cantidad_{nombre}_{lote.id}_").set_value(5.0).run()
+    motivo = por_clave(at.radio, f"edit_lote_motivo_cantidad_{nombre}_{lote.id}_")
+    motivo.set_value(next(o for o in motivo.options if o.startswith("Fue un error"))).run()
+    comprobar(any("pasará de 50 a 5" in t for t in textos(at.caption)),
+              "Al cambiar la cantidad se pregunta si es un recuento o un error en la compra (y se explica qué cambia)")
+    at.button(key=f"edit_boton_{nombre}").click().run()
+    compra = next(c for c in inv.precios_de(nombre) if c.lote_id == lote.id)
+    movimiento = next(m for m in inv.historial if m.producto_nombre == nombre and m.lote_id == lote.id and m.es_compra())
+    comprobar(sin_excepciones(at, "corregir cantidad de compra") and lote.cantidad == 5 and compra.cantidad == 5
+              and movimiento.cantidad == 5,
+              "'Error en la compra': se corrigen el lote, la compra (Métricas e IVA) y el historial de precios")
+
+    at.selectbox(key="precios_select").select(nombre).run()
+    caja = at.selectbox(key=f"corregir_compra_{nombre}")
+    caja.select(next(o for o in caja.options if o.endswith(f"lote {lote.id}"))).run()
+    boton_anular = por_clave(at.button, f"corregir_compra_anular_{nombre}_{lote.id}_")
+    comprobar(boton_anular.disabled, "Anular una compra pide confirmarlo antes")
+    por_clave(at.checkbox, f"corregir_compra_anular_confirmar_{nombre}_{lote.id}_").check().run()
+    por_clave(at.button, f"corregir_compra_anular_{nombre}_{lote.id}_").click().run()
+    comprobar(sin_excepciones(at, "anular compra") and inv.buscar_producto(nombre).buscar_lote(lote.id) is None
+              and not any(c.lote_id == lote.id for c in inv.precios_de(nombre))
+              and not any(m.producto_nombre == nombre and m.lote_id == lote.id for m in inv.historial),
+              "Anular una compra quita su lote, su gasto y su línea del historial de precios")
+
+
 @prueba("Historial de servicios")
 def prueba_historial(at: AppTest) -> None:
     serv = at.session_state["registro_servicios"]
@@ -1245,6 +1281,7 @@ def main() -> int:
     prueba_material(at)
     prueba_compras(at)
     prueba_caducados(at)
+    prueba_corregir_compras(at)
     prueba_historial(at)
     prueba_metricas_y_guardado(at)
 

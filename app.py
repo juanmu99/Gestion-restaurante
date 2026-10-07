@@ -507,13 +507,14 @@ def _criterio_rentabilidad() -> str:
     return "sin IVA" if st.session_state.inventario.iva_recuperable else "con IVA"
 
 
-def _elegir_iva(clave: str, actual: float = IVA_POR_DEFECTO, contenedor=None) -> float:
+def _elegir_iva(clave: str, actual: float = IVA_POR_DEFECTO, contenedor=None,
+                etiqueta: str = "IVA de este producto") -> float:
     """Desplegable con los tipos de IVA (21 % por defecto). Devuelve el porcentaje."""
     contenedor = contenedor or st
     nombres = list(TIPOS_IVA)
     actual_nombre = nombre_iva(actual)
     return TIPOS_IVA[contenedor.selectbox(
-        "IVA de este producto", nombres, index=nombres.index(actual_nombre) if actual_nombre in nombres else 0,
+        etiqueta, nombres, index=nombres.index(actual_nombre) if actual_nombre in nombres else 0,
         key=clave, help="21 % es el general. Muchos alimentos llevan el 10 % o el 4 % (pan, leche, huevos, fruta, "
                         "verdura...). 'Sin IVA' para lo que no lo lleva.",
     )]
@@ -945,7 +946,8 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
     proveedor = c2.text_input("Proveedor habitual", value=producto.proveedor, key=kv("proveedor"))
     nuevo_iva = _elegir_iva(kv("iva"), producto.iva)
     if abs(nuevo_iva - producto.iva) > 1e-9:
-        st.caption("El IVA nuevo se aplica a las compras de aquí en adelante: cada compra ya hecha conserva el suyo.")
+        st.caption("El IVA nuevo se aplica a las compras de aquí en adelante: cada compra ya hecha conserva el suyo. "
+                   "Para corregir el de una compra ya hecha: 📈 Historial de precios › Corregir o anular una compra.")
 
     # El tipo se puede corregir (por si se dio de alta en la lista equivocada).
     tipos_texto = {nombre: tipo for tipo, nombre in Producto.NOMBRES_TIPOS.items()}
@@ -1013,6 +1015,26 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             "Corregir no es un movimiento de stock: no queda en el historial. Si algo se ha gastado o tirado, "
             "regístralo como salida en 'Actualizar stock'. Poner la cantidad a 0 elimina este lote."
         )
+        # ¿Cambia la cantidad? Puede ser un recuento o un error al apuntar la compra.
+        datos_lote["compra"] = None
+        compra_lote = next((c for c in inv.precios_de(producto.nombre) if c.lote_id == lote.id), None)
+        if compra_lote is not None and abs(datos_lote["cantidad"] - lote.cantidad) > 1e-9:
+            es_error = st.radio(
+                "¿Por qué cambia la cantidad?",
+                ("Es un recuento: en el lote queda esto",
+                 "Fue un error al apuntar la compra: se compró otra cantidad"),
+                key=kl("motivo_cantidad"),
+            ).startswith("Fue un error")
+            if es_error:
+                comprada = round(compra_lote.cantidad + datos_lote["cantidad"] - lote.cantidad, 6)
+                datos_lote["compra"] = (compra_lote, comprada)
+                if comprada > 0:
+                    st.caption(
+                        f"La compra pasará de {_num(compra_lote.cantidad)} a {_num(comprada)} {producto.unidad}: "
+                        "se corrige también su gasto en Métricas, su IVA y el historial de precios."
+                    )
+            else:
+                st.caption("Solo cambia lo que queda en el lote: la compra (gasto, IVA, historial de precios) no se toca.")
         datos_lote["corregir_registrado"] = False
         if (abs(datos_lote["precio"] - lote.precio_unitario) > 1e-9
                 or datos_lote["proveedor"].strip() != lote.proveedor):
@@ -1027,6 +1049,10 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             if not texto or _parece_numero(texto):
                 st.error("El proveedor de la compra debe ser texto, no puede estar vacío ni ser un número.")
                 return
+            if datos_lote["compra"] is not None and datos_lote["compra"][1] <= 0:
+                st.error("La cantidad comprada no puede quedar en 0 o menos. Si la compra no existió, anúlala en "
+                         "📈 Historial de precios.")
+                return
         nombre_original = producto.nombre
         try:
             exito = inv.editar_producto(
@@ -1036,8 +1062,14 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
                 tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=nuevo_tipo, iva=nuevo_iva,
             )
             if exito and lote is not None:
+                cantidad_lote = datos_lote["cantidad"]
+                if datos_lote["compra"] is not None:
+                    # Error al apuntar la compra: se corrige la compra, y el lote con ella.
+                    compra_lote, comprada = datos_lote["compra"]
+                    inv.corregir_compra(compra_lote, cantidad=comprada)
+                    cantidad_lote = None
                 inv.editar_lote(
-                    producto.nombre, lote.id, cantidad=datos_lote["cantidad"], precio_unitario=datos_lote["precio"],
+                    producto.nombre, lote.id, cantidad=cantidad_lote, precio_unitario=datos_lote["precio"],
                     proveedor=datos_lote["proveedor"],
                     fecha_caducidad=datos_lote["fecha"] if datos_lote["tiene_fecha"] else None,
                     borrar_fecha_caducidad=not datos_lote["tiene_fecha"],
@@ -1224,32 +1256,80 @@ def _pestana_precios(inv: Inventario, nombres: list[str]) -> None:
         "Origen": "Stock inicial" if c.origen == "inicial" else "Compra",
     } for c in reversed(compras)], width="stretch", hide_index=True)
 
-    with st.expander("✏️ Corregir el precio de una compra"):
-        st.caption("Para arreglar un precio mal apuntado, aunque ese lote ya se haya gastado. Se corrige también "
-                   "lo que ya salió de él (coste de los servicios, Métricas...).")
+    with st.expander("✏️ Corregir o anular una compra"):
+        st.caption("Para arreglar una compra mal apuntada (precio, cantidad, proveedor o IVA), aunque ese lote ya "
+                   "se haya gastado. Se corrige también lo que ya salió de él (coste de los servicios, Métricas...).")
         opciones = {
             f"{c.fecha.strftime('%d/%m/%Y')} · {c.proveedor} · {_num(c.cantidad)} {c.unidad} a {_num(c.precio_unitario)} €"
             + (f" · lote {c.lote_id}" if c.lote_id else ""): c
             for c in reversed(compras)
         }
         compra = opciones[st.selectbox("Compra", list(opciones), key=f"corregir_compra_{nombre}")]
-        huella = _huella(compra.precio_base, compra.iva, compra.proveedor)
-        kc = lambda campo: f"corregir_compra_{campo}_{nombre}_{compras.index(compra)}_{huella}"
+        huella = _huella(compra.precio_base, compra.iva, compra.proveedor, compra.cantidad)
+        kc = lambda campo: f"corregir_compra_{campo}_{nombre}_{compra.lote_id}_{compra.fecha.isoformat()}_{huella}"
+        lote = producto.buscar_lote(compra.lote_id) if compra.lote_id is not None else None
         c1, c2 = st.columns(2)
         nuevo_precio = c1.number_input(f"Precio correcto (€/{unidad_txt}, con IVA)", min_value=0.0, step=0.1,
                                        value=float(compra.precio_unitario), key=kc("precio"))
         nuevo_proveedor = c2.text_input("Proveedor", value=compra.proveedor, key=kc("proveedor"))
-        cambia = abs(nuevo_precio - compra.precio_unitario) > 1e-9 or nuevo_proveedor.strip() != compra.proveedor
-        if cambia and compra.lote_id is not None:
+        c3, c4 = st.columns(2)
+        nueva_cantidad = c3.number_input(
+            f"Cantidad comprada ({producto.unidad})", min_value=0.0, step=0.1, value=float(compra.cantidad),
+            key=kc("cantidad"), disabled=compra.lote_id is not None and lote is None,
+            help="Lo que se compró de verdad. Lo que queda en el lote se ajusta en la diferencia.",
+        )
+        if compra.lote_id is not None and lote is None:
+            c3.caption("Ese lote ya se gastó entero: su cantidad ya no se puede corregir.")
+        nuevo_iva = _elegir_iva(kc("iva"), compra.iva, contenedor=c4, etiqueta="IVA de esta compra")
+        cambia_precio = abs(nuevo_precio - compra.precio_unitario) > 1e-9
+        cambia_proveedor = nuevo_proveedor.strip() != compra.proveedor
+        cambia_cantidad = abs(nueva_cantidad - compra.cantidad) > 1e-9
+        cambia_iva = abs(nuevo_iva - compra.iva) > 1e-9
+        iva_producto = False
+        if cambia_iva:
+            st.caption(f"Se mantiene lo que pagaste ({_precio(nuevo_precio)} €/{unidad_txt}, con IVA): se recalculan "
+                       "la parte sin IVA y el IVA soportado.")
+            iva_producto = abs(nuevo_iva - producto.iva) > 1e-9 and st.checkbox(
+                f"Usar también el {nombre_iva(nuevo_iva).split(' (')[0]} en las próximas compras de '{nombre}'",
+                value=True, key=kc("iva_producto"),
+            )
+        if cambia_cantidad and lote is not None:
+            queda = lote.cantidad + nueva_cantidad - compra.cantidad
+            st.caption(f"En el lote {lote.id} quedarán {_num(max(queda, 0))} {producto.unidad} "
+                       f"(ahora {_num(lote.cantidad)}).")
+        cambia = cambia_precio or cambia_proveedor or cambia_cantidad or cambia_iva
+        if (cambia_precio or cambia_proveedor or cambia_iva) and compra.lote_id is not None:
             _pregunta_corregir_registrado(inv.usos_del_lote(nombre, compra.lote_id), kc("pregunta"), producto.unidad,
                                           preguntar=False)
         if st.button("Guardar corrección", key=kc("guardar"), disabled=not cambia):
             try:
-                inv.corregir_compra(compra, nuevo_precio, nuevo_proveedor)
-                avisar("success", f"Compra corregida: {_num(nuevo_precio)} €/{unidad_txt} ({nuevo_proveedor.strip()}).")
+                inv.corregir_compra(
+                    compra,
+                    precio_unitario=nuevo_precio if cambia_precio or cambia_iva else None,
+                    proveedor=nuevo_proveedor if cambia_proveedor else None,
+                    cantidad=nueva_cantidad if cambia_cantidad else None,
+                    iva=nuevo_iva if cambia_iva else None, iva_tambien_producto=iva_producto,
+                )
+                avisar("success", f"Compra corregida: {_num(compra.cantidad)} {producto.unidad} a "
+                                  f"{_precio(compra.precio_unitario)} €/{unidad_txt} ({compra.proveedor}, "
+                                  f"{nombre_iva(compra.iva).split(' (')[0]}).")
                 st.rerun()
             except ValueError as e:
                 st.error(str(e))
+
+        st.divider()
+        posible, motivo = inv.se_puede_anular(compra)
+        if not posible:
+            st.caption(f"🗑️ Anular esta compra: {motivo}")
+        else:
+            confirmar = st.checkbox(
+                "Esta compra no existió (o está apuntada dos veces): quiero anularla", key=kc("anular_confirmar"),
+            )
+            if st.button("🗑️ Anular compra", key=kc("anular"), disabled=not confirmar):
+                inv.anular_compra(compra)
+                avisar("success", f"Compra anulada: se han quitado el lote {compra.lote_id} de '{nombre}', su gasto "
+                                  "y su línea del historial de precios.")
+                st.rerun()
 
 
 def _pestana_lotes(inv: Inventario, nombres: list[str]) -> None:

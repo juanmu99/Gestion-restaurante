@@ -1155,6 +1155,75 @@ s3.id = 713
 silencio(gestor.generar_lista_desde_servicios, [s1, s2, s3], recetario, inv)
 comprobar(gestor.pendiente_de("Tomate").cantidad == 1, "...y las raciones que ya no quedan sí se compran (1 kg)")
 
+print("\n--- Fase 2, bloque 3: corregir la cantidad de una compra ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Arroz", "Despensa", 0, "kg", 0, "Mayorista", iva=10))
+lote = silencio(inv.entrada_stock, "Arroz", 50, precio_unitario=1.1, proveedor="Mayorista")  # eran 5 kg
+silencio(inv.salida_stock, "Arroz", 2, "consumo", lote.id)
+met = Metricas(inv)
+compra = inv.precios_de("Arroz")[-1]
+silencio(inv.corregir_compra, compra, cantidad=5)
+arroz = inv.buscar_producto("Arroz")
+comprobar(abs(arroz.stock - 3) < 1e-9, "Compra de 50 kg corregida a 5 kg con 2 usados: quedan 3 kg en el lote")
+comprobar(abs(met.gasto_por_tipo(HOY, HOY)["alimento"] - 5.5) < 1e-9 and inv.precios_de("Arroz")[-1].cantidad == 5,
+          "El gasto en Métricas (5,50 €) y el historial de precios (5 kg) también se corrigen")
+comprobar(abs(met.iva_soportado(HOY, HOY) - 0.5) < 1e-9, "...y el IVA soportado (0,50 €)")
+try:
+    inv.corregir_compra(compra, cantidad=1)
+    comprobar(False, "No se puede corregir a menos de lo ya usado")
+except ValueError as e:
+    comprobar("ya se han usado 2" in str(e) and abs(arroz.stock - 3) < 1e-9,
+              "No se puede corregir a menos de lo ya usado (2 kg), y no cambia nada")
+
+print("\n--- Fase 2, bloque 3: anular una compra ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Aceite", "Despensa", 0, "litros", 0, "Mayorista"))
+silencio(inv.entrada_stock, "Aceite", 5, precio_unitario=6, proveedor="Mayorista")
+duplicada = silencio(inv.entrada_stock, "Aceite", 5, precio_unitario=9, proveedor="Mayorista")
+met = Metricas(inv)
+compra = inv.precios_de("Aceite")[-1]
+comprobar(inv.se_puede_anular(compra)[0], "Una compra de la que no ha salido nada se puede anular")
+silencio(inv.anular_compra, compra)
+aceite = inv.buscar_producto("Aceite")
+comprobar(aceite.stock == 5 and aceite.buscar_lote(duplicada.id) is None and len(inv.precios_de("Aceite")) == 1
+          and abs(met.gasto_por_tipo(HOY, HOY)["alimento"] - 30) < 1e-9,
+          "Anular quita el lote, su gasto (queda 30 €) y su línea del historial de precios")
+comprobar(abs(aceite.precio_referencia - 6) < 1e-9, "'La última compra fue a…' vuelve a la compra anterior (6 €)")
+silencio(inv.salida_stock, "Aceite", 1, "consumo", aceite.lotes[0].id)
+posible, motivo = inv.se_puede_anular(inv.precios_de("Aceite")[-1])
+comprobar(not posible and "Corrígela" in motivo, "Una compra de la que ya se ha usado algo no se puede anular")
+try:
+    inv.anular_compra(inv.precios_de("Aceite")[-1])
+    comprobar(False, "...ni forzándolo")
+except ValueError:
+    comprobar(aceite.stock == 4, "...ni forzándolo (no cambia nada)")
+
+print("\n--- Fase 2, bloque 3: IVA de compras y productos ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Queso", "Lácteos", 0, "kg", 0, "Quesería"))  # 21 % por error
+lote = silencio(inv.entrada_stock, "Queso", 2, precio_unitario=11, proveedor="Quesería")
+silencio(inv.salida_stock, "Queso", 1, "consumo", lote.id)
+met = Metricas(inv)
+silencio(inv.corregir_compra, inv.precios_de("Queso")[-1], iva=10)
+queso = inv.buscar_producto("Queso")
+comprobar(abs(queso.lotes[0].precio_unitario - 11) < 1e-9 and abs(queso.lotes[0].precio_base - 10) < 1e-9
+          and queso.lotes[0].iva == 10, "Corregir el IVA de una compra mantiene lo pagado (11 €) y la base pasa a 10 €")
+comprobar(abs(met.iva_soportado(HOY, HOY) - 2) < 1e-9 and abs(met.gasto_por_tipo(HOY, HOY)["alimento"] - 22) < 1e-9,
+          "El IVA soportado pasa a 2 € (10 % de 20) y el gasto sigue en 22 €")
+salida = next(m for m in inv.historial if m.tipo == "salida")
+comprobar(salida.iva == 10 and abs(salida.precio_unitario - 11) < 1e-9, "Lo que ya salió del lote también se corrige")
+comprobar(queso.iva == 10 and abs(queso.precio_referencia - 11) < 1e-9,
+          "El producto usa ese IVA en las próximas compras, y 'la última compra fue a…' sigue en 11 €")
+silencio(inv.editar_producto, "Queso", iva=4)
+comprobar(abs(queso.precio_referencia - 11) < 1e-9,
+          "Cambiar el IVA del producto no cambia 'la última compra fue a…' (sigue en 11 €)")
+
+silencio(inv.agregar_producto, Producto("Pata", "Carnes", 1, "unidades", 40, "Carnicería", tiene_merma=True,
+                                        peso_unitario=7, iva=10))
+silencio(inv.limpiar_producto, "Pata", 1, "Carne limpia", 4, derivados={"Huesos": 1}, lote_id=1)
+comprobar(inv.buscar_producto("Carne limpia").iva == 10 and inv.buscar_producto("Huesos").iva == 10,
+          "Los productos que nacen de una limpieza llevan el IVA del producto en bruto (10 %)")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

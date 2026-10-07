@@ -543,6 +543,17 @@ def menu_inventario():
                                   and abs(correccion["precio_unitario"] - lote.precio_unitario) > 1e-9) \
                             or (correccion["proveedor"] is not None and correccion["proveedor"].strip() != lote.proveedor)
                         corregir = cambia and preguntar_corregir_registrado(producto.nombre, lote.id, producto.unidad)
+                        compra = next((c for c in inventario.precios_de(producto.nombre) if c.lote_id == lote.id), None)
+                        if (compra is not None and correccion["cantidad"] is not None
+                                and abs(correccion["cantidad"] - lote.cantidad) > 1e-9
+                                and pedir_opcion("¿Por qué cambia la cantidad?", ("recuento", "error en la compra"))
+                                == "error en la compra"):
+                            # Se corrige la compra (gasto, IVA, historial de precios) y el lote con ella.
+                            antes = compra.cantidad
+                            comprada = round(antes + correccion["cantidad"] - lote.cantidad, 6)
+                            inventario.corregir_compra(compra, cantidad=comprada)
+                            print(f"✅ La compra pasa de {antes:g} a {comprada:g} {producto.unidad}.")
+                            correccion["cantidad"] = None
                         inventario.editar_lote(producto.nombre, lote.id, **correccion, corregir_registrado=corregir)
                 except ValueError as e:
                     print(f"❌ {e}")
@@ -681,21 +692,37 @@ def accion_historial_precios() -> None:
     for numero, c in enumerate(lista, start=1):
         print(f"   {numero}. {c.fecha.strftime('%d/%m/%Y')} {c.proveedor}: {c.cantidad:g} {c.unidad} a "
               f"{c.precio_unitario:g} € (total {c.total:.2f} €)")
-    if pedir_si_no("¿Corregir el precio de alguna de estas compras (aunque su lote ya se haya gastado)?"):
-        numero = pedir_entero("Nº de la compra: ")
-        if not 1 <= numero <= len(lista):
-            print("⚠️  Ese número no está en la lista.")
-            return
-        compra = lista[numero - 1]
-        precio = pedir_numero(f"Precio correcto [{compra.precio_unitario}]: ")
-        proveedor = pedir_texto_no_numerico_opcional(f"Proveedor [{compra.proveedor}]: ")
-        if compra.lote_id is not None:
-            preguntar_corregir_registrado(nombre, compra.lote_id, compra.unidad, preguntar=False)
-        try:
-            inventario.corregir_compra(compra, precio, proveedor)
-            print("✅ Compra corregida (y lo que ya salió de ella).")
-        except ValueError as e:
-            print(f"❌ {e}")
+    accion = pedir_opcion("¿Quieres corregir o anular alguna de estas compras?", ("no", "corregir", "anular"))
+    if accion == "no":
+        return
+    numero = pedir_entero("Nº de la compra: ")
+    if not 1 <= numero <= len(lista):
+        print("⚠️  Ese número no está en la lista.")
+        return
+    compra = lista[numero - 1]
+    if accion == "anular":
+        posible, motivo = inventario.se_puede_anular(compra)
+        if not posible:
+            print(f"❌ {motivo}")
+        elif pedir_si_no("Se quitarán su lote, su gasto y su línea del historial de precios. ¿Anularla?"):
+            inventario.anular_compra(compra)
+            print("✅ Compra anulada.")
+        return
+    print("Deja vacío lo que no cambie.")
+    precio = pedir_numero_opcional(f"Precio correcto, con IVA [{compra.precio_unitario:g}]: ")
+    proveedor = pedir_texto_no_numerico_opcional(f"Proveedor [{compra.proveedor}]: ")
+    cantidad = pedir_numero_opcional(f"Cantidad comprada de verdad [{compra.cantidad:g}]: ")
+    iva = pedir_iva(compra.iva)
+    if iva is not None and abs(iva - compra.iva) < 1e-9:
+        iva = None
+    iva_producto = iva is not None and pedir_si_no("¿Usar también ese IVA en las próximas compras de este producto?")
+    if compra.lote_id is not None and (precio is not None or proveedor or iva is not None):
+        preguntar_corregir_registrado(nombre, compra.lote_id, compra.unidad, preguntar=False)
+    try:
+        inventario.corregir_compra(compra, precio, proveedor or None, cantidad, iva, iva_producto)
+        print("✅ Compra corregida (y lo que ya salió de ella).")
+    except ValueError as e:
+        print(f"❌ {e}")
 
 
 def accion_elaboraciones() -> None:
