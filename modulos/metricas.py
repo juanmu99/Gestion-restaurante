@@ -185,18 +185,26 @@ class Metricas:
                 por_tipo[m.iva] = round(por_tipo.get(m.iva, 0) + m.cantidad * m.precio_base * m.iva / 100, 2)
         return dict(sorted(por_tipo.items(), reverse=True))
 
-    def resumen_iva(self, fecha_inicio: date, fecha_fin: date, servicios: list) -> dict:
+    def resumen_iva(self, fecha_inicio: date, fecha_fin: date, servicios: list, gastos: Optional[list] = None) -> dict:
         """
         ESTIMACIÓN ORIENTATIVA del IVA de un periodo (normalmente un trimestre):
         - soportado: el IVA pagado en las compras registradas (por tipo).
         - repercutido: el IVA cobrado a los clientes, calculado sobre el
           precio de cobro (sin IVA) de los servicios completados en el
           periodo, con el IVA de cobro de los Ajustes (10 % en catering).
+        - soportado_gastos: el IVA de los `gastos` (gasolina, alquileres...)
+          del periodo que lo tienen desglosado; ya va sumado en `soportado` y
+          en `soportado_por_tipo`. gastos_sin_desglose: cuántos no lo tienen.
         - resultado: repercutido - soportado (> 0: a ingresar; < 0: a compensar).
-        No incluye el IVA de los gastos (gasolina, personal...) ni de nada
-        que no esté registrado aquí. No sustituye a un gestor o asesor fiscal.
+        No incluye nada que no esté registrado aquí. No sustituye a un gestor o asesor fiscal.
         """
         por_tipo = self.iva_soportado_por_tipo(fecha_inicio, fecha_fin)
+        en_rango = [g for g in (gastos or []) if fecha_inicio <= g.fecha <= fecha_fin]
+        soportado_gastos = 0.0
+        for g in en_rango:
+            if g.iva:
+                por_tipo[g.iva] = round(por_tipo.get(g.iva, 0) + g.cuota_iva, 2)
+                soportado_gastos += g.cuota_iva
         soportado = round(sum(por_tipo.values()), 2)
         cobrados = [s for s in servicios if s.estado == "completado" and fecha_inicio <= s.fecha <= fecha_fin
                     and s.precio_cobrado is not None]
@@ -208,6 +216,8 @@ class Metricas:
             "servicios_sin_cobro": len([s for s in servicios if s.estado == "completado"
                                         and fecha_inicio <= s.fecha <= fecha_fin and s.precio_cobrado is None]),
             "repercutido": repercutido, "resultado": round(repercutido - soportado, 2),
+            "soportado_gastos": round(soportado_gastos, 2),
+            "gastos_sin_desglose": len([g for g in en_rango if g.iva is None]),
         }
 
     def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> float:

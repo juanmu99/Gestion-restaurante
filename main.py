@@ -563,6 +563,7 @@ def menu_inventario():
                     # El nombre también se usa en recetas (ingredientes) y
                     # menús (consumibles): se actualizan conservando las cantidades.
                     actualizados = recetario.renombrar_producto(nombre_original, producto.nombre)
+                    gestor_compras.renombrar_producto(nombre_original, producto.nombre)
                     if actualizados:
                         print(f"🔄 Recetas y menús actualizados automáticamente: {', '.join(actualizados)}")
         elif opcion == "7":
@@ -662,7 +663,7 @@ def accion_iva_trimestre() -> None:
     año = pedir_entero("Año: ")
     t = pedir_opcion("Trimestre", ("1", "2", "3", "4"))
     desde, hasta = trimestre(date(año, 3 * int(t) - 2, 1))
-    r = Metricas(inventario).resumen_iva(desde, hasta, registro_servicios.servicios)
+    r = Metricas(inventario).resumen_iva(desde, hasta, registro_servicios.servicios, registro_gastos.gastos)
     print(f"\nIVA del {t}T de {año} ({desde.strftime('%d/%m')} - {hasta.strftime('%d/%m')}):")
     for tipo, importe in r["soportado_por_tipo"].items():
         print(f"   Pagado en compras al {tipo:g} %: {importe:.2f} €")
@@ -671,7 +672,7 @@ def accion_iva_trimestre() -> None:
         print(f"   IVA cobrado ({r['base_cobrada']:.2f} € x {inventario.iva_cobro:g} %): {r['repercutido']:.2f} €")
         sentido = "a ingresar" if r["resultado"] >= 0 else "a compensar"
         print(f"   Resultado aproximado: {abs(r['resultado']):.2f} € {sentido}")
-        print("   (No incluye el IVA de los gastos ni nada que no esté registrado en el programa.)")
+        print("   (Incluye el IVA de los gastos que lo tienen desglosado. No incluye nada que no esté en el programa.)")
     else:
         print("   El negocio no recupera el IVA: forma parte de lo que cuestan las compras.")
     print(AVISO_FISCAL)
@@ -925,6 +926,8 @@ def menu_servicios():
             if pedir_si_no(f"¿Seguro que quieres cancelar el servicio #{id_servicio}? No se puede deshacer."):
                 try:
                     registro_servicios.cancelar_servicio(id_servicio)
+                    if registro_material.salida_de(id_servicio):
+                        print("🚚 Este servicio tiene material fuera: registra su vuelta en el menú de Material.")
                 except ValueError as e:
                     print(f"❌ {e}")
         elif opcion == "4":
@@ -1039,11 +1042,12 @@ def pedir_costes_adicionales(servicio: Servicio) -> None:
             continue
         concepto = pedir_texto("  Concepto: ")
         categoria = pedir_opcion("  Categoría", Gasto.CATEGORIAS)
-        importe = pedir_numero("  Importe (€): ")
+        importe = pedir_numero("  Importe (€, con IVA): ")
+        iva = pedir_iva(Gasto.iva_propuesto(categoria))
         try:
             registro_gastos.agregar_gasto(Gasto(
                 concepto, categoria, importe, servicio_id=servicio.id,
-                notas="Coste no previsto, añadido al completar el servicio",
+                notas="Coste no previsto, añadido al completar el servicio", iva=iva,
             ))
         except ValueError as e:
             print(f"❌ {e}")
@@ -1753,23 +1757,30 @@ def menu_gastos():
         if opcion == "1":
             concepto = pedir_texto("Concepto (ej: Gasolina boda García): ")
             categoria = pedir_opcion("Categoría", Gasto.CATEGORIAS)
-            importe = pedir_numero("Importe (€): ")
+            importe = pedir_numero("Importe pagado (€, con IVA): ")
+            iva = pedir_iva(Gasto.iva_propuesto(categoria))
             fecha = pedir_fecha("Fecha") if pedir_si_no("¿Es de otro día (no de hoy)?") else None
             servicio_id = pedir_servicio_opcional()
             notas = pedir_texto("Notas (opcional): ")
             try:
-                registro_gastos.agregar_gasto(Gasto(concepto, categoria, importe, fecha, servicio_id, notas))
+                registro_gastos.agregar_gasto(Gasto(concepto, categoria, importe, fecha, servicio_id, notas, iva=iva))
             except ValueError as e:
                 print(f"❌ {e}")
         elif opcion == "2":
             periodo = pedir_opcion("Periodo", PERIODOS_VALIDOS)
             desde, hasta = rango_desde_periodo(periodo)
-            lista = registro_gastos.gastos_en_rango(desde, hasta)
-            if not lista:
+            hasta_total = date.max if periodo == "todo" else hasta
+            lista = registro_gastos.gastos_en_rango(desde, hasta_total)
+            futuros = [g for g in registro_gastos.gastos_en_rango(hasta + timedelta(days=1), date.max) if g not in lista]
+            if not lista and not futuros:
                 print("No hay gastos en ese periodo.")
             for g in lista:
                 print(g)
-            for categoria, total in registro_gastos.total_por_categoria(desde, hasta).items():
+            if futuros:
+                print("Con fecha futura (no suman en el total de este periodo):")
+                for g in futuros:
+                    print(f"   📅 {g}")
+            for categoria, total in registro_gastos.total_por_categoria(desde, hasta_total).items():
                 print(f"   {categoria}: {total:.2f}€")
         elif opcion == "3":
             for g in registro_gastos.gastos:

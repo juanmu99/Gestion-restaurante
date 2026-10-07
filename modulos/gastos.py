@@ -27,6 +27,14 @@ from servicios import Servicio
 class Gasto:
     """UN gasto: qué, cuánto, cuándo y, si es de un servicio, de cuál."""
 
+    # IVA que se propone según la categoría: 21 % salvo lo que normalmente no
+    # lleva (personal, seguros). Se puede cambiar en cada gasto.
+    IVA_POR_CATEGORIA = {"Personal extra": 0.0, "Seguros e impuestos": 0.0}
+
+    @classmethod
+    def iva_propuesto(cls, categoria: str) -> float:
+        return cls.IVA_POR_CATEGORIA.get(categoria, 21.0)
+
     # Categorías fijas, para poder agrupar y comparar (igual que las
     # unidades del inventario: nada de "Gasolina", "gasolina", "Gasoil"...).
     CATEGORIAS = (
@@ -44,13 +52,22 @@ class Gasto:
         fecha: Optional[date] = None,
         servicio_id: Optional[int] = None,
         notas: str = "",
+        iva: Optional[float] = None,
     ):
+        """
+        `importe` es lo PAGADO (con IVA, lo del ticket). `iva` es su tipo de
+        IVA en % (21, 10, 4, 0 = sin IVA, como una nómina). None = "IVA no
+        desglosado": los gastos apuntados antes de existir este dato, que se
+        cuentan tal cual (como si no llevaran IVA recuperable).
+        """
         if not concepto.strip():
             raise ValueError("Indica el concepto del gasto (ej: 'Gasolina boda García').")
         if categoria not in self.CATEGORIAS:
             raise ValueError(f"Categoría no válida: '{categoria}'. Debe ser una de: {', '.join(self.CATEGORIAS)}")
         if importe <= 0:
             raise ValueError("El importe debe ser mayor que 0.")
+        if iva is not None and iva < 0:
+            raise ValueError("El IVA no puede ser negativo.")
 
         self.id = Gasto._siguiente_id
         Gasto._siguiente_id += 1
@@ -60,6 +77,21 @@ class Gasto:
         self.fecha = fecha or date.today()
         self.servicio_id = servicio_id  # None = gasto general del negocio
         self.notas = notas
+        self.iva = iva
+
+    @property
+    def importe_sin_iva(self) -> float:
+        """El importe sin su IVA (igual al importe si no lleva IVA o no está desglosado)."""
+        return self.importe / (1 + self.iva / 100) if self.iva else self.importe
+
+    @property
+    def cuota_iva(self) -> float:
+        """El IVA pagado en este gasto (0 si no lleva o no está desglosado)."""
+        return round(self.importe - self.importe_sin_iva, 2)
+
+    def coste(self, sin_iva: bool) -> float:
+        """Lo que cuesta este gasto: sin su IVA si el negocio lo recupera (`sin_iva`), o lo pagado."""
+        return round(self.importe_sin_iva if sin_iva else self.importe, 2)
 
     def __str__(self) -> str:
         servicio = f" | servicio #{self.servicio_id}" if self.servicio_id else " | general"
@@ -74,6 +106,7 @@ class Gasto:
             "fecha": self.fecha.isoformat(),
             "servicio_id": self.servicio_id,
             "notas": self.notas,
+            "iva": self.iva,
         }
 
     @classmethod
@@ -81,6 +114,7 @@ class Gasto:
         gasto = cls(
             datos["concepto"], datos["categoria"], datos["importe"],
             fecha=date.fromisoformat(datos["fecha"]), servicio_id=datos.get("servicio_id"), notas=datos.get("notas", ""),
+            iva=datos.get("iva"),  # los gastos antiguos no lo tienen: "IVA no desglosado"
         )
         gasto.id = datos["id"]  # conserva su número original (ver Servicio.from_dict)
         return gasto
@@ -153,7 +187,7 @@ def resumen_servicio(
 
     Devuelve un diccionario con: comida, consumibles, mantenimiento (productos
     de limpieza y mantenimiento sacados para este servicio), gastos (total) y
-    gastos_por_categoria, material (roturas y pérdidas), coste_total, cobrado (None si no se indicó),
+    gastos_por_categoria (sin su IVA si se recupera), material (roturas y pérdidas), coste_total, cobrado (None si no se indicó),
     margen y margen_porcentaje (None si no hay cobro), y estimado.
     """
     estimado = servicio.estado != "completado"
@@ -188,9 +222,12 @@ def resumen_servicio(
     iva_recuperable = round((comida_con + consumibles_con + mantenimiento_con)
                             - (comida + consumibles + mantenimiento), 2) if sin_iva else 0.0
 
+    # Los gastos (gasolina, personal...) siguen el mismo criterio: sin su IVA si se recupera.
     gastos_por_categoria: dict[str, float] = {}
     for g in registro_gastos.gastos_de_servicio(servicio.id):
-        gastos_por_categoria[g.categoria] = round(gastos_por_categoria.get(g.categoria, 0) + g.importe, 2)
+        gastos_por_categoria[g.categoria] = round(gastos_por_categoria.get(g.categoria, 0) + g.coste(sin_iva), 2)
+        if sin_iva:
+            iva_recuperable = round(iva_recuperable + g.cuota_iva, 2)
     gastos = round(sum(gastos_por_categoria.values()), 2)
 
     material = registro_material.coste_incidencias_servicio(servicio.id) if registro_material else 0.0

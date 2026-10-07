@@ -217,7 +217,7 @@ class RegistroElaboraciones:
             tanda = self.buscar(tanda_id)
             if tanda is None or tanda.receta != receta or pendiente <= 1e-9:
                 continue
-            sale = round(min(pendiente, tanda.raciones), 6)
+            sale = min(round(min(pendiente, tanda.raciones), 6), tanda.raciones)
             if sale > 0:
                 reparto.append((tanda_id, sale))
                 pendiente -= sale
@@ -238,7 +238,7 @@ class RegistroElaboraciones:
             tanda = self.buscar(tanda_id)
             if tanda is None:
                 raise ValueError(f"No existe la tanda {tanda_id}.")
-            if raciones > tanda.raciones + 1e-9:
+            if raciones > tanda.raciones + 1e-6:
                 raise ValueError(f"En la tanda {tanda_id} solo quedan {tanda.raciones:g} raciones.")
         return [self._sacar(self.buscar(t), r, "consumo", servicio_id) for t, r in reparto if r > 0]
 

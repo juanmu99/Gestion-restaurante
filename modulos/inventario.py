@@ -1225,35 +1225,12 @@ class Inventario:
         aplica entero o no se aplica nada. `servicio_id`: el servicio para
         el que sale (queda apuntado en el historial).
         """
-        producto = self.productos.get(nombre)
-        if producto is None:
-            print(f"❌ No existe el producto '{nombre}'.")
+        error = self.problema_salida(nombre, reparto, motivo)
+        if error:
+            print(f"❌ {error}")
             return False
-        if motivo not in MovimientoStock.MOTIVOS_SALIDA_VALIDOS:
-            print(f"❌ Motivo no válido. Debe ser uno de: {', '.join(MovimientoStock.MOTIVOS_SALIDA)}")
-            return False
+        producto = self.productos[nombre]
         reparto = [(lote_id, cantidad) for lote_id, cantidad in reparto if cantidad > 0]
-        if not reparto:
-            print("❌ La cantidad debe ser mayor que 0.")
-            return False
-
-        por_lote: dict[int, float] = {}
-        for lote_id, cantidad in reparto:
-            por_lote[lote_id] = por_lote.get(lote_id, 0) + cantidad
-        for lote_id, cantidad in por_lote.items():
-            lote = producto.buscar_lote(lote_id)
-            if lote is None:
-                print(f"❌ '{nombre}' no tiene el lote {lote_id}.")
-                return False
-            # Pequeño margen (1e-9) para que los decimales de coma flotante no
-            # impidan sacar exactamente todo lo que hay (ej: 0.30000000000000004).
-            if cantidad > lote.cantidad + 1e-9:
-                print(
-                    f"❌ En el lote {lote_id} de '{nombre}' solo hay {_numero(lote.cantidad)} {producto.unidad}, "
-                    f"intentas sacar {_numero(cantidad)}. El stock nunca puede quedar en negativo."
-                )
-                return False
-
         for lote_id, cantidad in reparto:
             lote = producto.buscar_lote(lote_id)
             cantidad = min(cantidad, lote.cantidad)
@@ -1262,6 +1239,33 @@ class Inventario:
             print(f"📦 Salida ({motivo}): {_numero(cantidad)} {producto.unidad} de {nombre} [{lote.etiqueta()}]")
         producto.quitar_lotes_vacios()
         return True
+
+    def problema_salida(self, nombre: str, reparto: list[tuple[int, float]], motivo: str = "consumo") -> Optional[str]:
+        """
+        Comprueba (SIN tocar nada) si se puede hacer una salida repartida.
+        Devuelve el motivo por el que no se puede, o None si se puede.
+        """
+        producto = self.productos.get(nombre)
+        if producto is None:
+            return f"No existe el producto '{nombre}'."
+        if motivo not in MovimientoStock.MOTIVOS_SALIDA_VALIDOS:
+            return f"Motivo no válido. Debe ser uno de: {', '.join(MovimientoStock.MOTIVOS_SALIDA)}"
+        reparto = [(lote_id, cantidad) for lote_id, cantidad in reparto if cantidad > 0]
+        if not reparto:
+            return "La cantidad debe ser mayor que 0."
+        por_lote: dict[int, float] = {}
+        for lote_id, cantidad in reparto:
+            por_lote[lote_id] = por_lote.get(lote_id, 0) + cantidad
+        for lote_id, cantidad in por_lote.items():
+            lote = producto.buscar_lote(lote_id)
+            if lote is None:
+                return f"'{nombre}' no tiene el lote {lote_id}."
+            # Pequeño margen para que los decimales de coma flotante no impidan
+            # sacar exactamente todo lo que hay (ej: 0.30000000000000004).
+            if cantidad > lote.cantidad + 1e-6:
+                return (f"En el lote {lote_id} de '{nombre}' solo hay {_numero(lote.cantidad)} {producto.unidad}, "
+                        f"intentas sacar {_numero(cantidad)}. El stock nunca puede quedar en negativo.")
+        return None
 
     def compra_para_servicio(
         self,
@@ -1327,7 +1331,9 @@ class Inventario:
             lote = producto.buscar_lote(lote_id) if producto else None
             if lote is None or pendiente <= 1e-9:
                 continue
-            sale = round(min(pendiente, lote.cantidad), 6)
+            # Redondeado, pero nunca por encima de lo que hay en el lote (un lote
+            # con más de 6 decimales hacía que la salida se rechazara).
+            sale = min(round(min(pendiente, lote.cantidad), 6), lote.cantidad)
             if sale > 0:
                 reparto.append((lote_id, sale))
                 pendiente -= sale
@@ -1892,8 +1898,13 @@ class Inventario:
         peso_final = peso_unitario if peso_unitario is not None else producto.peso_unitario
         _validar_merma(producto.unidad, merma_final, peso_final)
 
+        if nuevo_nombre is not None:
+            nuevo_nombre = nuevo_nombre.strip()
+            if not nuevo_nombre:
+                raise ValueError("El nombre del producto no puede quedar vacío.")
         if nuevo_nombre is not None and nuevo_nombre != nombre_actual:
-            if nuevo_nombre in self.productos:
+            # Tampoco con otras mayúsculas ("Tomate" y "tomate" serían el mismo producto).
+            if any(n.lower() == nuevo_nombre.lower() and n != nombre_actual for n in self.productos):
                 print(f"❌ Ya existe otro producto llamado '{nuevo_nombre}'.")
                 return False
             # El nombre es la CLAVE del diccionario -- cambiarlo exige

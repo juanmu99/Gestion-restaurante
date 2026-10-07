@@ -707,6 +707,23 @@ class Recetario:
             )
 
         plan = self.plan_elaboraciones(servicio, inventario, plan_elaboraciones)
+        # Se comprueba TODO antes de tocar nada: o se completa entero o no se
+        # completa (antes, si una salida se rechazaba, el servicio quedaba
+        # completado sin descontar ese ingrediente).
+        problemas = []
+        for receta, p in plan.items():
+            for tanda_id, raciones in p["reparto"]:
+                tanda = inventario.elaboraciones.buscar(tanda_id)
+                if tanda is None or raciones > tanda.raciones + 1e-6:
+                    problemas.append(f"'{receta}': la tanda {tanda_id} ya no tiene esas raciones")
+        for fila in filas:
+            if fila["reparto"]:
+                error = inventario.problema_salida(fila["ingrediente"], fila["reparto"], "consumo")
+                if error:
+                    problemas.append(error)
+        if problemas:
+            raise ValueError("No se ha completado el servicio (no se ha tocado nada): " + " ".join(problemas))
+
         for p in plan.values():
             if p["reparto"]:
                 inventario.elaboraciones.usar(p["reparto"], servicio.id)

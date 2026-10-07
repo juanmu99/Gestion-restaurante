@@ -258,10 +258,12 @@ def _hoja_servicios(wb: Workbook, registro: RegistroServicios) -> None:
 
 def _hoja_gastos(wb: Workbook, registro_gastos: RegistroGastos) -> None:
     hoja = wb.create_sheet("Gastos")
-    _escribir_cabecera(hoja, ["Nº", "Fecha", "Concepto", "Categoría", "Importe (€)", "Servicio", "Notas"])
+    _escribir_cabecera(hoja, ["Nº", "Fecha", "Concepto", "Categoría", "Importe (€)", "IVA", "IVA pagado (€)",
+                              "Servicio", "Notas"])
     fila = 2
     for g in sorted(registro_gastos.gastos, key=lambda g: g.fecha):
         valores = [g.id, g.fecha.strftime("%d/%m/%Y"), g.concepto, g.categoria, g.importe,
+                   "no desglosado" if g.iva is None else f"{g.iva:g} %", g.cuota_iva,
                    f"#{g.servicio_id}" if g.servicio_id else "General", g.notas]
         for columna, valor in enumerate(valores, start=1):
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
@@ -327,9 +329,9 @@ def _hoja_rentabilidad(
     hoja = wb.create_sheet("Rentabilidad")
     criterio = "sin IVA" if inventario.iva_recuperable else "con IVA"
     _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", f"Comida (€, {criterio})", f"Consumibles (€, {criterio})",
-                              f"Limpieza y mantenimiento (€, {criterio})", "Gastos (€)", "Roturas y pérdidas (€)",
+                              f"Limpieza y mantenimiento (€, {criterio})", f"Gastos (€, {criterio})", "Roturas y pérdidas (€)",
                               "Coste total (€)", "Cobro (€, sin IVA)", "Margen (€)", "Coste estimado",
-                              "IVA recuperable de las compras (€)"])
+                              "IVA recuperable de compras y gastos (€)"])
     fila = 2
     for s in sorted(registro.servicios, key=lambda s: (s.fecha, s.hora)):
         if s.estado == "cancelado":

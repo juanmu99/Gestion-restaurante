@@ -1078,6 +1078,7 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
             if exito:
                 if producto.nombre != nombre_original:
                     actualizados = st.session_state.recetario.renombrar_producto(nombre_original, producto.nombre)
+                    st.session_state.gestor_compras.renombrar_producto(nombre_original, producto.nombre)
                     if actualizados:
                         avisar("info", f"🔄 Recetas y menús actualizados: {', '.join(actualizados)}")
                 avisar("success", "Producto actualizado.")
@@ -1857,14 +1858,17 @@ def _pestana_material_servicio(serv: RegistroServicios, rec: Recetario) -> None:
     if not reg.materiales:
         st.info("No hay material registrado. Añádelo en Inventario > 🍽️ Material.")
         return
-    servicios = sorted((s for s in serv.servicios if s.estado != "cancelado"), key=lambda s: (s.fecha, s.hora))
+    # Un servicio cancelado solo aparece si tiene material fuera: para poder registrar su vuelta.
+    servicios = sorted((s for s in serv.servicios if s.estado != "cancelado" or reg.salida_de(s.id)),
+                       key=lambda s: (s.fecha, s.hora))
     if not servicios:
         st.info("No hay servicios.")
         return
     opciones = {}
     for s in servicios:
         fuera = " · 🚚 material fuera" if reg.salida_de(s.id) else ""
-        opciones[f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}{fuera}"] = s
+        cancelado = " · ❌ cancelado" if s.estado == "cancelado" else ""
+        opciones[f"#{s.id} - {s.fecha.strftime('%d/%m/%Y')} - {s.menu}{cancelado}{fuera}"] = s
     servicio = opciones[st.selectbox("Servicio", list(opciones), key="material_servicio_select")]
 
     salida = reg.salida_de(servicio.id)
@@ -1890,6 +1894,9 @@ def _pestana_material_servicio(serv: RegistroServicios, rec: Recetario) -> None:
             except ValueError as e:
                 st.error(str(e))
         st.divider()
+    if servicio.estado == "cancelado":
+        st.caption("Este servicio está cancelado: solo se puede registrar la vuelta de su material.")
+        return
 
     st.subheader("🚚 Lista de carga" if salida is None else "🚚 Llevar más material a este servicio")
     menu = rec.buscar_menu(servicio.menu)
@@ -2099,6 +2106,7 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
             fecha = st.date_input("Fecha de caducidad", key=k("fecha"), format="DD/MM/YYYY")
         if comprada > 0 and usada > comprada:
             st.error("Lo usado no puede ser más que lo comprado.")
+        st.session_state[f"{clave}_sin_anadir"] = comprada > 0 or importe > 0 or (es_nuevo and bool(nombre))
         nuevo = {"concepto": f"{nombre} (compra no prevista)", "categoria": "Otros", "importe": importe,
                  "producto": nombre, "comprada": comprada, "usada": usada, "proveedor": proveedor,
                  "fecha_caducidad": fecha, "producto_nuevo": producto if es_nuevo else None,
@@ -2108,8 +2116,10 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
         c1, c2, c3 = st.columns([3, 2, 1])
         concepto = c1.text_input("Concepto", key=k("concepto"), placeholder="Ej: Taxi de vuelta")
         categoria = c2.selectbox("Categoría", Gasto.CATEGORIAS, index=len(Gasto.CATEGORIAS) - 1, key=k("categoria"))
-        importe = c3.number_input("Importe (€)", min_value=0.0, step=1.0, key=k("importe"))
-        nuevo = {"concepto": concepto.strip(), "categoria": categoria, "importe": importe}
+        importe = c3.number_input("Importe (€, con IVA)", min_value=0.0, step=1.0, key=k("importe"))
+        iva = _iva_gasto(categoria, k("iva"))
+        st.session_state[f"{clave}_sin_anadir"] = bool(concepto.strip()) or importe > 0
+        nuevo = {"concepto": concepto.strip(), "categoria": categoria, "importe": importe, "iva": iva}
 
     if st.button("➕ Añadir coste", key=k("anadir")):
         nuevos_pendientes = [e["producto"] for e in extras if e.get("producto_nuevo")]
@@ -2126,8 +2136,20 @@ def _costes_adicionales(servicio: Servicio) -> list[dict]:
         else:
             extras.append(nuevo)
             st.session_state[f"{clave}_version"] = v + 1
+            st.session_state[f"{clave}_sin_anadir"] = False
             st.rerun()
     return extras
+
+
+def _coste_sin_anadir(servicio: Servicio) -> bool:
+    """True si hay un coste adicional escrito pero sin pulsar '➕ Añadir coste' (se perdería al completar)."""
+    return bool(st.session_state.get(f"extras_{servicio.id}_sin_anadir"))
+
+
+def _iva_gasto(categoria: str, clave: str, contenedor=None) -> float:
+    """IVA de un gasto: 21 % por defecto; 'Sin IVA' para personal y seguros (se puede cambiar)."""
+    return _elegir_iva(f"{clave}_{categoria}", Gasto.iva_propuesto(categoria),
+                       contenedor=contenedor, etiqueta="IVA de este gasto")
 
 
 def _ficha_producto_nuevo(k) -> dict:
@@ -2193,7 +2215,8 @@ def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> Non
                 avisar("error", f"No se pudo registrar la compra de '{extra['producto']}': {e}")
         else:
             gastos.agregar_gasto(Gasto(extra["concepto"], extra["categoria"], extra["importe"], servicio_id=servicio.id,
-                                       notas="Coste no previsto, añadido al completar el servicio"))
+                                       notas="Coste no previsto, añadido al completar el servicio",
+                                       iva=extra.get("iva")))
     if extras:
         avisar("info", f"💶 {len(extras)} coste(s) adicional(es) registrado(s) para el servicio "
                        f"({sum(e['importe'] for e in extras):.2f} €).")
@@ -2270,9 +2293,9 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
     st.dataframe(desglose, width="stretch", hide_index=True)
     if r["sin_iva"]:
         st.caption(
-            f"Comida, consumibles y limpieza van **sin IVA**, porque el negocio lo recupera (Ajustes). IVA de lo "
-            f"comprado para este servicio: **{r['iva_recuperable']:.2f} €** (lo pagado fue "
-            f"{r['comida'] + r['consumibles'] + r['mantenimiento'] + r['iva_recuperable']:.2f} €)."
+            f"Comida, consumibles, limpieza y gastos van **sin IVA**, porque el negocio lo recupera (Ajustes). IVA "
+            f"de lo comprado y los gastos de este servicio: **{r['iva_recuperable']:.2f} €** (lo pagado fue "
+            f"{r['comida'] + r['consumibles'] + r['mantenimiento'] + r['gastos'] + r['iva_recuperable']:.2f} €)."
         )
     else:
         st.caption("Comida, consumibles y limpieza van **con IVA** (lo pagado), porque el negocio no lo recupera (Ajustes).")
@@ -2405,9 +2428,14 @@ def pagina_servicios() -> None:
             elegido = st.selectbox("Servicio a cancelar", list(opciones.keys()), key="cancelar_select",
                                    index=None, placeholder="Elige el servicio...")
             confirmar = st.checkbox("Sí, quiero cancelar este servicio (no se puede deshacer)", key="cancelar_confirmar")
+            if elegido and st.session_state.registro_material.salida_de(opciones[elegido]):
+                st.warning("🚚 Este servicio tiene material fuera. Al cancelarlo seguirá 'en uso' hasta que registres "
+                           "su vuelta en Servicios › Material.")
             if st.button("Cancelar servicio", disabled=not (elegido and confirmar)):
                 serv.cancelar_servicio(opciones[elegido])
                 avisar("success", f"Servicio {elegido} cancelado.")
+                if st.session_state.registro_material.salida_de(opciones[elegido]):
+                    avisar("warning", "🚚 Recuerda registrar la vuelta de su material (Servicios › Material).")
                 vaciar_campos("cancelar_")
                 st.rerun()
 
@@ -2466,7 +2494,11 @@ def pagina_servicios() -> None:
                 help="Queda guardado en el historial del servicio. Se puede añadir o cambiar después.",
             )
 
-            if st.button("Completar servicio", type="primary"):
+            pulsado = st.button("Completar servicio", type="primary")
+            if pulsado and _coste_sin_anadir(servicio):
+                st.error("Tienes un coste adicional escrito sin añadir: pulsa '➕ Añadir coste' o bórralo antes de "
+                         "completar (si no, se perdería). No se ha completado el servicio.")
+            elif pulsado:
                 if filas is None:
                     servicio.completar()
                     servicio.valoracion = valoracion.strip()
@@ -3178,8 +3210,13 @@ def pagina_gastos() -> None:
         concepto = c1.text_input("Concepto", key=k("concepto"), placeholder="Ej: Gasolina boda García")
         categoria = c2.selectbox("Categoría", Gasto.CATEGORIAS, key=k("categoria"))
         c3, c4 = st.columns(2)
-        importe = c3.number_input("Importe (€)", min_value=0.0, step=1.0, key=k("importe"))
+        importe = c3.number_input("Importe pagado (€, con IVA)", min_value=0.0, step=1.0, key=k("importe"),
+                                  help="Lo que pone el ticket o la factura.")
         fecha = c4.date_input("Fecha", key=k("fecha"), format="DD/MM/YYYY")
+        iva = _iva_gasto(categoria, k("iva"))
+        if importe > 0 and iva:
+            base = importe / (1 + iva / 100)
+            st.caption(f"{importe:.2f} € = {base:.2f} € sin IVA + {importe - base:.2f} € de IVA.")
         general = "Gasto general del negocio (no es de un servicio)"
         opciones = {general: None}
         for s in sorted(serv.servicios, key=lambda s: (s.fecha, s.hora), reverse=True):
@@ -3189,7 +3226,7 @@ def pagina_gastos() -> None:
         notas = st.text_input("Notas (opcional)", key=k("notas"), placeholder="Ej: 120 km ida y vuelta")
         if st.button("Registrar gasto", type="primary", key=k("boton")):
             try:
-                gastos.agregar_gasto(Gasto(concepto, categoria, importe, fecha, servicio_id, notas))
+                gastos.agregar_gasto(Gasto(concepto, categoria, importe, fecha, servicio_id, notas, iva=iva))
                 avisar("success", f"Gasto registrado: {concepto} ({importe:.2f} €).")
                 st.session_state.gasto_version += 1
                 st.rerun()
@@ -3199,21 +3236,32 @@ def pagina_gastos() -> None:
     with tab_lista:
         periodo = st.selectbox("Periodo", PERIODOS_VALIDOS, index=1, key="gastos_periodo")
         desde, hasta = rango_desde_periodo(periodo)
-        lista = gastos.gastos_en_rango(desde, hasta)
-        if not lista:
+        # "todo" incluye también los gastos con fecha futura; los demás periodos los
+        # muestran aparte (marcados), sin sumarlos al total.
+        hasta_total = date.max if periodo == "todo" else hasta
+        lista = gastos.gastos_en_rango(desde, hasta_total)
+        futuros = [g for g in gastos.gastos_en_rango(hasta + timedelta(days=1), date.max) if g not in lista]
+        if not lista and not futuros:
             st.info("No hay gastos registrados en este periodo.")
             return
         st.dataframe([{
-            "Nº": g.id, "Fecha": g.fecha.strftime("%d/%m/%Y"), "Concepto": g.concepto, "Categoría": g.categoria,
-            "Importe (€)": f"{g.importe:.2f}", "Servicio": f"#{g.servicio_id}" if g.servicio_id else "General",
+            "Nº": g.id, "Fecha": g.fecha.strftime("%d/%m/%Y") + (" 📅 futuro" if g.fecha > date.today() else ""),
+            "Concepto": g.concepto, "Categoría": g.categoria,
+            "Importe (€)": f"{g.importe:.2f}",
+            "IVA": "no desglosado" if g.iva is None else nombre_iva(g.iva).split(" (")[0],
+            "Servicio": f"#{g.servicio_id}" if g.servicio_id else "General",
             "Notas": g.notas,
-        } for g in reversed(lista)], width="stretch", hide_index=True)
-        por_categoria = gastos.total_por_categoria(desde, hasta)
+        } for g in list(reversed(futuros)) + list(reversed(lista))], width="stretch", hide_index=True)
+        if futuros:
+            st.caption(f"📅 {len(futuros)} gasto(s) con fecha futura ({sum(g.importe for g in futuros):.2f} €): "
+                       "salen en la lista, pero no suman en el total de este periodo (sí en 'todo').")
+        por_categoria = gastos.total_por_categoria(desde, hasta_total)
         st.metric("Total del periodo", f"{sum(por_categoria.values()):.2f} €")
         st.bar_chart(pd.DataFrame(list(por_categoria.items()), columns=["Categoría", "Gasto (€)"]).set_index("Categoría"))
 
         st.subheader("Eliminar un gasto")
-        textos_gasto = {f"#{g.id} - {g.fecha.strftime('%d/%m/%Y')} - {g.concepto} ({g.importe:.2f} €)": g.id for g in reversed(lista)}
+        textos_gasto = {f"#{g.id} - {g.fecha.strftime('%d/%m/%Y')} - {g.concepto} ({g.importe:.2f} €)": g.id
+                        for g in list(reversed(futuros)) + list(reversed(lista))}
         elegido = st.selectbox("Gasto", list(textos_gasto), key="gasto_eliminar_select")
         if st.button("🗑️ Eliminar este gasto", key="gasto_eliminar_boton"):
             gastos.eliminar_gasto(textos_gasto[elegido])
@@ -3280,15 +3328,21 @@ def _pestana_iva(metricas: Metricas, inv: Inventario) -> None:
     t = c2.selectbox("Trimestre", ("1T (ene-mar)", "2T (abr-jun)", "3T (jul-sep)", "4T (oct-dic)"),
                      index=(hoy.month - 1) // 3, key="iva_trimestre")
     desde, hasta = trimestre(date(año, 3 * int(t[0]) - 2, 1))
-    resumen = metricas.resumen_iva(desde, hasta, st.session_state.registro_servicios.servicios)
+    resumen = metricas.resumen_iva(desde, hasta, st.session_state.registro_servicios.servicios,
+                                   st.session_state.registro_gastos.gastos)
     st.caption(f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}.")
 
-    st.markdown("**IVA pagado en las compras** (soportado)")
+    st.markdown("**IVA pagado en las compras y los gastos** (soportado)")
     if resumen["soportado_por_tipo"]:
         st.dataframe([{"Tipo": nombre_iva(tipo), "IVA pagado (€)": f"{importe:.2f}"}
                       for tipo, importe in resumen["soportado_por_tipo"].items()], width="stretch", hide_index=True)
+        if resumen["soportado_gastos"]:
+            st.caption(f"Incluye {resumen['soportado_gastos']:.2f} € de IVA de los gastos (gasolina, alquileres...).")
     else:
-        st.caption("No hay compras con IVA en este trimestre.")
+        st.caption("No hay compras ni gastos con IVA en este trimestre.")
+    if resumen["gastos_sin_desglose"]:
+        st.caption(f"⚠️ {resumen['gastos_sin_desglose']} gasto(s) de este trimestre se apuntaron sin desglosar el IVA "
+                   "(antes de existir ese dato): no cuentan aquí.")
 
     if inv.iva_recuperable:
         st.markdown("**IVA cobrado a los clientes** (repercutido)")
@@ -3303,8 +3357,7 @@ def _pestana_iva(metricas: Metricas, inv: Inventario) -> None:
         m2.metric("IVA pagado", f"{resumen['soportado']:.2f} €")
         etiqueta = "A ingresar (aprox.)" if resumen["resultado"] >= 0 else "A compensar (aprox.)"
         m3.metric(etiqueta, f"{abs(resumen['resultado']):.2f} €")
-        st.caption("Solo cuenta lo registrado aquí: no incluye el IVA de los gastos (gasolina, personal...) ni de otras "
-                   "compras o ventas que no estén en el programa.")
+        st.caption("Solo cuenta lo registrado aquí: no incluye compras, gastos o ventas que no estén en el programa.")
     else:
         st.info("El negocio no recupera el IVA de sus compras (Ajustes): este IVA forma parte de lo que te cuestan. "
                 "Se muestra solo como información.")

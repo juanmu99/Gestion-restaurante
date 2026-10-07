@@ -1253,6 +1253,59 @@ def prueba_metricas_y_guardado(at: AppTest) -> None:
               "Al reabrir, se carga también el material con sus roturas")
 
 
+@prueba("Gastos, completar y material (Fase 2, bloque 4)")
+def prueba_bloque4(at: AppTest) -> None:
+    serv = at.session_state["registro_servicios"]
+    gastos = at.session_state["registro_gastos"]
+    reg = at.session_state["registro_material"]
+
+    # Gasto con IVA y gasto con fecha futura
+    ir_a(at, "Gastos")
+    v = at.session_state["gasto_version"]
+    at.text_input(key=f"gasto_concepto_{v}").input("Alquiler de carpa")
+    at.selectbox(key=f"gasto_categoria_{v}").select("Alquiler de material").run()
+    at.number_input(key=f"gasto_importe_{v}").set_value(121.0).run()
+    comprobar(any("100.00 € sin IVA" in t and "21.00 € de IVA" in t for t in textos(at.caption)),
+              "Al apuntar un gasto se ve su desglose de IVA (121 € = 100 € + 21 €)")
+    at.date_input(key=f"gasto_fecha_{v}").set_value(date.today() + timedelta(days=10))
+    at.button(key=f"gasto_boton_{v}").click().run()
+    gasto = gastos.gastos[-1]
+    comprobar(sin_excepciones(at, "gasto con IVA") and gasto.iva == 21 and abs(gasto.cuota_iva - 21) < 1e-9,
+              "El gasto se guarda con su IVA (21 %)")
+    comprobar(any("📅" in str(f) for f in at.dataframe[0].value["Fecha"]),
+              "Un gasto con fecha futura aparece en la lista, marcado como futuro")
+
+    # Completar con un coste adicional escrito pero sin añadir
+    servicio = Servicio(date.today(), time(13, 0), 2, "Menú brasa")  # un solo lote: sin elegir lotes
+    serv.agregar_servicio(servicio)
+    ir_a(at, "Servicios")
+    at.selectbox(key="completar_select").select(
+        f"#{servicio.id} - {servicio.fecha.strftime('%d/%m/%Y')} - {servicio.menu}"
+    ).run()
+    v = at.session_state[f"extras_{servicio.id}_version"]
+    at.text_input(key=f"extras_{servicio.id}_concepto_{v}").input("Taxi").run()
+    boton(at.button, "Completar servicio").click().run()
+    comprobar(servicio.estado != "completado" and any("sin añadir" in t for t in textos(at.error)),
+              "Con un coste adicional escrito sin añadir, no se completa (y se avisa)")
+    at.text_input(key=f"extras_{servicio.id}_concepto_{v}").input("").run()
+    boton(at.button, "Completar servicio").click().run()
+    comprobar(sin_excepciones(at, "completar sin coste pendiente") and servicio.estado == "completado",
+              "Sin nada pendiente, se completa")
+
+    # Material de un servicio cancelado
+    cancelado = Servicio(date.today() + timedelta(days=3), time(13, 0), 2, "Menú del día")
+    serv.agregar_servicio(cancelado)
+    reg.registrar_salida(cancelado.id, {"Cuchillo": 2})
+    serv.cancelar_servicio(cancelado.id)
+    ir_a(at, "Servicios")
+    sb = at.selectbox(key="material_servicio_select")
+    sb.select(opcion(sb, f"#{cancelado.id} -")).run()
+    comprobar("cancelado" in sb.value, "Un servicio cancelado con material fuera aparece para registrar su vuelta")
+    at.button(key=f"vuelta_boton_{cancelado.id}").click().run()
+    comprobar(sin_excepciones(at, "vuelta de servicio cancelado") and reg.salida_de(cancelado.id) is None,
+              "Se registra la vuelta del material de un servicio cancelado (deja de estar 'en uso')")
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1284,6 +1337,7 @@ def main() -> int:
     prueba_corregir_compras(at)
     prueba_historial(at)
     prueba_metricas_y_guardado(at)
+    prueba_bloque4(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

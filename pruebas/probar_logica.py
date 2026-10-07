@@ -1224,6 +1224,79 @@ silencio(inv.limpiar_producto, "Pata", 1, "Carne limpia", 4, derivados={"Huesos"
 comprobar(inv.buscar_producto("Carne limpia").iva == 10 and inv.buscar_producto("Huesos").iva == 10,
           "Los productos que nacen de una limpieza llevan el IVA del producto en bruto (10 %)")
 
+print("\n--- Fase 2, bloque 4: IVA de los gastos ---")
+inv = Inventario()
+inv.iva_recuperable = True
+gastos = RegistroGastos()
+serv = Servicio(HOY, time(14, 0), 10, "Sin menú", precio_cobrado=500)
+serv.id = 801
+silencio(gastos.agregar_gasto, Gasto("Gasolina", "Transporte", 121, HOY, 801, iva=21))
+silencio(gastos.agregar_gasto, Gasto("Camarero", "Personal extra", 100, HOY, 801, iva=0))
+silencio(gastos.agregar_gasto, Gasto("Antiguo", "Otros", 50, HOY, 801))  # sin IVA desglosado
+r = resumen_servicio(serv, inv, Recetario(), gastos)
+comprobar(abs(r["gastos"] - 250) < 1e-9 and abs(r["iva_recuperable"] - 21) < 1e-9,
+          "Si se recupera el IVA, los gastos cuentan sin IVA (100 + 100 + 50) y su IVA (21 €) va aparte")
+inv.iva_recuperable = False
+r = resumen_servicio(serv, inv, Recetario(), gastos)
+comprobar(abs(r["gastos"] - 271) < 1e-9, "Si no se recupera, cuentan con IVA (271 €)")
+comprobar(Gasto.iva_propuesto("Transporte") == 21 and Gasto.iva_propuesto("Personal extra") == 0,
+          "Se propone 21 % (y 'Sin IVA' para personal y seguros)")
+copia = RegistroGastos.from_dict(gastos.to_dict())
+comprobar([g.iva for g in copia.gastos] == [21, 0, None], "El IVA de cada gasto se guarda y se carga (los antiguos: sin desglosar)")
+inv.iva_recuperable = True
+resumen = Metricas(inv).resumen_iva(HOY, HOY, [], gastos.gastos)
+comprobar(abs(resumen["soportado"] - 21) < 1e-9 and resumen["gastos_sin_desglose"] == 1,
+          "La estimación de IVA del trimestre suma el IVA de los gastos y avisa de los no desglosados")
+
+print("\n--- Fase 2, bloque 4: completar un servicio no queda a medias ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Harina", "Despensa", 0.1234567, "kg", 1, "Mayorista"))
+reparto, _ = inv.repartir("Harina", 0.1234567, [1])
+comprobar(silencio(inv.salida_repartida, "Harina", reparto, "consumo") and inv.buscar_producto("Harina").stock == 0,
+          "Un lote con más de 6 decimales se puede gastar entero (antes se rechazaba por redondeo)")
+silencio(inv.agregar_producto, Producto("Sal", "Despensa", 1, "kg", 1, "Mayorista"))
+rec = Recetario()
+plato = Receta("Pan", "Panadería", {"Sal": 0.1})
+silencio(rec.agregar_receta, plato)
+silencio(rec.agregar_menu, Menu("Menú pan", [plato]))
+serv = Servicio(HOY, time(14, 0), 5, "Menú pan")
+serv.id = 802
+filas = rec.previsualizar_consumo(serv, inv)
+silencio(inv.salida_stock, "Sal", 0.9, "consumo", 1)  # el stock cambia entre la vista previa y completar
+original = rec.previsualizar_consumo
+rec.previsualizar_consumo = lambda *a, **k: filas  # simula que la pantalla tenía datos de antes
+try:
+    rec.completar_servicio(serv, inv)
+    comprobar(False, "Si una salida no se puede hacer, no se completa")
+except ValueError as e:
+    comprobar(serv.estado != "completado" and abs(inv.buscar_producto("Sal").stock - 0.1) < 1e-9
+              and "no se ha tocado nada" in str(e),
+              "Si una salida no se puede hacer, el servicio NO se completa y no se toca nada")
+rec.previsualizar_consumo = original
+
+print("\n--- Fase 2, bloque 4: renombrar un producto ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 1, "kg", 2, "Huerta"))
+silencio(inv.agregar_producto, Producto("Cebolla", "Verduras", 1, "kg", 1, "Huerta"))
+for nombre in ("", "   "):
+    try:
+        inv.editar_producto("Tomate", nuevo_nombre=nombre)
+        comprobar(False, "Un nombre vacío no se acepta")
+    except ValueError:
+        pass
+comprobar("Tomate" in inv.productos, "Un nombre vacío o con solo espacios no se acepta")
+comprobar(not silencio(inv.editar_producto, "Tomate", nuevo_nombre="cebolla") and "Tomate" in inv.productos,
+          "Un nombre que ya existe con otras mayúsculas no se acepta")
+comprobar(silencio(inv.editar_producto, "Tomate", nuevo_nombre="  Tomate pera ") and "Tomate pera" in inv.productos,
+          "Los espacios de los lados se quitan ('Tomate pera')")
+comprobar(silencio(inv.editar_producto, "Tomate pera", nuevo_nombre="tomate pera") and "tomate pera" in inv.productos,
+          "Cambiar solo las mayúsculas del propio nombre sí se puede")
+compras = GestorCompras()
+from compras import ItemCompra  # noqa: E402
+silencio(compras.agregar_item, ItemCompra("Cebolla", 2, "kg", "Huerta", 1))
+compras.renombrar_producto("Cebolla", "Cebolla dulce")
+comprobar(compras.pendiente_de("Cebolla dulce") is not None, "La lista de la compra pasa a usar el nombre nuevo")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

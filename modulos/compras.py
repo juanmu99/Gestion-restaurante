@@ -352,6 +352,12 @@ class GestorCompras:
         self.items.append(item)
         print(f"🛒 Añadido a la lista de compra: {item}")
 
+    def renombrar_producto(self, antiguo: str, nuevo: str) -> None:
+        """Al renombrar un producto, la lista de la compra pasa a usar el nombre nuevo."""
+        for item in self.items:
+            if item.ingrediente == antiguo:
+                item.ingrediente = nuevo
+
     def items_pendientes(self) -> list[ItemCompra]:
         return [i for i in self.items if not i.comprado]
 
