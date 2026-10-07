@@ -36,7 +36,7 @@ from dashboard import Dashboard
 from exportador import exportar_todo
 from persistencia import guardar_sesion, cargar_sesion, cargar_sesion_segura, carpeta_datos, SesionIlegible
 from persistencia import copia_antes_de_empezar_de_cero, sesion_a_dict, sesion_vacia
-from gastos import Gasto, RegistroGastos, resumen_servicio
+from gastos import Gasto, RegistroGastos, resumen_servicio, NOTA_COSTE_AL_COMPLETAR
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, PERIODOS_VALIDOS, NOMBRES_MESES
@@ -1084,7 +1084,7 @@ def pedir_costes_adicionales(servicio: Servicio) -> None:
         try:
             registro_gastos.agregar_gasto(Gasto(
                 concepto, categoria, importe, servicio_id=servicio.id,
-                notas="Coste no previsto, añadido al completar el servicio", iva=iva,
+                notas=NOTA_COSTE_AL_COMPLETAR, iva=iva,
             ))
         except ValueError as e:
             print(f"❌ {e}")
@@ -2117,6 +2117,7 @@ def menu_historial():
         print("2. Ver la ficha de un servicio")
         print("3. Cambiar cliente, lugar o valoración de un servicio")
         print("4. Repetir un servicio (crear uno igual en otra fecha)")
+        print("5. Deshacer un servicio completado (si se completó por error)")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
         if opcion == "1":
@@ -2153,6 +2154,18 @@ def menu_historial():
                 fecha = pedir_fecha("Fecha del nuevo servicio")
                 hora = pedir_hora("Hora del nuevo servicio")
                 historial.repetir_servicio(registro_servicios, servicio, fecha, hora)
+        elif opcion == "5":
+            servicio = registro_servicios.buscar_por_id(pedir_entero("Nº del servicio completado a deshacer: "))
+            if servicio is None or servicio.estado != "completado":
+                print("❌ Ese servicio no existe o no está completado.")
+            else:
+                print("Vuelve a pendiente: lo usado vuelve al inventario y las raciones a sus tandas, y se quitan los")
+                print("costes adicionales añadidos al completarlo. Las compras no previstas y la valoración se quedan.")
+                if pedir_si_no(f"¿Deshacer el servicio #{servicio.id}?"):
+                    try:
+                        recetario.deshacer_completar(servicio, inventario, registro_gastos)
+                    except ValueError as e:
+                        print(f"❌ {e}")
         elif opcion == "0":
             return
         else:

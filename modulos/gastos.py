@@ -24,6 +24,11 @@ from recetario import Recetario
 from servicios import Servicio
 
 
+# Nota con la que se apuntan los costes no previstos añadidos al completar un
+# servicio: así, si se deshace el servicio, se sabe cuáles quitar.
+NOTA_COSTE_AL_COMPLETAR = "Coste no previsto, añadido al completar el servicio"
+
+
 class Gasto:
     """UN gasto: qué, cuánto, cuándo y, si es de un servicio, de cuál."""
 
@@ -142,6 +147,12 @@ class RegistroGastos:
                 return True
         print(f"❌ No existe el gasto #{id_gasto}")
         return False
+
+    def quitar_costes_al_completar(self, servicio_id: int) -> list[Gasto]:
+        """Quita los costes adicionales que se apuntaron AL COMPLETAR un servicio (al deshacerlo). Los devuelve."""
+        quitados = [g for g in self.gastos if g.servicio_id == servicio_id and g.notas == NOTA_COSTE_AL_COMPLETAR]
+        self.gastos = [g for g in self.gastos if g not in quitados]
+        return quitados
 
     def buscar_por_id(self, id_gasto: int) -> Optional[Gasto]:
         return next((g for g in self.gastos if g.id == id_gasto), None)

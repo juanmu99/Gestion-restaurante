@@ -151,16 +151,16 @@ def escribir_sesion(datos: dict, ruta: str) -> None:
         print(f"⚠️  No se ha podido hacer la copia de seguridad del día: {error}")
 
 
-def copia_antes_de_empezar_de_cero(datos: dict, ruta: str) -> Path:
+def copia_antes_de_empezar_de_cero(datos: dict, ruta: str, motivo: str = "empezar_de_cero") -> Path:
     """
-    Antes de borrar todos los datos ("Empezar de cero"), los guarda en
-    copias/antes_de_empezar_de_cero_<fecha y hora>.json. Esta copia no entra
-    en la rotación de las copias diarias: no se borra sola. Si no se puede
-    escribir, lanza OSError (y entonces NO se debe borrar nada).
+    Antes de borrar todos los datos ("Empezar de cero") o de restaurar una
+    copia, guarda lo que hay en copias/antes_de_<motivo>_<fecha y hora>.json.
+    Esta copia no entra en la rotación de las copias diarias: no se borra
+    sola. Si no se puede escribir, lanza OSError (y entonces NO se debe seguir).
     """
     copias = Path(ruta).parent / "copias"
     copias.mkdir(parents=True, exist_ok=True)
-    destino = copias / f"antes_de_empezar_de_cero_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    destino = copias / f"antes_de_{motivo}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
     with open(destino, "w", encoding="utf-8") as f:
         f.write(texto_json(datos))
         f.flush()
@@ -257,6 +257,40 @@ def cargar_sesion_segura(ruta: str) -> tuple[Optional[Sesion], Optional[str]]:
         f"Los datos guardados estaban dañados y no había ninguna copia de seguridad válida. El programa empieza "
         f"vacío. El archivo dañado se ha apartado como «{apartado.name}» en {ruta.parent}: no lo borres."
     )
+
+
+TIPOS_DE_COPIA = {
+    "sesion_": "Copia del día",
+    "antes_de_empezar_de_cero_": "Antes de empezar de cero",
+    "antes_de_restaurar_": "Antes de restaurar otra copia",
+}
+
+
+def listar_copias(ruta: str) -> list[dict]:
+    """
+    Las copias de seguridad que hay en copias/ (junto a la sesión), de la más
+    reciente a la más antigua. Cada una: {"ruta", "nombre", "tipo", "fecha"
+    (cuándo se guardó), "resumen": {"productos", "recetas", "servicios"} o
+    None si no se puede leer}.
+    """
+    carpeta = Path(ruta).parent / "copias"
+    if not carpeta.exists():
+        return []
+    copias = []
+    for archivo in carpeta.glob("*.json"):
+        tipo = next((t for prefijo, t in TIPOS_DE_COPIA.items() if archivo.name.startswith(prefijo)), "Copia")
+        try:
+            datos = _leer_json(archivo)
+            resumen = {
+                "productos": len(datos["inventario"].get("productos", [])),
+                "recetas": len(datos["recetario"].get("recetas", [])),
+                "servicios": len(datos["servicios"].get("servicios", [])),
+            }
+        except Exception:  # noqa: BLE001 -- una copia dañada se lista igual, sin resumen
+            resumen = None
+        copias.append({"ruta": archivo, "nombre": archivo.name, "tipo": tipo,
+                       "fecha": datetime.fromtimestamp(archivo.stat().st_mtime), "resumen": resumen})
+    return sorted(copias, key=lambda c: c["fecha"], reverse=True)
 
 
 def cargar_sesion(ruta: str) -> Optional[Sesion]:

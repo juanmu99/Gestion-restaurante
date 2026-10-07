@@ -823,6 +823,30 @@ class Recetario:
         servicio.completar()
         return filas
 
+    def deshacer_completar(self, servicio: Servicio, inventario: Inventario, registro_gastos=None) -> dict:
+        """
+        Deshace un servicio completado (por ejemplo, si se completó por error):
+        - vuelve a "pendiente";
+        - lo que salió del inventario vuelve a sus lotes, y las raciones
+          preparadas, a sus tandas (su consumo desaparece de Métricas);
+        - se quitan los costes adicionales apuntados al completarlo
+          (`registro_gastos`). Las compras no previstas de productos se
+          quedan (fueron reales): solo vuelve al stock lo que se usó.
+        - la valoración se conserva; las roturas de material no se tocan.
+        Comprueba antes que se puede (ValueError si no, sin tocar nada).
+        Devuelve un resumen: {"salidas": n, "raciones": n, "gastos": [...]}.
+        """
+        if servicio.estado != "completado":
+            raise ValueError(f"El servicio #{servicio.id} no está completado.")
+        salidas = inventario.devolver_salidas_servicio(servicio.id)  # comprueba antes de tocar nada
+        usos = inventario.elaboraciones.devolver_usos_servicio(servicio.id)
+        gastos = registro_gastos.quitar_costes_al_completar(servicio.id) if registro_gastos is not None else []
+        servicio.estado = "pendiente"
+        servicio.fecha_completado = None
+        servicio.menu_completado = None
+        print(f"↩️  Servicio #{servicio.id} deshecho: vuelve a estar pendiente.")
+        return {"salidas": len(salidas), "raciones": sum(u.raciones for u in usos), "gastos": gastos}
+
     def recomendar_menus(self, inventario: Inventario, dias: int = 7) -> list[tuple[Menu, float]]:
         """
         Ordena los menús disponibles por urgencia TOTAL: caducidad

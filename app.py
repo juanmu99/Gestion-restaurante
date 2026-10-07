@@ -22,6 +22,7 @@ Conceptos nuevos en este archivo:
 """
 
 import os
+import threading
 import sys
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
@@ -45,9 +46,9 @@ from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import (
     Sesion, SesionIlegible, carpeta_datos, cargar_sesion_segura, escribir_sesion, firma, sesion_a_dict,
-    copia_antes_de_empezar_de_cero, sesion_vacia,
+    copia_antes_de_empezar_de_cero, sesion_vacia, listar_copias, cargar_sesion,
 )
-from gastos import Gasto, RegistroGastos, resumen_servicio
+from gastos import Gasto, RegistroGastos, resumen_servicio, NOTA_COSTE_AL_COMPLETAR
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
 from metricas import trimestre
@@ -2265,7 +2266,7 @@ def _registrar_costes_adicionales(servicio: Servicio, extras: list[dict]) -> Non
                 avisar("error", f"No se pudo registrar la compra de '{extra['producto']}': {e}")
         else:
             gastos.agregar_gasto(Gasto(extra["concepto"], extra["categoria"], extra["importe"], servicio_id=servicio.id,
-                                       notas="Coste no previsto, añadido al completar el servicio",
+                                       notas=NOTA_COSTE_AL_COMPLETAR,
                                        iva=extra.get("iva")))
     if extras:
         avisar("info", f"💶 {len(extras)} coste(s) adicional(es) registrado(s) para el servicio "
@@ -2799,6 +2800,41 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
         nuevo = historial.repetir_servicio(st.session_state.registro_servicios, servicio, fecha, hora)
         avisar("success", f"Creado el servicio #{nuevo.id} para el {fecha.strftime('%d/%m/%Y')} (pendiente).")
         st.rerun()
+
+    if servicio.estado == "completado":
+        _deshacer_servicio(servicio, inv, rec, gastos)
+
+
+def _deshacer_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos: RegistroGastos) -> None:
+    """Deshacer un servicio completado (por ejemplo, completado por error), con confirmación."""
+    k = lambda campo: f"deshacer_{campo}_{servicio.id}"
+    with st.expander("↩️ Deshacer este servicio (volver a pendiente)"):
+        st.write(
+            "Si lo completaste por error: el servicio vuelve a **pendiente**, lo que salió del inventario vuelve a "
+            "sus lotes y las raciones preparadas a sus tandas (su consumo desaparece de Métricas y de la "
+            "rentabilidad), y se quitan los costes adicionales que se añadieron al completarlo."
+        )
+        st.caption("Las compras no previstas de productos se quedan (fueron reales): solo vuelve al stock lo que se "
+                   "usó. La valoración se conserva y las roturas de material no se tocan.")
+        salidas = inv.salidas_de_servicio(servicio.id)
+        faltan = sorted({m.producto_nombre for m in salidas if m.producto_nombre not in inv.productos})
+        if faltan:
+            st.caption(f"No se puede deshacer: estos productos ya no existen: {', '.join(faltan)}.")
+            return
+        confirmar = st.checkbox(f"Sí, quiero deshacer el servicio #{servicio.id}", key=k("confirmar"))
+        if st.button("Deshacer servicio", key=k("boton"), disabled=not confirmar):
+            try:
+                r = rec.deshacer_completar(servicio, inv, gastos)
+            except ValueError as e:
+                st.error(str(e))
+                return
+            detalle = f"{r['salidas']} salida(s) devuelta(s) al inventario"
+            if r["raciones"]:
+                detalle += f", {_num(r['raciones'])} raciones a sus tandas"
+            if r["gastos"]:
+                detalle += f", {len(r['gastos'])} coste(s) adicional(es) quitado(s)"
+            avisar("success", f"Servicio #{servicio.id} deshecho: vuelve a estar pendiente ({detalle}).")
+            st.rerun()
 
 
 # ---------- Página: Recetario ----------
@@ -3467,6 +3503,50 @@ def pagina_gastos() -> None:
 
 # ---------- Página: Exportar / Backup ----------
 
+def _restaurar_copia() -> None:
+    """Volver a una copia de seguridad (con confirmación y copia previa de lo que hay ahora)."""
+    copias = listar_copias(RUTA_SESION)
+    with st.expander("⏪ Restaurar una copia de seguridad"):
+        if not copias:
+            st.caption("Todavía no hay copias de seguridad.")
+            return
+        st.caption("Vuelve a dejar los datos como estaban en una copia. Antes se guarda una copia de lo que hay "
+                   "ahora (en «copias», empezando por «antes_de_restaurar»), así siempre se puede volver atrás.")
+
+        def texto(c: dict) -> str:
+            r = c["resumen"]
+            contenido = (f"{r['productos']} productos, {r['recetas']} recetas, {r['servicios']} servicios"
+                         if r else "⚠️ no se puede leer")
+            return f"{c['fecha']:%d/%m/%Y %H:%M} · {c['tipo']} · {contenido}"
+
+        opciones = {texto(c): c for c in copias}
+        elegida = st.selectbox("Copia", list(opciones), index=None, placeholder="Elige una copia...",
+                               key="restaurar_select")
+        if not elegida:
+            return
+        copia = opciones[elegida]
+        if copia["resumen"] is None:
+            st.error("Esa copia está dañada: no se puede restaurar.")
+            return
+        st.warning("Se sustituirán TODOS los datos actuales por los de esa copia.")
+        confirmar = st.checkbox("Sí, quiero restaurar esta copia", key="restaurar_confirmar")
+        if st.button("⏪ Restaurar", key="restaurar_boton", disabled=not confirmar):
+            try:
+                sesion = cargar_sesion(str(copia["ruta"]))
+            except Exception as error:  # noqa: BLE001 -- una copia que no se puede abrir no toca nada
+                st.error(f"No se ha podido abrir esa copia ({error}). No se ha cambiado nada.")
+                return
+            try:
+                antes = copia_antes_de_empezar_de_cero(_datos_sesion(), RUTA_SESION, motivo="restaurar")
+            except OSError as error:
+                st.error(f"No se ha restaurado nada: no se ha podido hacer la copia de lo actual ({error}).")
+                return
+            _poner_sesion(sesion)
+            avisar("success", f"Copia restaurada ({copia['fecha']:%d/%m/%Y %H:%M}). Lo que había antes está "
+                              f"guardado en: {antes}")
+            st.rerun()
+
+
 def pagina_exportar() -> None:
     st.header("📁 Exportar y backup")
 
@@ -3478,6 +3558,8 @@ def pagina_exportar() -> None:
     if os.name == "nt" and st.button("📂 Abrir la carpeta de datos"):
         CARPETA_DATOS.mkdir(parents=True, exist_ok=True)
         os.startfile(CARPETA_DATOS)  # solo existe en Windows
+
+    _restaurar_copia()
 
     st.divider()
     st.subheader("Exportar a Excel")
@@ -3634,14 +3716,17 @@ def pagina_ajustes() -> None:
 
 def _empezar_de_cero() -> None:
     """Deja la app vacía (conservando los Ajustes del IVA). La copia de seguridad la hace quien llama."""
+    Servicio._siguiente_id = 1
+    Gasto._siguiente_id = 1
+    _poner_sesion(sesion_vacia(st.session_state.inventario))
+
+
+def _poner_sesion(nueva: Sesion) -> None:
+    """Sustituye TODOS los datos de la app por los de `nueva` (y olvida lo elegido en las pantallas)."""
     ss = st.session_state
-    nueva = sesion_vacia(ss.inventario)
-    # Se olvidan también los campos de las pantallas (elecciones de la sesión anterior).
     for clave in list(ss.keys()):
         if isinstance(clave, str) and not clave.startswith("_") and clave != "avisos":
             del ss[clave]
-    Servicio._siguiente_id = 1
-    Gasto._siguiente_id = 1
     ss.inventario = nueva.inventario
     ss.registro_servicios = nueva.registro_servicios
     ss.recetario = nueva.recetario
@@ -3859,6 +3944,20 @@ if _app_vacia() and st.sidebar.button("🧪 Cargar datos de ejemplo",
     cargar_datos_ejemplo()
     avisar("success", "Datos de ejemplo cargados.")
     st.rerun()
+
+if st.sidebar.button("⏻ Cerrar el programa", key="cerrar_programa",
+                     help="Guarda y apaga el programa. Después puedes cerrar la pestaña del navegador."):
+    autoguardar(zona_guardado)
+    if firma(_datos_sesion()) != st.session_state._firma_guardada:
+        st.error("No se ha cerrado: los últimos cambios no se han podido guardar (mira el aviso de la barra lateral).")
+        st.stop()
+    if os.environ.get("GESTION_RESTAURANTE_LANZADOR") == "1":
+        st.success("✅ Todo guardado. El programa se ha cerrado: ya puedes cerrar esta pestaña del navegador.")
+        # Se apaga un momento después, para que el mensaje llegue al navegador.
+        threading.Timer(1.5, os._exit, args=(0,)).start()
+    else:
+        st.success("✅ Todo guardado. Para terminar, cierra la ventana donde se está ejecutando el programa.")
+    st.stop()
 
 # Se guarda SIEMPRE al terminar cada vuelta, también si la página hace
 # st.rerun() o si falla al dibujarse (finally se ejecuta en los dos casos).

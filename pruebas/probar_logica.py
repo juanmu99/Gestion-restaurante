@@ -937,6 +937,7 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar(firma(datos) == firma(sesion_a_dict(*args)) and firma(datos) != firma({}),
               "La huella de los datos sirve para saber si hay cambios sin guardar")
 from persistencia import SesionIlegible  # noqa: E402
+from gastos import NOTA_COSTE_AL_COMPLETAR as NOTA_COSTE  # noqa: E402
 import time as _time  # noqa: E402
 with tempfile.TemporaryDirectory() as carpeta:
     ruta = Path(carpeta) / "sesion.json"
@@ -1428,6 +1429,68 @@ with tempfile.TemporaryDirectory() as carpeta:
 vacia = sesion_vacia(inv)
 comprobar(not vacia.inventario.productos and vacia.inventario.iva_recuperable is False and vacia.inventario.iva_cobro == 7,
           "La sesión nueva está vacía y conserva los ajustes del IVA")
+
+print("\n--- Fase 3, bloque 3: deshacer un servicio completado ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 1, "kg", 2, "Huerta", fecha_caducidad=HOY + timedelta(days=4)))
+silencio(inv.entrada_stock, "Tomate", 2, precio_unitario=3, proveedor="Mercado", fecha_caducidad=HOY + timedelta(days=8))
+silencio(inv.agregar_producto, Producto("Servilleta", "Menaje", 100, "unidades", 0.05, "Bazar", tipo="consumible"))
+silencio(inv.agregar_producto, Producto("Lejía", "Limpieza", 5, "litros", 1, "Droguería", tipo="mantenimiento"))
+rec = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1})
+silencio(rec.agregar_receta, ensalada)
+silencio(rec.agregar_menu, Menu("Menú", [ensalada], {"Servilleta": 1}))
+silencio(inv.elaboraciones.nueva_tanda, "Ensalada", 5, 0.3, HOY + timedelta(days=2))
+gastos = RegistroGastos()
+serv = Servicio(HOY, time(14, 0), 20, "Menú")  # 5 raciones preparadas + 15 con ingredientes (1,5 kg)
+serv.id = 901
+silencio(rec.completar_servicio, serv, inv, {"Tomate": [1, 2]})
+silencio(inv.salida_stock, "Lejía", 1, "consumo", 1, servicio_id=901)  # mantenimiento apuntado a mano
+silencio(gastos.agregar_gasto, Gasto("Taxi", "Transporte", 20, HOY, 901, NOTA_COSTE, iva=21))
+silencio(gastos.agregar_gasto, Gasto("Camarero", "Personal extra", 80, HOY, 901, "", iva=0))
+tomate = inv.buscar_producto("Tomate")
+comprobar(tomate.buscar_lote(1) is None and abs(tomate.stock - 1.5) < 1e-9 and not inv.elaboraciones.tandas,
+          "(Al completar se gasta el lote 1 entero, 0,5 kg del lote 2 y la tanda entera)")
+r = silencio(rec.deshacer_completar, serv, inv, gastos)
+lote1 = tomate.buscar_lote(1)
+comprobar(serv.estado == "pendiente" and serv.fecha_completado is None and abs(tomate.stock - 3) < 1e-9
+          and lote1 is not None and lote1.fecha_caducidad == HOY + timedelta(days=4) and abs(lote1.precio_unitario - 2) < 1e-9
+          and lote1.proveedor == "Huerta" and abs(tomate.buscar_lote(2).cantidad - 2) < 1e-9,
+          "Deshacer: vuelve a pendiente y lo usado vuelve a sus lotes (el lote 1 se recrea con su precio y caducidad)")
+tanda = inv.elaboraciones.tandas_de("Ensalada")
+comprobar(len(tanda) == 1 and tanda[0].raciones == 5 and tanda[0].fecha_caducidad == HOY + timedelta(days=2),
+          "Las raciones preparadas vuelven a su tanda (con su caducidad)")
+comprobar(inv.buscar_producto("Servilleta").stock == 100 and not inv.salidas_de_servicio(901)
+          and not inv.elaboraciones.usos_de_servicio(901),
+          "Los consumibles también vuelven, y su consumo desaparece del historial")
+comprobar(inv.buscar_producto("Lejía").stock == 4, "La limpieza y mantenimiento apuntado a mano para el servicio no se toca")
+comprobar([g.concepto for g in gastos.gastos] == ["Camarero"] and len(r["gastos"]) == 1,
+          "Se quitan los costes añadidos al completar; los demás gastos del servicio se quedan")
+silencio(rec.completar_servicio, serv, inv, {"Tomate": [1, 2]})
+comprobar(serv.estado == "completado" and abs(tomate.stock - 1.5) < 1e-9, "Después se puede volver a completar")
+try:
+    rec.deshacer_completar(Servicio(HOY, time(14, 0), 2, "Menú"), inv)
+    comprobar(False, "Solo se deshace un servicio completado")
+except ValueError:
+    comprobar(True, "Solo se deshace un servicio completado")
+copia_elab = type(inv.elaboraciones).from_dict(inv.elaboraciones.to_dict())
+comprobar(len(copia_elab.agotadas) == 1, "Las tandas gastadas enteras se guardan (para poder deshacer tras reabrir)")
+
+print("\n--- Fase 3, bloque 3: copias de seguridad ---")
+from persistencia import escribir_sesion, listar_copias  # noqa: E402
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = str(Path(carpeta) / "sesion.json")
+    datos = _sad(inv, RegistroServicios(), rec, GestorCompras(), ArchivoInformes(), gastos, RegistroMaterial())
+    escribir_sesion(datos, ruta)
+    copia_antes_de_empezar_de_cero(datos, ruta, motivo="restaurar")
+    (Path(carpeta) / "copias" / "sesion_2020-01-01.json").write_text("{roto", encoding="utf-8")
+    copias = listar_copias(ruta)
+    tipos = {c["tipo"] for c in copias}
+    diaria = next(c for c in copias if c["nombre"] == f"sesion_{HOY.isoformat()}.json")
+    rota = next(c for c in copias if c["nombre"] == "sesion_2020-01-01.json")
+    comprobar(len(copias) == 3 and {"Copia del día", "Antes de restaurar otra copia"} <= tipos
+              and diaria["resumen"] == {"productos": 3, "recetas": 1, "servicios": 0} and rota["resumen"] is None,
+              "Se listan las copias con su tipo y lo que contienen (una dañada sale sin resumen)")
 
 print()
 if fallos:

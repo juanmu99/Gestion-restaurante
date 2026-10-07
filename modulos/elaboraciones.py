@@ -178,6 +178,9 @@ class RegistroElaboraciones:
         self.siguiente_id = 1
         # Historial de preparaciones de elaboraciones BASE (previsto/obtenido).
         self.preparaciones_base: list[PreparacionBase] = []
+        # Tandas que se gastaron enteras: se guardan (con su caducidad) por si
+        # hay que deshacer el servicio que las gastó.
+        self.agotadas: list[Tanda] = []
 
     def nueva_tanda(
         self, receta: str, raciones: float, coste_por_racion: float,
@@ -229,8 +232,33 @@ class RegistroElaboraciones:
         uso = UsoTanda(tanda.id, tanda.receta, raciones, motivo, raciones * tanda.coste_por_racion, servicio_id,
                        coste_sin_iva=raciones * tanda.coste_por_racion_sin_iva)
         self.usos.append(uso)
-        self.tandas = [t for t in self.tandas if t.raciones > 1e-9]  # una tanda vacía desaparece
+        if tanda.raciones <= 1e-9:  # una tanda vacía desaparece de la lista (y se archiva)
+            self.tandas = [t for t in self.tandas if t is not tanda]
+            self.agotadas = [t for t in self.agotadas if t.id != tanda.id] + [tanda]
         return uso
+
+    def devolver_usos_servicio(self, servicio_id: int) -> list[UsoTanda]:
+        """
+        Devuelve a sus tandas las raciones que se usaron en un servicio (al
+        deshacerlo). Si una tanda se había gastado entera, vuelve a la lista
+        con su caducidad. Esos usos desaparecen. Devuelve los usos devueltos.
+        """
+        usos = self.usos_de_servicio(servicio_id)
+        for uso in usos:
+            tanda = self.buscar(uso.tanda_id)
+            if tanda is None:
+                tanda = next((t for t in self.agotadas if t.id == uso.tanda_id), None)
+                if tanda is not None:
+                    self.agotadas.remove(tanda)
+                else:  # sesiones de antes de archivar las tandas: se recrea sin caducidad
+                    por_racion = uso.coste / uso.raciones if uso.raciones else 0.0
+                    por_racion_sin = uso.coste_sin_iva / uso.raciones if uso.raciones else 0.0
+                    tanda = Tanda(uso.tanda_id, uso.receta, 0, por_racion, uso.fecha, None, uso.raciones, por_racion_sin)
+                self.tandas.append(tanda)
+            tanda.raciones = round(tanda.raciones + uso.raciones, 6)
+        devueltos = {id(u) for u in usos}
+        self.usos = [u for u in self.usos if id(u) not in devueltos]
+        return usos
 
     def usar(self, reparto: list[tuple[int, float]], servicio_id: Optional[int] = None) -> list[UsoTanda]:
         """Saca raciones de varias tandas (comprobando todo antes de tocar nada)."""
@@ -289,7 +317,7 @@ class RegistroElaboraciones:
         return round(sum(u.coste for u in self.usos if u.motivo == "desperdicio" and desde <= u.fecha <= hasta), 2)
 
     def renombrar_receta(self, antigua: str, nueva: str) -> None:
-        for t in self.tandas:
+        for t in self.tandas + self.agotadas:
             if t.receta == antigua:
                 t.receta = nueva
         for u in self.usos:
@@ -302,6 +330,7 @@ class RegistroElaboraciones:
             "usos": [u.to_dict() for u in self.usos],
             "siguiente_id": self.siguiente_id,
             "preparaciones_base": [p.to_dict() for p in self.preparaciones_base],
+            "agotadas": [t.to_dict() for t in self.agotadas],
         }
 
     @classmethod
@@ -311,4 +340,5 @@ class RegistroElaboraciones:
         registro.usos = [UsoTanda.from_dict(d) for d in datos.get("usos", [])]
         registro.siguiente_id = datos.get("siguiente_id", 1)
         registro.preparaciones_base = [PreparacionBase.from_dict(d) for d in datos.get("preparaciones_base", [])]
+        registro.agotadas = [Tanda.from_dict(d) for d in datos.get("agotadas", [])]
         return registro

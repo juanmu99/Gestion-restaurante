@@ -1405,6 +1405,40 @@ def prueba_fase3_bloque2(at: AppTest) -> None:
                 os.environ["GESTION_RESTAURANTE_DATOS"] = anterior
 
 
+@prueba("Deshacer un servicio, restaurar una copia y cerrar (Fase 3, bloque 3)")
+def prueba_fase3_bloque3(at: AppTest) -> None:
+    serv = at.session_state["registro_servicios"]
+    inv = at.session_state["inventario"]
+    servicio = next(s for s in serv.servicios if s.menu == "Menú brasa" and s.estado == "completado" and s.comensales == 2)
+    secreto = inv.buscar_producto("Secreto ibérico")
+    antes = secreto.stock
+
+    ir_a(at, "Historial")
+    at.selectbox(key="hist_cliente").select("Todos").run()
+    sb = at.selectbox(key="hist_ficha")
+    sb.select(opcion(sb, f"#{servicio.id} -")).run()
+    comprobar(at.button(key=f"deshacer_boton_{servicio.id}").disabled, "Deshacer un servicio pide confirmarlo")
+    at.checkbox(key=f"deshacer_confirmar_{servicio.id}").check().run()
+    at.button(key=f"deshacer_boton_{servicio.id}").click().run()
+    comprobar(sin_excepciones(at, "deshacer servicio") and servicio.estado == "pendiente" and secreto.stock > antes,
+              "Deshacer un servicio completado: vuelve a pendiente y lo usado vuelve al inventario")
+
+    ir_a(at, "Exportar / Backup")
+    sb = at.selectbox(key="restaurar_select")
+    comprobar(any("Copia del día" in o for o in sb.options), "Se listan las copias de seguridad con su fecha y contenido")
+    sb.select(next(o for o in sb.options if "Copia del día" in o)).run()
+    at.checkbox(key="restaurar_confirmar").check().run()
+    at.button(key="restaurar_boton").click().run()
+    antes_de_restaurar = list((RAIZ / "datos" / "copias").glob("antes_de_restaurar_*.json"))
+    comprobar(sin_excepciones(at, "restaurar copia") and at.session_state["inventario"].productos
+              and len(antes_de_restaurar) == 1 and any("restaurada" in t for t in textos(at.success)),
+              "Restaurar una copia: se cargan sus datos y antes se guarda una copia de lo que había")
+
+    at.button(key="cerrar_programa").click().run()
+    comprobar(any("Todo guardado" in t for t in textos(at.success)),
+              "'Cerrar el programa' guarda y avisa (aquí no se apaga: no lo ha abierto el lanzador)")
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1439,6 +1473,7 @@ def main() -> int:
     prueba_bloque4(at)
     prueba_fase3_bloque1(at)
     prueba_fase3_bloque2(at)
+    prueba_fase3_bloque3(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

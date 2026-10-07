@@ -12,7 +12,7 @@ Conceptos de Python nuevos que usamos aquí:
 - `typing.Optional` para indicar que un dato puede ser None
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from elaboraciones import RegistroElaboraciones
@@ -1269,6 +1269,69 @@ class Inventario:
             print(f"📦 Salida ({motivo}): {_numero(cantidad)} {producto.unidad} de {nombre} [{lote.etiqueta()}]")
         producto.quitar_lotes_vacios()
         return True
+
+    # ---------- Deshacer un servicio completado ----------
+
+    def salidas_de_servicio(self, servicio_id: int) -> list[MovimientoStock]:
+        """
+        Lo que salió del inventario AL COMPLETAR un servicio: el consumo de
+        alimentos y consumibles. (La limpieza y el mantenimiento que se
+        apunta a mano para un servicio no se cuenta: no sale al completarlo.)
+        """
+        return [m for m in self.historial if m.servicio_id == servicio_id and m.tipo == "salida"
+                and m.motivo == "consumo" and m.tipo_producto != "mantenimiento"]
+
+    def devolver_salidas_servicio(self, servicio_id: int) -> list[MovimientoStock]:
+        """
+        Devuelve al inventario lo que salió al completar un servicio: cada
+        cosa a su MISMO lote (si el lote ya se había gastado entero, se vuelve
+        a crear con su número, precio, IVA, proveedor y caducidad). Esas
+        salidas desaparecen del historial (y de Métricas). Comprueba todo
+        antes de tocar nada. Devuelve las salidas devueltas.
+        """
+        salidas = self.salidas_de_servicio(servicio_id)
+        faltan = sorted({m.producto_nombre for m in salidas if m.producto_nombre not in self.productos})
+        if faltan:
+            raise ValueError("Estos productos ya no existen en el inventario, así que no se les puede devolver lo "
+                             "que se usó: " + ", ".join(faltan) + ".")
+        for m in salidas:
+            producto = self.productos[m.producto_nombre]
+            lote = producto.buscar_lote(m.lote_id) if m.lote_id is not None else None
+            if lote is None:
+                lote = self._recrear_lote(producto, m)
+            lote.cantidad = round(lote.cantidad + m.cantidad, 6)
+        devueltas = {id(m) for m in salidas}
+        self.historial = [m for m in self.historial if id(m) not in devueltas]
+        print(f"↩️  Devuelto al inventario lo usado en el servicio #{servicio_id} ({len(salidas)} salida(s)).")
+        return salidas
+
+    def _recrear_lote(self, producto: Producto, salida: MovimientoStock) -> Lote:
+        """Vuelve a crear (vacío) el lote del que salió `salida`, con los datos que guarda el historial."""
+        proveedor, caducidad = producto.proveedor, None
+        partes = (salida.lote or "").split(" · ", 2)
+        if len(partes) == 3:
+            proveedor = partes[2] or proveedor
+            if partes[1].startswith("cad. "):
+                try:
+                    caducidad = datetime.strptime(partes[1][5:], "%d/%m/%Y").date()
+                except ValueError:
+                    caducidad = None
+        entrada = next((m for m in self.historial if m.producto_nombre == producto.nombre and m.tipo == "entrada"
+                        and m.lote_id == salida.lote_id), None)
+        procedencia = {"compra": "compra", "limpieza": "limpieza", "elaboración": "elaboración"}.get(
+            entrada.motivo if entrada else "", "compra")
+        lote_id = salida.lote_id
+        if lote_id is None:
+            lote_id = producto.siguiente_lote
+            producto.siguiente_lote += 1
+        lote = Lote(
+            lote_id, 0, 0, proveedor, fecha_entrada=entrada.fecha if entrada else salida.fecha,
+            fecha_caducidad=caducidad,
+            peso_unitario=producto.peso_unitario_referencia if producto.unidad == "unidades" else None,
+            procedencia=procedencia, iva=salida.iva, precio_base=salida.precio_base,
+        )
+        producto.lotes.append(lote)
+        return lote
 
     def problema_salida(self, nombre: str, reparto: list[tuple[int, float]], motivo: str = "consumo") -> Optional[str]:
         """

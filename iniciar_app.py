@@ -25,6 +25,7 @@ Cómo funciona (para que lo entiendas si algo falla):
    puede abrirlo, y Windows no pide permiso al Firewall.
 """
 
+import os
 import socket
 import sys
 import threading
@@ -110,6 +111,9 @@ if __name__ == "__main__":
         url = f"http://{DIRECCION}:{puerto}"
 
     threading.Thread(target=_abrir_navegador, args=(url,), daemon=True).start()
+    # Así la app sabe que la ha abierto este lanzador y que su botón
+    # "Cerrar el programa" puede apagarlo (ver app.py).
+    os.environ["GESTION_RESTAURANTE_LANZADOR"] = "1"
 
     sys.argv = [
         "streamlit", "run", _ruta_app_py(),

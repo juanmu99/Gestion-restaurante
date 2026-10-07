@@ -219,6 +219,18 @@ def probar(exe_original: Path) -> None:
             avisos = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
             comprobar("Harina de trigo" in avisos,
                       "Al reabrir, los datos guardados siguen ahí", avisos[:300])
+
+            # Botón "Cerrar el programa": guarda, avisa y el .exe se apaga solo.
+            page.get_by_role("button", name="⏻ Cerrar el programa").click()
+            page.wait_for_timeout(1000)
+            avisos = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
+            comprobar("ya puedes cerrar esta pestaña" in avisos, "'Cerrar el programa' avisa de que se ha cerrado",
+                      avisos[:300])
+            try:
+                proceso.wait(timeout=30)
+                comprobar(True, "'Cerrar el programa' apaga el .exe")
+            except subprocess.TimeoutExpired:
+                comprobar(False, "'Cerrar el programa' apaga el .exe", "sigue abierto a los 30 segundos")
             navegador.close()
     finally:
         cerrar_exe(proceso)
