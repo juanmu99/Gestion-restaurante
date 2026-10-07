@@ -397,7 +397,7 @@ def _hoja_rentabilidad(
 def _hoja_lista_compra(wb: Workbook, gestor_compras: GestorCompras) -> None:
     hoja = wb.create_sheet("Lista de compra")
     columnas = ["Ingrediente", "Cantidad", "Unidad", "Proveedor",
-                "Precio unitario estimado (€)", "Coste estimado (€)", "Estado"]
+                "Precio unitario estimado (€)", "Coste estimado (€)", "Estado", "Para qué"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -410,6 +410,7 @@ def _hoja_lista_compra(wb: Workbook, gestor_compras: GestorCompras) -> None:
         hoja.cell(row=fila, column=6, value=f"=B{fila}*E{fila}").font = Font(name=FUENTE)
         estado = "Comprado" if item.comprado else "Pendiente"
         hoja.cell(row=fila, column=7, value=estado).font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=8, value=item.motivo()).font = Font(name=FUENTE)
         fila += 1
 
     if fila > 2:

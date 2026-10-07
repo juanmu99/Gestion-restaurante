@@ -3485,6 +3485,59 @@ def _pestana_bases(inv: Inventario) -> None:
 
 # ---------- Página: Compras ----------
 
+def _anadir_a_mano(comp: GestorCompras, inv: Inventario) -> None:
+    """Añadir a la lista algo que no sale de ningún servicio (papel de horno, hielo...)."""
+    with st.expander("➕ Añadir algo a mano"):
+        v = st.session_state.setdefault("a_mano_version", 0)
+        k = lambda campo: f"a_mano_{campo}_{v}"
+        OTRO = "✏️ Otra cosa (no está en el inventario)"
+        elegido = st.selectbox("¿Qué?", [OTRO] + list(inv.productos), index=None, placeholder="Elige o escribe...",
+                               key=k("producto"))
+        producto = inv.buscar_producto(elegido) if elegido and elegido != OTRO else None
+        nombre = producto.nombre if producto else (st.text_input("Nombre", key=k("nombre")) if elegido == OTRO else "")
+        c1, c2 = st.columns(2)
+        if producto:
+            unidad = producto.unidad
+            c1.caption(f"Unidad: {unidad} · proveedor habitual: {producto.proveedor}")
+        else:
+            unidad = c1.selectbox("Unidad", Producto.UNIDADES_VALIDAS, key=k("unidad"))
+        cantidad = c2.number_input(f"Cantidad ({unidad})", min_value=0.0, step=1.0, key=k("cantidad"))
+        if st.button("Añadir a la lista", key=k("boton"), disabled=not elegido):
+            try:
+                comp.agregar_a_mano(nombre, cantidad, unidad, producto.proveedor if producto else "Sin proveedor",
+                                    producto.precio_unitario if producto else 0.0)
+                avisar("success", f"Añadido a la lista: {_num(cantidad)} {unidad} de {nombre.strip()}.")
+                st.session_state.a_mano_version = v + 1
+                st.rerun()
+            except ValueError as e:
+                st.error(_es(str(e)))
+        st.caption("Lo añadido a mano se respeta al volver a generar la lista (se suma a lo que pidan los servicios).")
+
+
+def _cambiar_lista_compra(comp: GestorCompras, pendientes: list) -> None:
+    """Cambiar la cantidad de un artículo pendiente o quitarlo de la lista."""
+    with st.expander("✏️ Cambiar la cantidad o quitar algo de la lista"):
+        nombre = st.selectbox("Artículo", [i.ingrediente for i in pendientes], key="lista_cambiar_select")
+        item = comp.pendiente_de(nombre)
+        if item is None:
+            return
+        c1, c2, c3 = st.columns([2, 1, 1])
+        cantidad = c1.number_input(f"Cantidad ({item.unidad})", min_value=0.0, step=1.0, value=float(item.cantidad),
+                                   key=f"lista_cantidad_{nombre}_{_huella(item.cantidad)}")
+        if c2.button("Guardar cantidad", key=f"lista_guardar_{nombre}"):
+            try:
+                comp.cambiar_cantidad(nombre, cantidad)
+                avisar("success", f"Cantidad de '{nombre}' cambiada a {_num(cantidad)} {item.unidad}.")
+                st.rerun()
+            except ValueError as e:
+                st.error(_es(str(e)))
+        if c3.button("🗑️ Quitar", key=f"lista_quitar_{nombre}"):
+            comp.quitar_pendiente(nombre)
+            avisar("success", f"'{nombre}' quitado de la lista.")
+            st.rerun()
+        st.caption("Si vuelves a generar la lista, lo que piden los servicios se recalcula (y podría volver a salir).")
+
+
 def pagina_compras() -> None:
     st.header("🛒 Compras")
     comp = st.session_state.gestor_compras
@@ -3505,6 +3558,8 @@ def pagina_compras() -> None:
                 avisar("warning" if aviso.startswith("⚠️") else "info", aviso)
             st.rerun()
 
+    _anadir_a_mano(comp, inv)
+
     st.divider()
     pendientes = comp.items_pendientes()
     if not pendientes:
@@ -3514,12 +3569,14 @@ def pagina_compras() -> None:
         for proveedor, items in agrupado.items():
             st.subheader(f"📋 {proveedor}")
             filas = [
-                {"Ingrediente": i.ingrediente, "Cantidad": _num(i.cantidad), "Unidad": i.unidad, "Coste (€)": _eur(i.costo_estimado())}
+                {"Ingrediente": i.ingrediente, "Cantidad": _num(i.cantidad), "Unidad": i.unidad,
+                 "Coste (€)": _eur(i.costo_estimado()), "Para qué": i.motivo()}
                 for i in items
             ]
             st.dataframe(filas, width="stretch", hide_index=True)
 
         st.metric("💰 Coste total pendiente", f"{_eur(comp.costo_total_pendiente())} €")
+        _cambiar_lista_compra(comp, pendientes)
 
         st.divider()
         nombre_marcar = st.selectbox("Marcar como comprado", [i.ingrediente for i in pendientes], key="marcar_comprado_select")
@@ -3538,7 +3595,12 @@ def pagina_compras() -> None:
             )
             producto_marcar = inv.buscar_producto(nombre_marcar)
             if producto_marcar is None:
-                st.warning(f"'{nombre_marcar}' no existe en el inventario: créalo antes en Inventario.")
+                st.info(f"'{nombre_marcar}' no está en el inventario: al marcarlo como comprado no entra stock. "
+                        "Si quieres controlar su stock, créalo antes en Inventario.")
+                if st.button("Marcar como comprado", key=f"marcar_sin_inventario_{nombre_marcar}"):
+                    comp.marcar_comprado(nombre_marcar, cantidad_comprada=cantidad_real)
+                    avisar("success", f"'{nombre_marcar}' marcado como comprado.")
+                    st.rerun()
                 return
             st.caption("La compra entra en el inventario como un lote nuevo.")
             k = lambda campo: f"compra_{campo}_{nombre_marcar}"

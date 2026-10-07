@@ -29,13 +29,33 @@ from recetario import Recetario
 class ItemCompra:
     """Un ingrediente concreto que hay que comprar, con su estado."""
 
-    def __init__(self, ingrediente: str, cantidad: float, unidad: str, proveedor: str, precio_unitario_estimado: float):
+    def __init__(
+        self, ingrediente: str, cantidad: float, unidad: str, proveedor: str, precio_unitario_estimado: float,
+        para: Optional[list[int]] = None, bajo_minimo: bool = False, a_mano: float = 0.0,
+    ):
         self.ingrediente = ingrediente
         self.cantidad = cantidad
         self.unidad = unidad
         self.proveedor = proveedor
         self.precio_unitario_estimado = precio_unitario_estimado
         self.comprado = False
+        # Para qué es: los servicios que lo piden, si es para reponer el
+        # mínimo, y cuánto se añadió A MANO (se suma a lo calculado y se
+        # respeta al volver a generar la lista).
+        self.para: list[int] = sorted(set(para or []))
+        self.bajo_minimo = bajo_minimo
+        self.a_mano = a_mano
+
+    def motivo(self) -> str:
+        """Para qué es: 'servicios #4, #7 · bajo mínimo · a mano (2)'."""
+        partes = []
+        if self.para:
+            partes.append(("servicio " if len(self.para) == 1 else "servicios ") + ", ".join(f"#{i}" for i in self.para))
+        if self.bajo_minimo:
+            partes.append("bajo mínimo")
+        if self.a_mano > 0:
+            partes.append(f"a mano ({self.a_mano:g})")
+        return " · ".join(partes) or "—"
 
     def costo_estimado(self) -> float:
         return round(self.cantidad * self.precio_unitario_estimado, 2)
@@ -58,6 +78,9 @@ class ItemCompra:
             "proveedor": self.proveedor,
             "precio_unitario_estimado": self.precio_unitario_estimado,
             "comprado": self.comprado,
+            "para": self.para,
+            "bajo_minimo": self.bajo_minimo,
+            "a_mano": self.a_mano,
         }
 
     @classmethod
@@ -65,6 +88,7 @@ class ItemCompra:
         item = cls(
             datos["ingrediente"], datos["cantidad"], datos["unidad"],
             datos["proveedor"], datos["precio_unitario_estimado"],
+            datos.get("para"), datos.get("bajo_minimo", False), datos.get("a_mano", 0.0),
         )
         # "comprado" no es parámetro del constructor (siempre empieza en
         # False), así que lo restauramos aparte, igual que hicimos con el
@@ -238,6 +262,25 @@ class GestorCompras:
                     f"así que se compran sus ingredientes ({', '.join(producto.formula['ingredientes'])})."
                 )
 
+        # --- Paso 1c: alimentos y consumibles por debajo de su mínimo ---
+        # Aunque ningún servicio los pida, se reponen hasta el mínimo (igual
+        # que la limpieza y el mantenimiento). Las bases no (se preparan) ni
+        # los subproductos (salen de limpiar otros productos).
+        por_minimo: set[str] = set()
+        for producto in inventario.alimentos() + inventario.consumibles():
+            if (producto.stock_minimo <= 0 or producto.es_base() or producto.es_subproducto
+                    or producto.nombre in no_se_compran):
+                continue
+            if producto.stock_bueno < producto.stock_minimo - 1e-9:
+                ya = sum(c for _, c, _ in demandas.get(producto.nombre, []))
+                if ya < producto.stock_minimo - 1e-9:
+                    pedir(producto.nombre, hoy, producto.stock_minimo - ya, None)
+                por_minimo.add(producto.nombre)
+                avisos.append(
+                    f"'{producto.nombre}' está por debajo de su mínimo ({producto.stock_bueno:g} de "
+                    f"{producto.stock_minimo:g} {producto.unidad}): se repone hasta el mínimo."
+                )
+
         # --- Paso 2: productos limpios y subproductos ---
         for ingrediente in list(demandas):
             producto = inventario.buscar_producto(ingrediente)
@@ -279,6 +322,8 @@ class GestorCompras:
             no_se_compran.add(ingrediente)
             for fecha, cantidad, servicio_id in faltas:
                 pedir(origen.nombre, fecha, en_bruto(cantidad), servicio_id)
+            if ingrediente in por_minimo:
+                por_minimo.add(origen.nombre)
             avisos.append(
                 f"Faltan {faltante} {producto.unidad} de '{ingrediente}': salen de limpiar "
                 f"~{round(en_bruto(faltante), 2)} {origen.unidad} de '{origen.nombre}' (rendimiento {rendimiento:.0%})."
@@ -291,6 +336,7 @@ class GestorCompras:
             if producto.stock_minimo > 0 and producto.stock < producto.stock_minimo - 1e-9:
                 ya = sum(c for _, c, _ in demandas.get(producto.nombre, []))
                 pedir(producto.nombre, hoy, producto.stock_minimo - ya, None)
+                por_minimo.add(producto.nombre)
                 avisos.append(
                     f"'{producto.nombre}' (limpieza y mantenimiento) está por debajo de su mínimo "
                     f"({producto.stock:g} de {producto.stock_minimo:g} {producto.unidad}): se repone hasta el mínimo."
@@ -302,10 +348,12 @@ class GestorCompras:
             if ingrediente in no_se_compran:
                 continue
             producto = inventario.buscar_producto(ingrediente)
-            faltante = round(sum(c for _, c, _ in faltas_de(ingrediente)), 3)
+            faltas = faltas_de(ingrediente)
+            faltante = round(sum(c for _, c, _ in faltas), 3)
 
             if faltante <= 0:
                 continue  # hay suficiente stock, no hace falta comprar nada de esto
+            para = [sid for _, _, sid in faltas if sid is not None]
 
             unidad = producto.unidad if producto else ""
             if unidad == "unidades":
@@ -314,12 +362,16 @@ class GestorCompras:
 
             proveedor = producto.proveedor if producto else "Desconocido"
             precio = producto.precio_unitario if producto else 0
-            self.agregar_item(ItemCompra(ingrediente, faltante, unidad, proveedor, precio))
+            self.agregar_item(ItemCompra(ingrediente, faltante, unidad, proveedor, precio, para,
+                                         bajo_minimo=ingrediente in por_minimo))
             hacen_falta.add(ingrediente)
 
         # --- Paso 4: quitar lo pendiente que ya no hace falta ---
+        # (Lo añadido a mano se queda: solo deja de contar lo calculado.)
         for item in list(self.items_pendientes()):
-            if item.ingrediente not in hacen_falta:
+            if item.ingrediente not in hacen_falta and item.a_mano > 0:
+                item.cantidad, item.para, item.bajo_minimo = item.a_mano, [], False
+            elif item.ingrediente not in hacen_falta:
                 self.items.remove(item)
                 avisos.append(
                     f"'{item.ingrediente}' ya no hace falta comprarlo (hay stock suficiente para estos servicios): "
@@ -342,15 +394,57 @@ class GestorCompras:
         # queda como registro de esa compra ya hecha, aparte.
         for existente in self.items:
             if existente.ingrediente == item.ingrediente and not existente.comprado:
-                existente.cantidad = item.cantidad
+                existente.cantidad = round(item.cantidad + existente.a_mano, 6)  # lo añadido a mano se suma
                 existente.unidad = item.unidad
                 existente.proveedor = item.proveedor
                 existente.precio_unitario_estimado = item.precio_unitario_estimado
+                existente.para = item.para
+                existente.bajo_minimo = item.bajo_minimo
                 print(f"🛒 Actualizado en la lista de compra: {existente}")
                 return
 
         self.items.append(item)
         print(f"🛒 Añadido a la lista de compra: {item}")
+
+    def agregar_a_mano(
+        self, ingrediente: str, cantidad: float, unidad: str, proveedor: str, precio_unitario: float = 0.0,
+    ) -> ItemCompra:
+        """
+        Añade a la lista algo que no sale de ningún servicio ("papel de horno,
+        2 rollos"). Si ya está pendiente, se suma. Al volver a generar la
+        lista, lo añadido a mano se respeta (se suma a lo calculado).
+        """
+        ingrediente = (ingrediente or "").strip()
+        if not ingrediente:
+            raise ValueError("Indica qué hay que comprar.")
+        if cantidad <= 0:
+            raise ValueError("La cantidad debe ser mayor que 0.")
+        if precio_unitario < 0:
+            raise ValueError("El precio no puede ser negativo.")
+        existente = self.pendiente_de(ingrediente)
+        if existente is not None:
+            existente.cantidad = round(existente.cantidad + cantidad, 6)
+            existente.a_mano = round(existente.a_mano + cantidad, 6)
+            return existente
+        item = ItemCompra(ingrediente, cantidad, unidad, (proveedor or "").strip() or "Sin proveedor",
+                          precio_unitario, a_mano=cantidad)
+        self.items.append(item)
+        return item
+
+    def quitar_pendiente(self, ingrediente: str) -> None:
+        """Quita de la lista un artículo pendiente (si vuelve a hacer falta, saldrá al generar la lista)."""
+        self.items = [i for i in self.items if i.ingrediente != ingrediente or i.comprado]
+
+    def cambiar_cantidad(self, ingrediente: str, cantidad: float) -> None:
+        """Cambia la cantidad de un artículo pendiente (al volver a generar la lista, se recalcula)."""
+        item = self.pendiente_de(ingrediente)
+        if item is None:
+            raise ValueError(f"'{ingrediente}' no está pendiente en la lista.")
+        if cantidad <= 0:
+            raise ValueError("La cantidad debe ser mayor que 0 (para quitarlo, usa 'Quitar').")
+        if item.a_mano >= item.cantidad - 1e-9:  # solo era lo añadido a mano
+            item.a_mano = cantidad
+        item.cantidad = cantidad
 
     def quitar_producto(self, nombre: str) -> None:
         """Quita de la lista lo PENDIENTE de un producto (por ejemplo, al borrarlo). Lo ya comprado se queda."""

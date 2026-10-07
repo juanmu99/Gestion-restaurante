@@ -1658,6 +1658,47 @@ comprobar(r["facturado"] == 100 and r["margen"] == 68 and r["coste"] == 34 and r
           "Dinero del mes: facturado 100 €, margen 68 € (100 - 2 € de tomate - 30 € de gasolina), 1 servicio sin cobro")
 comprobar(r["compras"] == 20 and r["gastos"] == 30, "...y lo gastado en compras (20 €) y en gastos (30 €)")
 
+print("\n--- Mejora 2: lista de la compra (a mano, para qué, bajo mínimo) ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 0, "kg", 2, "Huerta"))
+silencio(inv.agregar_producto, Producto("Harina", "Panadería", 1, "kg", 1, "Molino", stock_minimo=5))
+silencio(inv.agregar_producto, Producto("Servilleta", "Menaje", 10, "unidades", 0.05, "Bazar", tipo="consumible",
+                                        stock_minimo=100))
+rec = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1})
+silencio(rec.agregar_receta, ensalada)
+silencio(rec.agregar_menu, Menu("Menú", [ensalada]))
+s1 = Servicio(HOY + timedelta(days=1), time(14, 0), 10, "Menú")
+s1.id = 961
+s2 = Servicio(HOY + timedelta(days=2), time(14, 0), 20, "Menú")
+s2.id = 962
+compras = GestorCompras()
+avisos = silencio(compras.generar_lista_desde_servicios, [s1, s2], rec, inv)
+tomate = compras.pendiente_de("Tomate")
+comprobar(tomate.cantidad == 3 and tomate.para == [961, 962] and "#961" in tomate.motivo(),
+          "Cada artículo dice para qué servicios es (tomate: #961 y #962)")
+harina, servilleta = compras.pendiente_de("Harina"), compras.pendiente_de("Servilleta")
+comprobar(harina is not None and harina.cantidad == 4 and harina.bajo_minimo and servilleta.cantidad == 90
+          and "bajo mínimo" in servilleta.motivo() and any("Harina" in a and "mínimo" in a for a in avisos),
+          "Se proponen también los alimentos y consumibles bajo mínimo (harina 4 kg, servilletas 90)")
+silencio(compras.agregar_a_mano, "Papel de horno", 2, "unidades", "Bazar")
+silencio(compras.agregar_a_mano, "Tomate", 1, "kg", "Huerta")
+comprobar(compras.pendiente_de("Papel de horno").cantidad == 2 and compras.pendiente_de("Tomate").cantidad == 4,
+          "Se puede añadir a mano algo nuevo o sumar a lo que ya está pendiente")
+silencio(compras.generar_lista_desde_servicios, [s1], rec, inv)
+comprobar(compras.pendiente_de("Tomate").cantidad == 2 and compras.pendiente_de("Papel de horno").cantidad == 2,
+          "Al volver a generar la lista, lo añadido a mano se respeta (tomate 1 de #961 + 1 a mano; papel de horno)")
+silencio(compras.generar_lista_desde_servicios, [], rec, inv)
+comprobar(compras.pendiente_de("Tomate").cantidad == 1 and compras.pendiente_de("Tomate").para == [],
+          "Si ya ningún servicio lo pide, se queda lo añadido a mano")
+compras.cambiar_cantidad("Harina", 10)
+compras.quitar_pendiente("Servilleta")
+comprobar(compras.pendiente_de("Harina").cantidad == 10 and compras.pendiente_de("Servilleta") is None,
+          "Se puede cambiar la cantidad de un artículo o quitarlo de la lista")
+copia = GestorCompras.from_dict(compras.to_dict())
+comprobar(copia.pendiente_de("Tomate").a_mano == 1 and copia.pendiente_de("Harina").bajo_minimo,
+          "Para qué es cada cosa y lo añadido a mano se guardan y se cargan")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

@@ -1559,6 +1559,8 @@ def menu_compras():
         print("2. Ver lista de compra por proveedor")
         print("3. Marcar producto como comprado")
         print("4. Ver coste total pendiente")
+        print("5. Añadir algo a mano (no sale de ningún servicio)")
+        print("6. Cambiar la cantidad o quitar algo de la lista")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1581,7 +1583,8 @@ def menu_compras():
                 unidad = item.unidad
                 producto = inventario.buscar_producto(nombre)
                 if producto is None:
-                    print(f"❌ '{nombre}' no existe en el inventario: créalo antes.")
+                    if pedir_si_no(f"'{nombre}' no está en el inventario: no entrará stock. ¿Marcarlo como comprado?"):
+                        gestor_compras.marcar_comprado(nombre, cantidad_comprada=cantidad_real)
                 else:
                     # Comprarlo implica que ahora está físicamente en el almacén
                     # -- entra en el inventario en el mismo paso, como un lote
@@ -1593,6 +1596,31 @@ def menu_compras():
                         print(f"📦 Stock repuesto: +{cantidad_real} {unidad} de {nombre} ({lote.etiqueta()})")
         elif opcion == "4":
             print(f"💰 Coste total pendiente: {gestor_compras.costo_total_pendiente()} €")
+        elif opcion == "5":
+            nombre = pedir_nombre("¿Qué hay que comprar?: ")
+            producto = inventario.buscar_producto(nombre)
+            unidad = producto.unidad if producto else pedir_opcion("Unidad", Producto.UNIDADES_VALIDAS)
+            cantidad = pedir_numero(f"Cantidad ({unidad}): ")
+            try:
+                gestor_compras.agregar_a_mano(nombre, cantidad, unidad, producto.proveedor if producto else "Sin proveedor",
+                                              producto.precio_unitario if producto else 0.0)
+                print("✅ Añadido a la lista (se respeta al volver a generarla).")
+            except ValueError as e:
+                print(f"❌ {e}")
+        elif opcion == "6":
+            for i in gestor_compras.items_pendientes():
+                print(f"   {i.ingrediente}: {i.cantidad:g} {i.unidad} ({i.motivo()})")
+            nombre = pedir_texto("Artículo: ")
+            if gestor_compras.pendiente_de(nombre) is None:
+                print(f"❌ '{nombre}' no está pendiente en la lista.")
+            else:
+                cantidad = pedir_numero("Nueva cantidad (0 = quitarlo de la lista): ")
+                if cantidad <= 0:
+                    gestor_compras.quitar_pendiente(nombre)
+                    print("✅ Quitado de la lista.")
+                else:
+                    gestor_compras.cambiar_cantidad(nombre, cantidad)
+                    print("✅ Cantidad cambiada.")
         elif opcion == "0":
             return
         else:

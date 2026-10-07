@@ -1489,6 +1489,26 @@ def prueba_mejora1(at: AppTest) -> None:
     serv.cancelar_servicio(olvidado.id)
 
 
+@prueba("Lista de la compra: a mano, cambiar y quitar (mejora 2)")
+def prueba_mejora2(at: AppTest) -> None:
+    comp = at.session_state["gestor_compras"]
+    ir_a(at, "Compras")
+    v = at.session_state["a_mano_version"]
+    at.selectbox(key=f"a_mano_producto_{v}").select("✏️ Otra cosa (no está en el inventario)").run()
+    at.text_input(key=f"a_mano_nombre_{v}").input("Papel de horno")
+    at.selectbox(key=f"a_mano_unidad_{v}").select("unidades")
+    at.number_input(key=f"a_mano_cantidad_{v}").set_value(2.0).run()
+    at.button(key=f"a_mano_boton_{v}").click().run()
+    item = comp.pendiente_de("Papel de horno")
+    comprobar(sin_excepciones(at, "añadir a mano") and item is not None and item.cantidad == 2 and item.a_mano == 2,
+              "Se puede añadir a mano a la lista algo que no está en el inventario")
+    comprobar(any("Para qué" in df.value.columns for df in at.dataframe),
+              "La lista dice para qué es cada artículo")
+    at.selectbox(key="lista_cambiar_select").select("Papel de horno").run()
+    at.button(key="lista_quitar_Papel de horno").click().run()
+    comprobar(comp.pendiente_de("Papel de horno") is None, "Se puede quitar un artículo de la lista")
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1526,6 +1546,7 @@ def main() -> int:
     prueba_fase3_bloque3(at)
     prueba_fase3_bloque6(at)
     prueba_mejora1(at)
+    prueba_mejora2(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")
