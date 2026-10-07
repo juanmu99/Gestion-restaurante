@@ -1037,7 +1037,35 @@ class Inventario:
             raise ValueError("El IVA no puede ser negativo.")
         self._iva_cobro = float(valor)
 
+    def categoria_normalizada(self, categoria: str, excepto: Optional[str] = None) -> str:
+        """
+        La categoría sin espacios de más y, si ya existe otra igual con otras
+        mayúsculas ("verduras " y "Verduras"), escrita como la que ya existe:
+        así no se crean categorías repetidas. `excepto`: un producto que no
+        cuenta (el que se está editando).
+        """
+        limpia = " ".join((categoria or "").split())
+        existente = next((p.categoria for p in self.productos.values()
+                          if p.nombre != excepto and p.categoria.lower() == limpia.lower()), None)
+        return existente or limpia
+
+    def unificar_categorias(self) -> None:
+        """Junta las categorías repetidas por mayúsculas o espacios (gana la forma más usada)."""
+        grupos: dict[str, dict[str, int]] = {}
+        for p in self.productos.values():
+            limpia = " ".join(p.categoria.split())
+            grupos.setdefault(limpia.lower(), {})
+            grupos[limpia.lower()][limpia] = grupos[limpia.lower()].get(limpia, 0) + 1
+        for p in self.productos.values():
+            formas = grupos[" ".join(p.categoria.split()).lower()]
+            p.categoria = max(formas, key=lambda f: (formas[f], f))
+
+    def categorias(self) -> list[str]:
+        """Las categorías que ya existen, ordenadas."""
+        return sorted({p.categoria for p in self.productos.values()}, key=str.lower)
+
     def agregar_producto(self, producto: Producto) -> None:
+        producto.categoria = self.categoria_normalizada(producto.categoria)
         if producto.nombre in self.productos:
             print(f"⚠️  Ya existe '{producto.nombre}'. Registra una entrada para añadir un lote nuevo.")
             return
@@ -1977,7 +2005,8 @@ class Inventario:
             print(f"❌ No existe el producto '{nombre_actual}'.")
             return False
 
-        categoria_final = categoria if categoria is not None else producto.categoria
+        categoria_final = self.categoria_normalizada(categoria if categoria is not None else producto.categoria,
+                                                     excepto=nombre_actual)
         proveedor_final = proveedor if proveedor is not None else producto.proveedor
         # Misma regla que en Producto.__init__: no confiamos en que quien
         # llama a este método ya haya validado los datos por su cuenta.
@@ -2279,6 +2308,7 @@ class Inventario:
         for datos_limpieza in datos.get("limpiezas", []):
             inventario.limpiezas.append(Limpieza.from_dict(datos_limpieza))
         inventario.elaboraciones = RegistroElaboraciones.from_dict(datos.get("elaboraciones", {}))
+        inventario.unificar_categorias()  # datos guardados con categorías repetidas ("Verduras" y "verduras ")
         if "historial_precios" in datos:
             inventario.historial_precios = [PrecioCompra.from_dict(d) for d in datos["historial_precios"]]
         else:

@@ -1588,6 +1588,42 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar("0.00####" in celda.number_format,
               "En el Excel, un precio por gramo (0,0125 €/g) se ve con sus decimales, no como 0,00 €")
 
+print("\n--- Fase 3, bloque 6: categorías, tipo de producto y consola ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 1, "kg", 2, "Huerta"))
+silencio(inv.agregar_producto, Producto("Pepino", "  verduras ", 1, "kg", 1, "Huerta"))
+comprobar(inv.buscar_producto("Pepino").categoria == "Verduras" and inv.categorias() == ["Verduras"],
+          "Una categoría igual con otras mayúsculas o espacios se escribe como la que ya existe")
+silencio(inv.agregar_producto, Producto("Cebolla", "Hortalizas", 1, "kg", 1, "Huerta"))
+silencio(inv.editar_producto, "Cebolla", categoria="VERDURAS")
+comprobar(inv.buscar_producto("Cebolla").categoria == "Verduras", "...también al editar un producto")
+viejo = inv.to_dict()
+viejo["productos"][1]["categoria"] = "verduras  "
+comprobar(Inventario.from_dict(viejo).categorias() == ["Verduras"], "Los datos guardados con categorías repetidas se unifican al abrirlos")
+
+rec = Recetario()
+silencio(rec.agregar_receta, Receta("Ensalada", "Entrantes", {"Tomate": 0.1}))
+silencio(rec.agregar_menu, Menu("Menú", [rec.recetas["Ensalada"]], {"Servilleta": 1}))
+comprobar("Ensalada" in (rec.problema_cambio_tipo("Tomate", "consumible") or ""),
+          "No se puede pasar a consumible un ingrediente de receta (y dice cuál)")
+comprobar("Menú" in (rec.problema_cambio_tipo("Servilleta", "alimento") or ""),
+          "No se puede pasar a alimento un consumible de menú (y dice cuál)")
+comprobar(rec.problema_cambio_tipo("Pepino", "consumible") is None, "Un producto que no se usa sí puede cambiar de tipo")
+
+sys.path.insert(0, str(RAIZ))
+import main as consola  # noqa: E402
+for texto in ("nan", "inf", "-inf", "NaN"):
+    try:
+        consola.a_numero(texto)
+        comprobar(False, f"La consola rechaza '{texto}' como número")
+    except ValueError:
+        pass
+comprobar(consola.a_numero("2,5") == 2.5, "La consola rechaza 'nan' e 'inf' como número, y acepta la coma decimal (2,5)")
+_entradas = iter(["", "  ", "Tarta"])
+consola.input = lambda mensaje="": next(_entradas)
+comprobar(silencio(consola.pedir_nombre, "Nombre: ") == "Tarta", "La consola no acepta un nombre vacío (vuelve a preguntar)")
+del consola.input
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

@@ -454,6 +454,22 @@ class Recetario:
         usos += [f"el menú '{m.nombre}'" for m in self.menus.values() if nombre in m.consumibles_por_comensal]
         return usos
 
+    def problema_cambio_tipo(self, nombre: str, tipo_nuevo: str) -> Optional[str]:
+        """
+        Si cambiar el tipo de un producto rompería recetas o menús, el motivo
+        (None si se puede): un ingrediente de receta tiene que ser un alimento,
+        y un consumible de menú tiene que seguir siendo consumible.
+        """
+        recetas = [r.nombre for r in self.recetas.values() if nombre in r.ingredientes_por_comensal]
+        if tipo_nuevo != "alimento" and recetas:
+            return (f"'{nombre}' es ingrediente de estas recetas: {', '.join(recetas)}. Tiene que seguir siendo un "
+                    "alimento (quítalo antes de ellas si de verdad no lo es).")
+        menus = [m.nombre for m in self.menus.values() if nombre in m.consumibles_por_comensal]
+        if tipo_nuevo != "consumible" and menus:
+            return (f"'{nombre}' es consumible de estos menús: {', '.join(menus)}. Tiene que seguir siendo un "
+                    "consumible (quítalo antes de ellos si de verdad no lo es).")
+        return None
+
     def quitar_material(self, nombre: str) -> list[str]:
         """Quita un material de todos los menús que lo llevan. Devuelve esos menús."""
         menus = []

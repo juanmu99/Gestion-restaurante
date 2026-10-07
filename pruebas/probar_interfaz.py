@@ -1445,6 +1445,35 @@ def prueba_fase3_bloque3(at: AppTest) -> None:
               "'Cerrar el programa' guarda y avisa (aquí no se apaga: no lo ha abierto el lanzador)")
 
 
+@prueba("Categorías, tipo de producto y unidades al limpiar (Fase 3, bloque 6)")
+def prueba_fase3_bloque6(at: AppTest) -> None:
+    from inventario import Producto
+
+    inv = at.session_state["inventario"]
+    inv.agregar_producto(Producto("Lubina", "  pescado ", 2, "kg", 10, "Lonja", tiene_merma=True))
+    inv.agregar_producto(Producto("Dorada", "Pescado", 1, "kg", 9, "Lonja"))
+    comprobar(inv.buscar_producto("Dorada").categoria == inv.buscar_producto("Lubina").categoria,
+              "Una categoría repetida con otras mayúsculas se unifica")
+
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🍅 Alimentos").run()
+    at.selectbox(key="editar_select").select("Harina de trigo").run()
+    por_clave(at.radio, "edit_tipo_Harina de trigo_").set_value("Consumible").run()
+    comprobar(any("No se puede cambiar el tipo" in t and "Pan casero" in t for t in textos(at.error)),
+              "Cambiar a consumible un ingrediente de receta: aviso que dice en qué receta está")
+    at.button(key="edit_boton_Harina de trigo").click().run()
+    comprobar(inv.buscar_producto("Harina de trigo").tipo == "alimento", "...y no se guarda el cambio de tipo")
+
+    at.selectbox(key="limpiar_origen").select("Lubina").run()
+    v = at.session_state["limpiar_version"]
+    k = lambda campo: f"limpiar_{campo}_Lubina_{v}_1"
+    at.number_input(key=k("cantidad")).set_value(2.0)
+    at.number_input(key=k("peso_limpio")).set_value(1.2).run()
+    at.radio(key=k("unidad")).set_value("g").run()
+    comprobar(sin_excepciones(at, "cambiar kg a g") and abs(at.number_input(key=k("peso_limpio")).value - 1200) < 1e-6,
+              "Al cambiar de kg a g, el peso ya escrito se convierte (1,2 kg -> 1200 g)")
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1480,6 +1509,7 @@ def main() -> int:
     prueba_fase3_bloque1(at)
     prueba_fase3_bloque2(at)
     prueba_fase3_bloque3(at)
+    prueba_fase3_bloque6(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

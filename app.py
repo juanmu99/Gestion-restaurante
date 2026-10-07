@@ -916,6 +916,9 @@ def _pestana_anadir(inv: Inventario, tipo: str = "alimento") -> None:
 
     nombre = st.text_input("Nombre", key=f"add_nombre_{v}")
     categoria = st.text_input("Categoría", key=f"add_categoria_{v}")
+    if inv.categorias():
+        st.caption("Categorías que ya tienes: " + ", ".join(inv.categorias())
+                   + ". Si escribes una igual con otras mayúsculas, se usa la que ya existe.")
     c1, c2 = st.columns(2)
     stock = c1.number_input("Stock inicial (será su primer lote)", min_value=0.0, step=0.1, key=f"add_stock_{v}")
     unidad = c2.selectbox("Unidad", Producto.UNIDADES_VALIDAS, key=f"add_unidad_{v}")
@@ -1009,6 +1012,13 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
         help="Si lo cambias, el producto pasa a otra lista del inventario.",
     )]
     es_consumible = nuevo_tipo == "consumible"
+    if nuevo_tipo != producto.tipo:
+        problema_tipo = st.session_state.recetario.problema_cambio_tipo(producto.nombre, nuevo_tipo)
+        if problema_tipo:
+            st.error(f"No se puede cambiar el tipo: {problema_tipo}")
+        elif es_consumible and any(l.fecha_caducidad for l in producto.lotes):
+            st.warning("Los consumibles no tienen caducidad: al guardar se quitarán las fechas de caducidad de sus "
+                       "lotes.")
 
     tiene_merma = producto.tiene_merma
     peso_unitario = None
@@ -1107,6 +1117,9 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
                          "📈 Historial de precios.")
                 return
         nombre_original = producto.nombre
+        if nuevo_tipo != producto.tipo and st.session_state.recetario.problema_cambio_tipo(producto.nombre, nuevo_tipo):
+            st.error("No se ha guardado nada: el tipo no se puede cambiar (mira el aviso de arriba).")
+            return
         try:
             exito = inv.editar_producto(
                 nombre_sel,
@@ -1443,6 +1456,28 @@ def _pestana_lotes(inv: Inventario, nombres: list[str]) -> None:
             st.rerun()
 
 
+def _tabla_derivados(nombres: list, pesos: list) -> pd.DataFrame:
+    return pd.DataFrame({"Derivado": pd.Series(nombres, dtype="string"), "Peso": pd.Series(pesos, dtype="float")})
+
+
+def _convertir_pesos_limpieza(k) -> None:
+    """Al cambiar la unidad (kg <-> g) en Limpiar producto, convierte el peso limpio y los de los derivados."""
+    ss = st.session_state
+    nueva, anterior = ss[k("unidad")], ss.get(k("unidad_anterior"), UNIDADES_PESO[0])
+    if nueva == anterior:
+        return
+    factor = convertir(1, anterior, nueva)
+    if ss.get(k("peso_limpio")) is not None:
+        ss[k("peso_limpio")] = round(ss[k("peso_limpio")] * factor, 6)
+    tabla = ss.get(k("derivados_ultima"), ss.get(k("derivados_base")))
+    if tabla is not None:
+        tabla = tabla.copy()
+        tabla["Peso"] = (tabla["Peso"] * factor).round(6)
+        ss[k("derivados_base")] = tabla
+        ss[k("derivados_version")] = ss.get(k("derivados_version"), 0) + 1
+    ss[k("unidad_anterior")] = nueva
+
+
 def _pestana_limpiar(inv: Inventario) -> None:
     con_merma = inv.productos_con_merma()
     if not con_merma:
@@ -1479,10 +1514,14 @@ def _pestana_limpiar(inv: Inventario) -> None:
     rendimiento = inv.rendimiento_medio(origen_nombre)
     if rendimiento:
         st.caption(
-            f"Rendimiento medio hasta ahora: {rendimiento:.0%} -> se esperan ~{_eur(peso_bruto_kg * rendimiento)} kg limpios."
+            f"Rendimiento medio hasta ahora: {rendimiento:.0%} -> se esperan ~{_num(peso_bruto_kg * rendimiento)} kg limpios."
         )
 
-    unidad_peso = st.radio("Pesos del resultado en", UNIDADES_PESO, horizontal=True, key=k("unidad"))
+    # Al cambiar kg <-> g, lo ya escrito se CONVIERTE (8 kg pasan a 8000 g),
+    # en vez de quedarse el mismo número con otra unidad.
+    unidad_peso = st.radio("Pesos del resultado en", UNIDADES_PESO, horizontal=True, key=k("unidad"),
+                           on_change=_convertir_pesos_limpieza, args=(k,))
+    st.session_state[k("unidad_anterior")] = unidad_peso
     c3, c4 = st.columns(2)
     # El producto limpio se ELIGE entre los que ya salen de este bruto, para
     # no crear duplicados por una errata ("Carne cerdo limpia"). Solo si es
@@ -1508,29 +1547,33 @@ def _pestana_limpiar(inv: Inventario) -> None:
     st.markdown("**Derivados que se aprovechan**")
     st.caption("Una fila por cada parte que se reaprovecha, con su peso. Lo que no pongas aquí se registra como merma.")
     # La tabla empieza vacía. Los derivados de la última vez solo se añaden
-    # si se pide con el botón (y entonces con peso 0, para escribirlo).
+    # si se pide con el botón (y entonces con peso 0, para escribirlo), SIN
+    # borrar las filas que ya estuvieran escritas.
+    ss = st.session_state
+    if k("derivados_base") not in ss:
+        ss[k("derivados_base")] = _tabla_derivados([], [])
+        ss[k("derivados_version")] = 0
     habituales = inv.derivados_habituales(origen_nombre)
-    clave_habituales = k("usar_habituales")
-    usar_habituales = st.session_state.get(clave_habituales, False)
-    if habituales and not usar_habituales:
+    escritos = set(ss.get(k("derivados_ultima"), ss[k("derivados_base")])["Derivado"].dropna().astype(str).str.strip())
+    faltan = [h for h in habituales if h not in escritos]
+    if faltan:
         c5, c6 = st.columns([3, 1])
         c5.caption("La última vez se aprovechó: " + ", ".join(habituales))
         if c6.button("Añadir los de la última vez", key=k("boton_habituales")):
-            st.session_state[clave_habituales] = True
+            actual = ss.get(k("derivados_ultima"), ss[k("derivados_base")])
+            ss[k("derivados_base")] = pd.concat([actual, _tabla_derivados(faltan, [0.0] * len(faltan))],
+                                                ignore_index=True)
+            ss[k("derivados_version")] += 1
             st.rerun()
-    filas_iniciales = habituales if usar_habituales else []
-    tabla_inicial = pd.DataFrame({
-        "Derivado": pd.Series(filas_iniciales, dtype="string"),
-        "Peso": pd.Series([0.0] * len(filas_iniciales), dtype="float"),
-    })
     tabla = st.data_editor(
-        tabla_inicial, num_rows="dynamic", width="stretch", hide_index=True,
-        key=k(f"derivados_{int(usar_habituales)}"),
+        ss[k("derivados_base")], num_rows="dynamic", width="stretch", hide_index=True,
+        key=k(f"derivados_{ss[k('derivados_version')]}"),
         column_config={
             "Derivado": st.column_config.TextColumn("Derivado"),
             "Peso": st.column_config.NumberColumn(f"Peso ({unidad_peso})", min_value=0.0, step=0.01),
         },
     )
+    ss[k("derivados_ultima")] = tabla  # lo que hay escrito ahora (para convertir o añadir filas sin perderlas)
     derivados: dict[str, float] = {}
     for _, fila in tabla.iterrows():
         nombre = fila["Derivado"]
@@ -1563,7 +1606,7 @@ def _pestana_limpiar(inv: Inventario) -> None:
             avisar(
                 "success",
                 f"Limpieza registrada: {_num(limpieza.peso_limpio_kg)} kg de '{limpieza.producto_limpio}' "
-                f"(rendimiento {_pct(limpieza.rendimiento)}, merma {limpieza.merma_kg} kg).",
+                f"(rendimiento {_pct(limpieza.rendimiento)}, merma {_num(limpieza.merma_kg)} kg).",
             )
             st.session_state.limpiar_version += 1
             st.rerun()

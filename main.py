@@ -14,6 +14,7 @@ sesión. Cargar datos DESDE un Excel de vuelta a la app es un paso
 futuro que aún no hemos construido (sería un buen Módulo 6).
 """
 
+import math
 import sys
 from pathlib import Path
 from datetime import date, time, timedelta
@@ -165,11 +166,23 @@ def pedir_cantidad_ingrediente(producto) -> float:
     return cantidad
 
 
+def a_numero(texto: str) -> float:
+    """
+    Convierte lo escrito en un número. Acepta la coma decimal ("2,5") y
+    rechaza (ValueError) "nan" e "inf": Python los acepta como números
+    especiales, pero estropearían todos los cálculos.
+    """
+    valor = float(texto.strip().replace(",", "."))
+    if not math.isfinite(valor):
+        raise ValueError("no es un número normal")
+    return valor
+
+
 def pedir_numero(mensaje: str) -> float:
     while True:
         valor = input(mensaje).strip()
         try:
-            return float(valor)
+            return a_numero(valor)
         except ValueError:
             print("⚠️  Introduce un número válido.")
 
@@ -185,7 +198,7 @@ def pedir_numero_opcional(mensaje: str) -> Optional[float]:
         if valor == "":
             return None
         try:
-            return float(valor)
+            return a_numero(valor)
         except ValueError:
             print("⚠️  Introduce un número válido, o déjalo vacío para no modificarlo.")
 
@@ -205,7 +218,20 @@ def pedir_texto_no_numerico_opcional(mensaje: str) -> Optional[str]:
 
 
 def pedir_entero(mensaje: str) -> int:
-    return int(pedir_numero(mensaje))
+    while True:
+        valor = pedir_numero(mensaje)
+        if valor.is_integer():
+            return int(valor)
+        print("⚠️  Escribe un número entero (sin decimales).")
+
+
+def pedir_nombre(mensaje: str) -> str:
+    """Un nombre (de producto, receta, menú...): no puede quedar vacío."""
+    while True:
+        valor = pedir_texto(mensaje)
+        if valor:
+            return valor
+        print("⚠️  El nombre no puede quedar vacío.")
 
 
 def pedir_fecha(mensaje: str) -> date:
@@ -342,7 +368,7 @@ def _pedir_precio_escrito(unidad: str, cantidad: float, referencia: Optional[flo
             return None
         es_total = texto.lower().endswith("t")
         try:
-            valor = float(texto.lower().rstrip("t").replace(",", ".").strip())
+            valor = a_numero(texto.lower().rstrip("t"))
         except ValueError:
             print("⚠️  Escribe un número (o un número terminado en 't' si es el total).")
             continue
@@ -398,7 +424,7 @@ def menu_inventario():
             listar_inventario()
         elif opcion == "2":
             tipo = pedir_opcion("¿Qué es?", Producto.TIPOS)
-            nombre = pedir_texto("Nombre: ")
+            nombre = pedir_nombre("Nombre: ")
             categoria = pedir_texto_no_numerico("Categoría: ")
             stock = pedir_numero("Stock inicial (será su primer lote): ")
             unidad = pedir_opcion("Unidad", Producto.UNIDADES_VALIDAS)
@@ -493,6 +519,14 @@ def menu_inventario():
                 if tipo is not None and tipo not in Producto.TIPOS:
                     print("⚠️  Tipo no válido, se mantiene el actual.")
                     tipo = None
+                if tipo is not None and tipo != producto.tipo:
+                    problema = recetario.problema_cambio_tipo(producto.nombre, tipo)
+                    if problema:
+                        print(f"⚠️  No se puede cambiar el tipo: {problema} Se mantiene el actual.")
+                        tipo = None
+                    elif tipo == "consumible" and any(l.fecha_caducidad for l in producto.lotes) and not pedir_si_no(
+                            "Los consumibles no tienen caducidad: se quitarán las fechas de sus lotes. ¿Seguir?"):
+                        tipo = None
                 es_consumible = (tipo or producto.tipo) == "consumible"
                 categoria = pedir_texto_no_numerico_opcional(f"Nueva categoría [{producto.categoria}]: ")
                 proveedor = pedir_texto_no_numerico_opcional(f"Nuevo proveedor habitual [{producto.proveedor}]: ")
@@ -1041,9 +1075,10 @@ def pedir_producto_nuevo(nombre: str):
             peso_unitario = pedir_peso_kg("  Peso en bruto de cada unidad")
     stock_minimo = pedir_numero("  Stock mínimo: ")
     proveedor = pedir_texto_no_numerico("  Proveedor habitual: ")
+    iva = pedir_iva()
     try:
         producto = Producto(nombre, categoria, 0, unidad, 0, proveedor, stock_minimo,
-                            tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo)
+                            tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo, iva=iva)
     except ValueError as e:
         print(f"❌ {e}")
         return None
@@ -1055,7 +1090,7 @@ def pedir_costes_adicionales(servicio: Servicio) -> None:
     """Costes no previstos del servicio (taxi, hielo...): se guardan como gastos de ese servicio."""
     while pedir_si_no("¿Hubo algún coste adicional no previsto?"):
         if pedir_si_no("  ¿Es la compra de un producto del inventario? (lo que sobre se queda en el inventario)"):
-            nombre = pedir_texto("  Producto: ")
+            nombre = pedir_nombre("  Producto: ")
             producto = inventario.buscar_producto(nombre)
             if producto is None:
                 if not pedir_si_no(f"  '{nombre}' no está en el inventario. ¿Darlo de alta ahora?"):
@@ -1317,7 +1352,7 @@ def accion_bases_recetario() -> None:
     accion = pedir_opcion("¿Qué quieres hacer?", ("crear", "editar", "nada"))
     try:
         if accion == "crear":
-            nombre = pedir_texto("Nombre (ej: Sofrito): ")
+            nombre = pedir_nombre("Nombre (ej: Sofrito): ")
             categoria = pedir_texto("Categoría (ej: Elaboraciones): ") or "Elaboraciones"
             unidad = pedir_opcion("Unidad", ("kg", "g", "litros", "ml"))
             cantidad = pedir_numero(f"¿Cuánto da la fórmula? (en {unidad}): ")
@@ -1422,7 +1457,7 @@ def menu_recetario():
             if recetario.menus and pedir_si_no("¿Ver el detalle de algún menú?"):
                 mostrar_detalle_menu(pedir_opcion("Menú", tuple(recetario.menus)))
         elif opcion == "3":
-            nombre = pedir_texto("Nombre de la receta: ")
+            nombre = pedir_nombre("Nombre de la receta: ")
             categoria = pedir_texto("Categoría: ")
             ingredientes = {}
             if not inventario.alimentos():
@@ -1454,7 +1489,7 @@ def menu_recetario():
                 print("⚠️  Primero crea al menos una receta.")
             else:
                 print(f"Recetas disponibles: {', '.join(recetario.recetas.keys())}")
-                nombre_menu = pedir_texto("Nombre del menú: ")
+                nombre_menu = pedir_nombre("Nombre del menú: ")
                 nombres = pedir_texto("Recetas a incluir (separadas por comas): ")
                 recetas_menu = []
                 for nombre_receta in (n.strip() for n in nombres.split(",")):
@@ -1952,8 +1987,17 @@ def menu_gastos():
                 print(f"❌ No existe el servicio #{id_servicio}")
             else:
                 print(f"Precio actual: {texto_euros(servicio.precio_cobrado)}")
-                servicio.precio_cobrado = pedir_precio_cobro(servicio.comensales)
-                print(f"✅ Precio de cobro: {texto_euros(servicio.precio_cobrado)}")
+                # Enter = no cambiar (antes, Enter BORRABA el precio sin querer). 0 = quitarlo.
+                valor = pedir_numero_opcional("Precio de cobro en €, sin IVA (Enter = no cambiar, 0 = quitarlo): ")
+                if valor is None:
+                    print("Sin cambios.")
+                elif valor <= 0:
+                    servicio.precio_cobrado = None
+                    print("✅ Precio de cobro quitado.")
+                else:
+                    forma = pedir_opcion("¿Ese precio es el total o por comensal?", ("total", "comensal"))
+                    servicio.precio_cobrado = round(valor * servicio.comensales, 2) if forma == "comensal" else valor
+                    print(f"✅ Precio de cobro: {texto_euros(servicio.precio_cobrado)}")
         elif opcion == "0":
             return
         else:
@@ -1999,7 +2043,7 @@ def menu_material():
             if opcion == "1":
                 listar_material()
             elif opcion == "2":
-                nombre = pedir_texto("Nombre: ")
+                nombre = pedir_nombre("Nombre: ")
                 categoria = pedir_texto_no_numerico("Categoría (ej: Vajilla): ")
                 unidades = pedir_entero("Unidades que tienes: ")
                 precio = pedir_numero("Precio de reposición (€ por unidad): ")
