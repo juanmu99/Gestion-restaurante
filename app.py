@@ -742,7 +742,7 @@ def pagina_dashboard() -> None:
         st.divider()
         st.subheader("📉 Se agotarán pronto (según ritmo de consumo)")
         for nombre, dias in proximos_agotarse:
-            st.write(f"**{nombre}**: ~{dias} día(s) al ritmo actual")
+            st.write(f"**{nombre}**: ~{_num(dias)} día(s) al ritmo actual")
 
     avisos_precio = inv.avisos_precios()
     st.divider()
@@ -783,8 +783,8 @@ def _filas_inventario(productos: list, tipo: str = "alimento") -> list[dict]:
     filas = []
     for p in productos:
         fila = {
-            "Nombre": p.nombre, "Categoría": p.categoria, "Stock": p.stock, "Unidad": p.unidad,
-            "Mínimo": p.stock_minimo, "Precio medio (€, con IVA)": _precio(p.precio_unitario),
+            "Nombre": p.nombre, "Categoría": p.categoria, "Stock": _num(p.stock), "Unidad": p.unidad,
+            "Mínimo": _num(p.stock_minimo), "Precio medio (€, con IVA)": _precio(p.precio_unitario),
             "IVA": nombre_iva(p.iva).split(" (")[0], "Proveedor habitual": p.proveedor,
             "Lotes": len(p.lotes),
         }
@@ -1582,7 +1582,7 @@ def _pestana_limpiezas(inv: Inventario) -> None:
         filas_resumen.append({
             "Producto": nombre,
             "Limpiezas": len(limpiezas),
-            "Bruto total (kg)": round(bruto, 3),
+            "Bruto total (kg)": _num(bruto),
             "Rendimiento medio": f"{_pct(inv.rendimiento_medio(nombre))}",
             "Derivados aprovechados": f"{_pct(sum(sum(l.derivados_kg.values()) for l in limpiezas) / bruto)}",
             "Merma media": f"{_pct(sum(l.merma_kg for l in limpiezas) / bruto)}",
@@ -1595,13 +1595,13 @@ def _pestana_limpiezas(inv: Inventario) -> None:
         "Producto": l.producto_origen,
         "Lote": str(l.lote_origen or "—"),
         "Cantidad": f"{_num(l.cantidad_origen)} {l.unidad_origen}",
-        "Bruto (kg)": round(l.peso_bruto_kg, 3),
+        "Bruto (kg)": _num(l.peso_bruto_kg),
         "Producto limpio": l.producto_limpio,
-        "Limpio (kg)": round(l.peso_limpio_kg, 3),
+        "Limpio (kg)": _num(l.peso_limpio_kg),
         "Derivados": ", ".join(f"{n} ({_num(kg)} kg)" for n, kg in l.derivados_kg.items()) or "—",
-        "Merma (kg)": l.merma_kg,
+        "Merma (kg)": _num(l.merma_kg),
         "Rendimiento": f"{_pct(l.rendimiento)}",
-        "Coste (€)": l.coste,
+        "Coste (€)": _eur(l.coste),
     } for l in reversed(inv.limpiezas)], width="stretch", hide_index=True)
 
 
@@ -3416,7 +3416,7 @@ def pagina_compras() -> None:
         for proveedor, items in agrupado.items():
             st.subheader(f"📋 {proveedor}")
             filas = [
-                {"Ingrediente": i.ingrediente, "Cantidad": i.cantidad, "Unidad": i.unidad, "Coste (€)": i.costo_estimado()}
+                {"Ingrediente": i.ingrediente, "Cantidad": _num(i.cantidad), "Unidad": i.unidad, "Coste (€)": _eur(i.costo_estimado())}
                 for i in items
             ]
             st.dataframe(filas, width="stretch", hide_index=True)
@@ -3466,7 +3466,7 @@ def pagina_compras() -> None:
                         avisar(
                             "success",
                             f"'{nombre_marcar}' marcado como comprado y repuesto en inventario "
-                            f"(+{cantidad_real} {item_marcar.unidad}, {lote.etiqueta()}).",
+                            f"(+{_num(cantidad_real)} {item_marcar.unidad}, {lote.etiqueta()}).",
                         )
                         vaciar_campos("compra_")
                         vaciar_campos("cantidad_real_")
@@ -3829,14 +3829,14 @@ def pagina_metricas() -> None:
             st.dataframe([{
                 "Producto": nombre,
                 "Limpiezas": fila["limpiezas"],
-                "Bruto (kg)": fila["bruto_kg"],
-                "Limpio (kg)": fila["limpio_kg"],
-                "Derivados (kg)": fila["derivados_kg"],
-                "Merma (kg)": fila["merma_kg"],
+                "Bruto (kg)": _num(fila["bruto_kg"]),
+                "Limpio (kg)": _num(fila["limpio_kg"]),
+                "Derivados (kg)": _num(fila["derivados_kg"]),
+                "Merma (kg)": _num(fila["merma_kg"]),
                 "Rendimiento": f"{_pct(fila['rendimiento'])}",
             } for nombre, fila in resumen.items()], width="stretch", hide_index=True)
             df_merma = pd.DataFrame(
-                {nombre: [fila["limpio_kg"], fila["derivados_kg"], fila["merma_kg"]] for nombre, fila in resumen.items()},
+                {nombre: [_num(fila["limpio_kg"]), _num(fila["derivados_kg"]), fila["merma_kg"]] for nombre, fila in resumen.items()},
                 index=["Limpio", "Derivados", "Merma"],
             ).T
             st.bar_chart(df_merma)
@@ -3847,7 +3847,7 @@ def pagina_metricas() -> None:
         else:
             nombre = st.selectbox("Producto", nombres_tipo, key="metricas_consumo_producto")
             cantidad = metricas.cantidad_consumida(nombre, desde, hasta)
-            st.metric(f"Consumido de {nombre}", f"{cantidad} {inv.buscar_producto(nombre).unidad}")
+            st.metric(f"Consumido de {nombre}", f"{_num(cantidad)} {inv.buscar_producto(nombre).unidad}")
 
     with tab_desperdicio:
         if nombres_tipo:
