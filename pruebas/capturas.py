@@ -49,6 +49,17 @@ def main() -> int:
         navegador = p.chromium.launch()
         # Ventana alta para que quepa casi toda la página en la captura
         page = navegador.new_page(viewport={"width": 1440, "height": 2000})
+        # El servidor se arranca justo antes en segundo plano: hay que esperar
+        # a que responda (si no, a veces falla con ERR_CONNECTION_REFUSED).
+        import time
+        import urllib.request
+        for _ in range(120):
+            try:
+                with urllib.request.urlopen(f"{URL}/_stcore/health", timeout=2) as r:
+                    if r.read().decode().strip() == "ok":
+                        break
+            except OSError:
+                time.sleep(1)
         page.goto(URL)
         page.wait_for_selector('[data-testid="stSidebar"]', timeout=90000)
         esperar(page)
