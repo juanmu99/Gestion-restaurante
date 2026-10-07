@@ -94,6 +94,11 @@ def por_etiqueta(lista, etiqueta: str):
     raise AssertionError(f"No encuentro el campo '{etiqueta}'")
 
 
+def siguiente(at: AppTest, servicio, paso: int) -> None:
+    """En 'Completar servicio' (por pasos), pulsa 'Siguiente' del paso indicado."""
+    at.button(key=f"completar_siguiente_{paso}_{servicio.id}").click().run()
+
+
 def ir_a(at: AppTest, pagina: str) -> AppTest:
     at.sidebar.radio[0].set_value(pagina).run()
     return at
@@ -781,8 +786,13 @@ def prueba_completar(at: AppTest) -> None:
     pendiente = next(s for s in serv.servicios if s.estado == "pendiente")
     caja = at.selectbox(key="completar_select")
     caja.select(opcion(caja, f"#{pendiente.id} ·")).run()
+    siguiente(at, pendiente, 1)
+    siguiente(at, pendiente, 2)
     at.text_area(key=f"valoracion_{pendiente.id}").input("Todo bien; sobró pan")
-    boton(at.button, "Completar servicio").click().run()
+    siguiente(at, pendiente, 3)
+    comprobar(pendiente.estado != "completado" and any("Coste del servicio" in m.label for m in at.metric),
+              "El último paso enseña el resumen (con el coste) y todavía no ha tocado nada")
+    at.button(key=f"completar_boton_{pendiente.id}").click().run()
     servilletas = at.session_state["inventario"].buscar_producto("Servilletas de papel")
     comprobar(sin_excepciones(at, "completar servicio") and pendiente.estado == "completado",
               "Servicio completado desde la interfaz")
@@ -818,13 +828,20 @@ def prueba_completar_lotes(at: AppTest) -> None:
     comprobar(complemento.value is None and len(complemento.options) == 1 and complemento.options[0].startswith("Lote 2 ·"),
               "Si el lote elegido no llega, pide elegir con qué lote completar (sin elegirlo por ti)")
 
-    boton(at.button, "Completar servicio").click().run()
+    siguiente(at, servicio, 1)
     secreto = inv.buscar_producto("Secreto ibérico")
-    comprobar(servicio.estado != "completado" and secreto.stock == 1 and len(at.error) > 0,
-              "Sin elegir el lote de complemento no se completa (error visible, nada cambia)")
+    comprobar(servicio.estado != "completado" and secreto.stock == 1 and len(at.error) > 0
+              and at.session_state[f"_completar_paso_{servicio.id}"] == 1,
+              "Sin elegir el lote de complemento no se puede seguir (error visible, nada cambia)")
 
     complemento = at.selectbox(key=f"{base}_1")
     complemento.select(opcion(complemento, "Lote 2 ·")).run()
+    siguiente(at, servicio, 1)
+    at.button(key=f"completar_atras_2_{servicio.id}").click().run()
+    comprobar(str(at.selectbox(key=f"{base}_0").value).startswith("Lote 3 ·")
+              and str(at.selectbox(key=f"{base}_1").value).startswith("Lote 2 ·"),
+              "Al volver al paso 1, los lotes elegidos siguen ahí")
+    siguiente(at, servicio, 1)
 
     # Costes adicionales no previstos: se añaden dos y se quita uno
     clave = f"extras_{servicio.id}"
@@ -873,7 +890,9 @@ def prueba_completar_lotes(at: AppTest) -> None:
     gastos = at.session_state["registro_gastos"]
     comprobar(not gastos.gastos, "...y no se guardan hasta completar el servicio")
 
-    boton(at.button, "Completar servicio").click().run()
+    siguiente(at, servicio, 2)
+    siguiente(at, servicio, 3)
+    at.button(key=f"completar_boton_{servicio.id}").click().run()
     comprobar(sin_excepciones(at, "completar con lotes") and servicio.estado == "completado"
               and secreto.buscar_lote(3) is None and abs(secreto.buscar_lote(2).cantidad - 0.2) < 1e-9,
               "Completa: 0,5 kg del lote 3 y los 0,3 que faltan del lote 2")
@@ -1285,13 +1304,17 @@ def prueba_bloque4(at: AppTest) -> None:
     ir_a(at, "Servicios")
     caja = at.selectbox(key="completar_select")
     caja.select(opcion(caja, f"#{servicio.id} ·")).run()
+    siguiente(at, servicio, 1)
     v = at.session_state[f"extras_{servicio.id}_version"]
     at.text_input(key=f"extras_{servicio.id}_concepto_{v}").input("Taxi").run()
-    boton(at.button, "Completar servicio").click().run()
-    comprobar(servicio.estado != "completado" and any("sin añadir" in t for t in textos(at.error)),
-              "Con un coste adicional escrito sin añadir, no se completa (y se avisa)")
+    siguiente(at, servicio, 2)
+    comprobar(servicio.estado != "completado" and any("sin añadir" in t for t in textos(at.error))
+              and at.session_state[f"_completar_paso_{servicio.id}"] == 2,
+              "Con un coste adicional escrito sin añadir, no se puede seguir (y se avisa)")
     at.text_input(key=f"extras_{servicio.id}_concepto_{v}").input("").run()
-    boton(at.button, "Completar servicio").click().run()
+    siguiente(at, servicio, 2)
+    siguiente(at, servicio, 3)
+    at.button(key=f"completar_boton_{servicio.id}").click().run()
     comprobar(sin_excepciones(at, "completar sin coste pendiente") and servicio.estado == "completado",
               "Sin nada pendiente, se completa")
 

@@ -42,7 +42,7 @@ from inventario import (
 )
 from inventario import Inventario, PrecioCompra, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
-from recetario import Recetario, Receta, Menu
+from recetario import Recetario, Receta, Menu, _coste_de_filas
 from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import (
@@ -2215,7 +2215,9 @@ def _elegir_tandas_servicio(servicio: Servicio, inv: Inventario, rec: Recetario)
         base = f"completar_tanda_{servicio.id}_{receta.nombre}"
         primera = st.selectbox(
             f"{receta.nombre}: ¿usar raciones preparadas? (hacen falta {servicio.comensales})", lista,
-            index=lista.index(validas[0]) if validas else 0, key=f"{base}_0",
+            # Si ya hay una elección guardada (al volver al paso 1), manda esa: no se pasa otra por defecto.
+            index=0 if f"{base}_0" in st.session_state else (lista.index(validas[0]) if validas else 0),
+            key=f"{base}_0",
         )
         elegidas: list[int] = [] if primera == NO_USAR else [opciones[primera]]
         while elegidas:
@@ -2717,82 +2719,165 @@ def pagina_servicios() -> None:
         else:
             opciones2 = {_texto_servicio_estado(s): s.id for s in _cercanos_primero(pendientes)}
             elegido2 = st.selectbox("Servicio a completar", list(opciones2.keys()), key="completar_select")
-            servicio = serv.buscar_por_id(opciones2[elegido2])
-            menu_servicio = rec.buscar_menu(servicio.menu)
-            if menu_servicio is not None:
-                _notas_de_menu(menu_servicio.nombre, menu_servicio.notas,
-                               [(r.nombre, r.notas) for r in menu_servicio.recetas])
+            _completar_por_pasos(serv.buscar_por_id(opciones2[elegido2]), inv, rec)
 
-            # Primero se eligen los lotes; después, la vista previa muestra
-            # exactamente qué saldrá de cada uno ANTES de pulsar el botón.
-            plan = _elegir_tandas_servicio(servicio, inv, rec)
-            elecciones = _elegir_lotes_servicio(servicio, inv, rec, plan)
-            filas = rec.previsualizar_consumo(servicio, inv, elecciones, plan)
 
-            if filas is None:
-                st.warning(
-                    f"El menú '{servicio.menu}' no existe en el recetario: si completas el servicio, "
-                    "no se descontará nada del inventario."
-                )
-            else:
-                for receta_plan, p in rec.plan_elaboraciones(servicio, inv, plan).items():
-                    if p["reparto"]:
-                        detalle = " + ".join(f"{_num(r)} de la tanda {t}" for t, r in p["reparto"])
-                        st.write(f"🥘 **{receta_plan}**: {detalle} raciones ya preparadas"
-                                 + (f"; las otras {_num(p['restantes'])} con ingredientes." if p["restantes"] > 0 else "."))
-                st.caption(f"Se descontará para {servicio.comensales} comensales (motivo: consumo). 🧻 = consumible:")
-                st.dataframe([{
-                    "Ingrediente": ("🧻 " if f["tipo"] == "consumible" else "") + f["ingrediente"],
-                    "Necesario": f"{_num(f['necesario'])} {f['unidad']}",
-                    "En stock": f"{_num(f['en_stock'])} {f['unidad']}" if f["existe"] else "no existe",
-                    "Se descontará": f"{_num(f['a_descontar'])} {f['unidad']}",
-                    "De qué lotes": _texto_reparto(f),
-                    "Faltaba": f"{_num(f['faltante'])} {f['unidad']}" if f["faltante"] > 0 else "—",
-                } for f in filas], width="stretch", hide_index=True)
-                _aviso_caducados(filas)
+PASOS_COMPLETAR = ("1. Raciones y lotes", "2. Costes adicionales", "3. ¿Cómo fue?", "4. Resumen y confirmar")
 
-                cortos = [f for f in filas if f["faltante"] > 0]
-                if cortos:
-                    st.warning(
-                        "No hay stock suficiente de: " + ", ".join(f["ingrediente"] for f in cortos)
-                        + ". Se descontará todo lo disponible de todos sus lotes (quedará a 0)."
-                    )
 
-            extras = _costes_adicionales(servicio)
-            valoracion = st.text_area(
-                "📝 ¿Cómo fue? (opcional)", key=f"valoracion_{servicio.id}",
-                placeholder="Incidencias, qué sobró o faltó, qué cambiar la próxima vez...",
-                help="Queda guardado en el historial del servicio. Se puede añadir o cambiar después.",
-            )
+def _completar_por_pasos(servicio: Servicio, inv: Inventario, rec: Recetario) -> None:
+    """
+    Completar un servicio en 4 pasos (antes era una sola pantalla muy larga).
+    No se toca nada hasta pulsar "Completar servicio" en el último paso. Lo
+    elegido en cada paso se guarda al pasar al siguiente, y se recupera al
+    volver atrás.
+    """
+    ss = st.session_state
+    sid = servicio.id
+    clave_paso = f"_completar_paso_{sid}"
+    paso = ss.setdefault(clave_paso, 1)
+    st.progress(paso / len(PASOS_COMPLETAR), text=" → ".join(
+        f"**{p}**" if i + 1 == paso else p for i, p in enumerate(PASOS_COMPLETAR)))
 
-            pulsado = st.button("Completar servicio", type="primary")
-            if pulsado and _coste_sin_anadir(servicio):
+    def ir(nuevo: int) -> None:
+        ss[clave_paso] = nuevo
+        st.rerun()
+
+    menu_servicio = rec.buscar_menu(servicio.menu)
+    if paso == 1:
+        if menu_servicio is not None:
+            _notas_de_menu(menu_servicio.nombre, menu_servicio.notas, [(r.nombre, r.notas) for r in menu_servicio.recetas])
+        # Lo elegido la otra vez (si se vuelve atrás) se recupera antes de dibujar los desplegables.
+        for clave, valor in ss.get(f"_completar_widgets_{sid}", {}).items():
+            if clave not in ss:
+                ss[clave] = valor
+        plan = _elegir_tandas_servicio(servicio, inv, rec)
+        elecciones = _elegir_lotes_servicio(servicio, inv, rec, plan)
+        filas = rec.previsualizar_consumo(servicio, inv, elecciones, plan)
+        if filas is None:
+            st.warning(f"El menú '{servicio.menu}' no existe en el recetario: si completas el servicio, "
+                       "no se descontará nada del inventario.")
+        else:
+            _tabla_consumo(servicio, inv, rec, filas, plan)
+        if st.button("Siguiente →", type="primary", key=f"completar_siguiente_1_{sid}"):
+            pendientes = [f["ingrediente"] for f in (filas or []) if f["sin_asignar"] > 1e-9]
+            if pendientes:
+                st.error("Elige de qué otro lote sale lo que falta de: " + ", ".join(pendientes) + ".")
+                return
+            ss[f"_completar_plan_{sid}"] = plan
+            ss[f"_completar_elecciones_{sid}"] = elecciones
+            ss[f"_completar_widgets_{sid}"] = {
+                k: v for k, v in ss.items()
+                if isinstance(k, str) and k.startswith((f"completar_tanda_{sid}_", f"completar_lote_{sid}_"))
+            }
+            ir(2)
+        return
+
+    plan = ss.get(f"_completar_plan_{sid}")
+    elecciones = ss.get(f"_completar_elecciones_{sid}")
+    if paso == 2:
+        _costes_adicionales(servicio)
+        c1, c2 = st.columns(2)
+        if c1.button("← Atrás", key=f"completar_atras_2_{sid}"):
+            ir(1)
+        if c2.button("Siguiente →", type="primary", key=f"completar_siguiente_2_{sid}"):
+            if _coste_sin_anadir(servicio):
                 st.error("Tienes un coste adicional escrito sin añadir: pulsa '➕ Añadir coste' o bórralo antes de "
-                         "completar (si no, se perdería). No se ha completado el servicio.")
-            elif pulsado:
-                if filas is None:
-                    servicio.completar()
-                    servicio.valoracion = valoracion.strip()
-                    _registrar_costes_adicionales(servicio, extras)
-                    avisar("warning", f"Servicio #{servicio.id} completado sin descontar stock (menú no encontrado).")
-                    st.rerun()
-                try:
-                    rec.completar_servicio(servicio, inv, elecciones, plan)
-                except ValueError as e:
-                    st.error(_es(str(e)))
-                else:
-                    servicio.valoracion = valoracion.strip()
-                    _registrar_costes_adicionales(servicio, extras)
-                    cortos = [f["ingrediente"] for f in filas if f["faltante"] > 0]
-                    if cortos:
-                        avisar(
-                            "warning",
-                            f"Servicio #{servicio.id} completado. Stock insuficiente de: {', '.join(cortos)} "
-                            "(se descontó todo lo que había).",
-                        )
-                    else:
-                        avisar("success", f"Servicio #{servicio.id} completado y stock descontado correctamente.")
-                    st.rerun()
+                         "seguir (si no, se perdería).")
+                return
+            ir(3)
+        return
+
+    if paso == 3:
+        valoracion = st.text_area(
+            "📝 ¿Cómo fue? (opcional)", value=ss.get(f"_completar_valoracion_{sid}", ""), key=f"valoracion_{sid}",
+            placeholder="Incidencias, qué sobró o faltó, qué cambiar la próxima vez...",
+            help="Queda guardado en el historial del servicio. Se puede añadir o cambiar después.",
+        )
+        c1, c2 = st.columns(2)
+        if c1.button("← Atrás", key=f"completar_atras_3_{sid}"):
+            ss[f"_completar_valoracion_{sid}"] = valoracion
+            ir(2)
+        if c2.button("Siguiente →", type="primary", key=f"completar_siguiente_3_{sid}"):
+            ss[f"_completar_valoracion_{sid}"] = valoracion
+            ir(4)
+        return
+
+    # --- Paso 4: resumen y confirmar ---
+    filas = rec.previsualizar_consumo(servicio, inv, elecciones, plan)
+    extras = ss.get(f"extras_{sid}", [])
+    valoracion = ss.get(f"_completar_valoracion_{sid}", "")
+    st.markdown(f"**Servicio {_texto_servicio_estado(servicio)}** · {servicio.comensales} comensales")
+    coste_inventario = 0.0
+    if filas is None:
+        st.warning("El menú no existe en el recetario: no se descontará nada del inventario.")
+    else:
+        _tabla_consumo(servicio, inv, rec, filas, plan)
+        coste_inventario = _coste_de_filas(filas, inv)[0] + sum(
+            r * inv.elaboraciones.buscar(t).coste_por_racion
+            for p in rec.plan_elaboraciones(servicio, inv, plan).values() for t, r in p["reparto"]
+            if inv.elaboraciones.buscar(t)
+        )
+    coste_extras = sum(e["importe"] for e in extras)
+    st.markdown("**💶 Costes adicionales**: " + (", ".join(f"{e['concepto']} ({_eur(e['importe'])} €)" for e in extras)
+                                                if extras else "ninguno"))
+    st.markdown(f"**📝 ¿Cómo fue?**: {valoracion.strip() or '—'}")
+    st.metric("Coste del servicio (lo pagado, con IVA)", f"{_eur(coste_inventario + coste_extras)} €",
+              help="Lo que sale del inventario (a precio de cada lote), las raciones ya preparadas y los costes "
+                   "adicionales. Los gastos que ya tuviera apuntados el servicio se suman aparte en la rentabilidad.")
+    st.caption("Hasta que pulses 'Completar servicio' no se toca nada.")
+
+    c1, c2 = st.columns(2)
+    if c1.button("← Atrás", key=f"completar_atras_4_{sid}"):
+        ir(3)
+    if not c2.button("Completar servicio", type="primary", key=f"completar_boton_{sid}"):
+        return
+    if filas is None:
+        servicio.completar()
+    else:
+        try:
+            rec.completar_servicio(servicio, inv, elecciones, plan)
+        except ValueError as e:
+            st.error(_es(str(e)) + " Vuelve al paso 1 para revisarlo.")
+            return
+    servicio.valoracion = valoracion.strip()
+    _registrar_costes_adicionales(servicio, extras)
+    for clave in [k for k in ss.keys() if isinstance(k, str) and k.startswith(
+            (f"_completar_paso_{sid}", f"_completar_plan_{sid}", f"_completar_elecciones_{sid}",
+             f"_completar_widgets_{sid}", f"_completar_valoracion_{sid}"))]:
+        del ss[clave]
+    cortos = [f["ingrediente"] for f in (filas or []) if f["faltante"] > 0]
+    if filas is None:
+        avisar("warning", f"Servicio #{sid} completado sin descontar stock (menú no encontrado).")
+    elif cortos:
+        avisar("warning", f"Servicio #{sid} completado. Stock insuficiente de: {', '.join(cortos)} "
+                          "(se descontó todo lo que había).")
+    else:
+        avisar("success", f"Servicio #{sid} completado y stock descontado correctamente.")
+    st.rerun()
+
+
+def _tabla_consumo(servicio: Servicio, inv: Inventario, rec: Recetario, filas: list[dict], plan) -> None:
+    """Lo que se descontará al completar: raciones preparadas, tabla por ingrediente y avisos."""
+    for receta_plan, p in rec.plan_elaboraciones(servicio, inv, plan).items():
+        if p["reparto"]:
+            detalle = " + ".join(f"{_num(r)} de la tanda {t}" for t, r in p["reparto"])
+            st.write(f"🥘 **{receta_plan}**: {detalle} raciones ya preparadas"
+                     + (f"; las otras {_num(p['restantes'])} con ingredientes." if p["restantes"] > 0 else "."))
+    st.caption(f"Se descontará para {servicio.comensales} comensales (motivo: consumo). 🧻 = consumible:")
+    st.dataframe([{
+        "Ingrediente": ("🧻 " if f["tipo"] == "consumible" else "") + f["ingrediente"],
+        "Necesario": f"{_num(f['necesario'])} {f['unidad']}",
+        "En stock": f"{_num(f['en_stock'])} {f['unidad']}" if f["existe"] else "no existe",
+        "Se descontará": f"{_num(f['a_descontar'])} {f['unidad']}",
+        "De qué lotes": _texto_reparto(f),
+        "Faltaba": f"{_num(f['faltante'])} {f['unidad']}" if f["faltante"] > 0 else "—",
+    } for f in filas], width="stretch", hide_index=True)
+    _aviso_caducados(filas)
+    cortos = [f for f in filas if f["faltante"] > 0]
+    if cortos:
+        st.warning("No hay stock suficiente de: " + ", ".join(f["ingrediente"] for f in cortos)
+                   + ". Se descontará todo lo disponible de todos sus lotes (quedará a 0).")
 
 
 # ---------- Página: Historial de servicios ----------
