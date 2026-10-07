@@ -45,6 +45,7 @@ from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import (
     Sesion, SesionIlegible, carpeta_datos, cargar_sesion_segura, escribir_sesion, firma, sesion_a_dict,
+    copia_antes_de_empezar_de_cero, sesion_vacia,
 )
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
@@ -1088,6 +1089,33 @@ def _pestana_editar(inv: Inventario, nombres: list[str]) -> None:
         except ValueError as e:
             st.error(str(e))
 
+    st.divider()
+    _borrar_producto(inv, producto)
+
+
+def _borrar_producto(inv: Inventario, producto: Producto) -> None:
+    """Borrar un producto que ya no se usa (con confirmación). Va al final de 'Editar producto'."""
+    nombre = producto.nombre
+    with st.expander(f"🗑️ Borrar el producto '{nombre}'"):
+        usos = st.session_state.recetario.donde_se_usa_producto(nombre) + inv.donde_se_usa(nombre)
+        if usos:
+            st.caption(f"No se puede borrar: se usa en {'; '.join(usos)}. Quítalo de ahí antes.")
+            return
+        if producto.stock > 0:
+            st.warning(f"Quedan {_num(producto.stock)} {producto.unidad}: se quitarán sin contar como desperdicio. "
+                       "Si se han tirado, regístralo antes como salida (desperdicio).")
+        st.caption("Su historial (compras, consumos, precios) se conserva, para no descuadrar los meses pasados.")
+        confirmar = st.checkbox(f"Sí, quiero borrar '{nombre}'", key=f"borrar_producto_confirmar_{nombre}")
+        if st.button("Borrar producto", key=f"borrar_producto_{nombre}", disabled=not confirmar):
+            try:
+                inv.borrar_producto(nombre, st.session_state.recetario.donde_se_usa_producto(nombre))
+                st.session_state.gestor_compras.quitar_producto(nombre)
+                avisar("success", f"Producto '{nombre}' borrado.")
+                vaciar_campos("editar_select")
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+
 
 def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
     if not nombres:
@@ -1810,6 +1838,28 @@ def _seccion_material() -> None:
                     st.error(f"Ya existe otro material llamado '{nuevo_nombre.strip()}'.")
             except ValueError as e:
                 st.error(str(e))
+
+        with st.expander(f"🗑️ Borrar el material '{nombre_sel}'"):
+            if reg.en_uso(nombre_sel):
+                st.caption(f"No se puede borrar: hay {reg.en_uso(nombre_sel)} unidades fuera en algún servicio. "
+                           "Registra antes su vuelta (Servicios › Material).")
+            else:
+                menus = [m.nombre for m in st.session_state.recetario.menus.values()
+                         if nombre_sel in m.materiales_por_comensal]
+                if menus:
+                    st.caption(f"Se quitará también de estos menús: {', '.join(menus)}.")
+                st.caption("Sus roturas y pérdidas se conservan (siguen contando en el coste de sus servicios).")
+                confirmar = st.checkbox(f"Sí, quiero borrar '{nombre_sel}'", key=k("borrar_confirmar"))
+                if st.button("Borrar material", key=k("borrar"), disabled=not confirmar):
+                    try:
+                        reg.borrar_material(nombre_sel)
+                        quitado = st.session_state.recetario.quitar_material(nombre_sel)
+                        avisar("success", f"Material '{nombre_sel}' borrado."
+                                          + (f" Quitado de los menús: {', '.join(quitado)}." if quitado else ""))
+                        vaciar_campos("mat_editar_select")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
 
     with tab_reponer:
         nombre_sel = st.selectbox("Material", nombres, key="mat_reponer_select")
@@ -3562,6 +3612,45 @@ def pagina_ajustes() -> None:
             avisar("success", f"IVA de cobro guardado: {iva_cobro:g} %.")
             st.rerun()
     st.warning(AVISO_FISCAL)
+
+    st.divider()
+    st.subheader("⚠️ Empezar de cero")
+    st.write("Borra **todos** los datos (productos, recetas, menús, servicios, gastos, material, historial...) y deja "
+             "la app vacía, por ejemplo después de probarla con los datos de ejemplo. Los ajustes del IVA se conservan.")
+    st.caption("Antes de borrar se hace una copia de seguridad de todo en la carpeta de datos (Exportar › Dónde se "
+               "guardan tus datos), en «copias», con un nombre que empieza por «antes_de_empezar_de_cero». Esa copia "
+               "no se borra sola.")
+    texto = st.text_input("Para confirmarlo, escribe BORRAR", key="cero_confirmar")
+    if st.button("🗑️ Borrar todos los datos", disabled=texto.strip() != "BORRAR", key="cero_boton"):
+        try:
+            copia = copia_antes_de_empezar_de_cero(_datos_sesion(), RUTA_SESION)
+        except OSError as error:
+            st.error(f"No se ha borrado nada: no se ha podido hacer la copia de seguridad ({error}).")
+            return
+        _empezar_de_cero()
+        avisar("success", f"Todos los datos se han borrado. La copia de lo que había está en: {copia}")
+        st.rerun()
+
+
+def _empezar_de_cero() -> None:
+    """Deja la app vacía (conservando los Ajustes del IVA). La copia de seguridad la hace quien llama."""
+    ss = st.session_state
+    nueva = sesion_vacia(ss.inventario)
+    # Se olvidan también los campos de las pantallas (elecciones de la sesión anterior).
+    for clave in list(ss.keys()):
+        if isinstance(clave, str) and not clave.startswith("_") and clave != "avisos":
+            del ss[clave]
+    Servicio._siguiente_id = 1
+    Gasto._siguiente_id = 1
+    ss.inventario = nueva.inventario
+    ss.registro_servicios = nueva.registro_servicios
+    ss.recetario = nueva.recetario
+    ss.gestor_compras = nueva.gestor_compras
+    ss.archivo_informes = nueva.archivo_informes
+    ss.registro_gastos = nueva.registro_gastos
+    ss.registro_material = nueva.registro_material
+    ss.ultima_exportacion = None
+    ss.receta_ingredientes = {}
 
 
 def pagina_metricas() -> None:

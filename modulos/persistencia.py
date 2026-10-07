@@ -151,6 +151,32 @@ def escribir_sesion(datos: dict, ruta: str) -> None:
         print(f"⚠️  No se ha podido hacer la copia de seguridad del día: {error}")
 
 
+def copia_antes_de_empezar_de_cero(datos: dict, ruta: str) -> Path:
+    """
+    Antes de borrar todos los datos ("Empezar de cero"), los guarda en
+    copias/antes_de_empezar_de_cero_<fecha y hora>.json. Esta copia no entra
+    en la rotación de las copias diarias: no se borra sola. Si no se puede
+    escribir, lanza OSError (y entonces NO se debe borrar nada).
+    """
+    copias = Path(ruta).parent / "copias"
+    copias.mkdir(parents=True, exist_ok=True)
+    destino = copias / f"antes_de_empezar_de_cero_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    with open(destino, "w", encoding="utf-8") as f:
+        f.write(texto_json(datos))
+        f.flush()
+        os.fsync(f.fileno())
+    return destino
+
+
+def sesion_vacia(ajustes_de: Optional[Inventario] = None) -> Sesion:
+    """Una sesión sin datos. Con `ajustes_de`, conserva los Ajustes (IVA) de ese inventario."""
+    inventario = Inventario()
+    if ajustes_de is not None:
+        inventario.iva_recuperable = ajustes_de.iva_recuperable
+        inventario.iva_cobro = ajustes_de.iva_cobro
+    return Sesion(inventario, RegistroServicios(), Recetario(), GestorCompras(), ArchivoInformes())
+
+
 def guardar_sesion(
     inventario: Inventario,
     registro_servicios: RegistroServicios,

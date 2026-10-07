@@ -1352,6 +1352,59 @@ def prueba_fase3_bloque1(at: AppTest) -> None:
     comprobar(sin_excepciones(at, "borrar menú") and "Menú prueba" not in rec.menus, "Borrar un menú que no se usa")
 
 
+@prueba("Borrar productos y material, y empezar de cero (Fase 3, bloque 2)")
+def prueba_fase3_bloque2(at: AppTest) -> None:
+    import os
+    import tempfile
+    from materiales import Material
+
+    inv = at.session_state["inventario"]
+    reg = at.session_state["registro_material"]
+
+    ir_a(at, "Inventario")
+    at.radio(key="inv_tipo").set_value("🍅 Alimentos").run()
+    at.selectbox(key="editar_select").select("Harina de trigo").run()
+    comprobar(any("No se puede borrar" in t and "Pan casero" in t for t in textos(at.caption)),
+              "Un producto que usa una receta no se puede borrar (y dice cuál)")
+    at.selectbox(key="editar_select").select("Huevos camperos").run()
+    at.checkbox(key="borrar_producto_confirmar_Huevos camperos").check().run()
+    at.button(key="borrar_producto_Huevos camperos").click().run()
+    comprobar(sin_excepciones(at, "borrar producto") and "Huevos camperos" not in inv.productos,
+              "Borrar un producto que no se usa (con confirmación)")
+
+    reg.agregar_material(Material("Bandeja", "Menaje", 5, 3.0, "Bazar"))
+    at.radio(key="inv_tipo").set_value("🍽️ Material").run()
+    at.selectbox(key="mat_editar_select").select("Bandeja").run()
+    por_clave(at.checkbox, "mat_edit_borrar_confirmar_Bandeja_").check().run()
+    por_clave(at.button, "mat_edit_borrar_Bandeja_").click().run()
+    comprobar(sin_excepciones(at, "borrar material") and reg.buscar("Bandeja") is None, "Borrar un material (con confirmación)")
+
+    # Empezar de cero, en una carpeta de datos aparte (la de las pruebas la usan las capturas)
+    with tempfile.TemporaryDirectory() as carpeta:
+        shutil.copy2(RAIZ / "datos" / "sesion.json", Path(carpeta) / "sesion.json")
+        anterior = os.environ.get("GESTION_RESTAURANTE_DATOS")
+        os.environ["GESTION_RESTAURANTE_DATOS"] = carpeta
+        try:
+            at2 = nueva_app()
+            comprobar(bool(at2.session_state["inventario"].productos), "(La copia de los datos se abre con todo)")
+            ir_a(at2, "Ajustes")
+            comprobar(at2.button(key="cero_boton").disabled, "'Borrar todos los datos' está desactivado hasta escribir BORRAR")
+            at2.text_input(key="cero_confirmar").input("BORRAR").run()
+            at2.button(key="cero_boton").click().run()
+            copias = list((Path(carpeta) / "copias").glob("antes_de_empezar_de_cero_*.json"))
+            guardado = (Path(carpeta) / "sesion.json").read_text(encoding="utf-8")
+            comprobar(sin_excepciones(at2, "empezar de cero") and not at2.session_state["inventario"].productos
+                      and not at2.session_state["recetario"].recetas and not at2.session_state["registro_servicios"].servicios
+                      and len(copias) == 1 and "Harina de trigo" in copias[0].read_text(encoding="utf-8")
+                      and "Harina de trigo" not in guardado,
+                      "Empezar de cero deja la app vacía (también en disco) y antes hace una copia con todo")
+        finally:
+            if anterior is None:
+                os.environ.pop("GESTION_RESTAURANTE_DATOS", None)
+            else:
+                os.environ["GESTION_RESTAURANTE_DATOS"] = anterior
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1385,6 +1438,7 @@ def main() -> int:
     prueba_metricas_y_guardado(at)
     prueba_bloque4(at)
     prueba_fase3_bloque1(at)
+    prueba_fase3_bloque2(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

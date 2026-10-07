@@ -35,6 +35,7 @@ from compras import GestorCompras, ItemCompra
 from dashboard import Dashboard
 from exportador import exportar_todo
 from persistencia import guardar_sesion, cargar_sesion, cargar_sesion_segura, carpeta_datos, SesionIlegible
+from persistencia import copia_antes_de_empezar_de_cero, sesion_a_dict, sesion_vacia
 from gastos import Gasto, RegistroGastos, resumen_servicio
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
@@ -389,6 +390,7 @@ def menu_inventario():
         print("9. Ver los lotes de un producto o desechar uno")
         print("10. Elaboraciones (recetas preparadas por adelantado)")
         print("11. Historial de precios de un producto")
+        print("12. Borrar un producto")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -576,6 +578,8 @@ def menu_inventario():
             accion_elaboraciones()
         elif opcion == "11":
             accion_historial_precios()
+        elif opcion == "12":
+            accion_borrar_producto()
         elif opcion == "0":
             return
         else:
@@ -1607,6 +1611,49 @@ def accion_cargar_sesion():
     dashboard = Dashboard(inventario, registro_servicios, gestor_compras)
 
 
+def accion_borrar_producto() -> None:
+    nombre = pedir_texto("Producto a borrar: ")
+    producto = inventario.buscar_producto(nombre)
+    if producto is None:
+        print(f"❌ No existe el producto '{nombre}'.")
+        return
+    usos = recetario.donde_se_usa_producto(nombre) + inventario.donde_se_usa(nombre)
+    if usos:
+        print(f"❌ No se puede borrar: se usa en {'; '.join(usos)}. Quítalo de ahí antes.")
+        return
+    if producto.stock > 0:
+        print(f"⚠️  Quedan {producto.stock:g} {producto.unidad}: se quitarán sin contar como desperdicio.")
+    if pedir_si_no(f"¿Seguro que quieres borrar '{nombre}'? (su historial se conserva)"):
+        inventario.borrar_producto(nombre, usos)
+        gestor_compras.quitar_producto(nombre)
+
+
+def accion_empezar_de_cero() -> None:
+    global inventario, registro_servicios, recetario, gestor_compras, dashboard, archivo_informes, registro_gastos
+    global registro_material
+    print("⚠️  Se borrarán TODOS los datos (productos, recetas, servicios, gastos, material, historial...).")
+    print("   Antes se hace una copia de seguridad en la carpeta de datos (copias/antes_de_empezar_de_cero_...).")
+    if pedir_texto("Para confirmarlo, escribe BORRAR: ") != "BORRAR":
+        print("No se ha borrado nada.")
+        return
+    datos = sesion_a_dict(inventario, registro_servicios, recetario, gestor_compras, archivo_informes,
+                          registro_gastos, registro_material)
+    try:
+        copia = copia_antes_de_empezar_de_cero(datos, RUTA_SESION)
+    except OSError as error:
+        print(f"❌ No se ha borrado nada: no se ha podido hacer la copia ({error}).")
+        return
+    nueva = sesion_vacia(inventario)
+    inventario, registro_servicios, recetario = nueva.inventario, nueva.registro_servicios, nueva.recetario
+    gestor_compras, archivo_informes, registro_gastos = nueva.gestor_compras, nueva.archivo_informes, nueva.registro_gastos
+    registro_material = nueva.registro_material
+    dashboard = Dashboard(inventario, registro_servicios, gestor_compras)
+    Servicio._siguiente_id = 1
+    Gasto._siguiente_id = 1
+    accion_guardar_sesion()
+    print(f"✅ Todos los datos borrados. La copia de lo que había está en: {copia}")
+
+
 def accion_backup_drive():
     if ultima_exportacion is None:
         print("⚠️  Primero exporta a Excel (opción 6) antes de hacer backup.")
@@ -1944,6 +1991,7 @@ def menu_material():
         print("5. Salida de material a un servicio (lista de carga)")
         print("6. Vuelta del material de un servicio")
         print("7. Ver roturas y pérdidas")
+        print("8. Borrar un material")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
         try:
@@ -2016,6 +2064,13 @@ def menu_material():
                     print("No hay roturas ni pérdidas registradas.")
                 for i in registro_material.incidencias:
                     print(i)
+            elif opcion == "8":
+                nombre = pedir_texto("Material a borrar: ")
+                if pedir_si_no(f"¿Seguro que quieres borrar '{nombre}'? (sus roturas y pérdidas se conservan)"):
+                    registro_material.borrar_material(nombre)
+                    menus = recetario.quitar_material(nombre)
+                    if menus:
+                        print(f"Quitado también de los menús: {', '.join(menus)}")
             elif opcion == "0":
                 return
             else:
@@ -2126,6 +2181,7 @@ def menu_principal():
         print("14. Historial de servicios")
         print("15. Ajustes (IVA)")
         print("16. IVA del trimestre (estimación)")
+        print("17. Empezar de cero (borrar todos los datos)")
         print("0. Salir")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -2168,6 +2224,9 @@ def menu_principal():
             pausa()
         elif opcion == "16":
             accion_iva_trimestre()
+            pausa()
+        elif opcion == "17":
+            accion_empezar_de_cero()
             pausa()
         elif opcion == "0":
             respuesta = pedir_texto("¿Guardar sesión antes de salir? (s/n): ").strip().lower()

@@ -1365,6 +1365,70 @@ except ValueError as e:
 silencio(rec.eliminar_menu, "Menú verano", [hecho])
 comprobar("Menú verano" not in rec.menus, "Un menú que solo usan servicios ya hechos sí se puede borrar")
 
+print("\n--- Fase 3, bloque 2: borrar productos y material ---")
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 2, "kg", 2, "Huerta"))
+silencio(inv.agregar_producto, Producto("Cebolla", "Verduras", 3, "kg", 1, "Huerta"))
+silencio(inv.agregar_producto, Producto("Pimiento", "Verduras", 0, "kg", 0, "Huerta"))
+silencio(inv.definir_base, "Sofrito", "Bases", "kg", 1, {"Cebolla": 1.5})
+silencio(inv.salida_stock, "Tomate", 1, "consumo", 1)
+rec = Recetario()
+silencio(rec.agregar_receta, Receta("Ensalada", "Entrantes", {"Tomate": 0.1}))
+try:
+    inv.borrar_producto("Tomate", rec.donde_se_usa_producto("Tomate"))
+    comprobar(False, "No se borra un producto que usa una receta")
+except ValueError as e:
+    comprobar("Ensalada" in str(e) and "Tomate" in inv.productos, "No se borra un producto que usa una receta (y dice cuál)")
+try:
+    inv.borrar_producto("Cebolla", rec.donde_se_usa_producto("Cebolla"))
+    comprobar(False, "No se borra un ingrediente de una elaboración base")
+except ValueError as e:
+    comprobar("Sofrito" in str(e), "No se borra un ingrediente de una elaboración base (y dice cuál)")
+silencio(rec.editar_receta, "Ensalada", ingredientes={"Pimiento": 0.1})
+movimientos = len(inv.historial)
+stock = silencio(inv.borrar_producto, "Tomate", rec.donde_se_usa_producto("Tomate"))
+comprobar("Tomate" not in inv.productos and stock == 1 and len(inv.historial) == movimientos
+          and len(inv.precios_de("Tomate")) == 1,
+          "Un producto que ya no se usa se borra; su stock (1 kg) no cuenta como desperdicio y su historial se conserva")
+compras = GestorCompras()
+silencio(compras.agregar_item, ItemCompra("Tomate", 2, "kg", "Huerta", 2))
+compras.quitar_producto("Tomate")
+comprobar(compras.pendiente_de("Tomate") is None, "Lo pendiente de un producto borrado se quita de la lista de la compra")
+
+reg = RegistroMaterial()
+silencio(reg.agregar_material, Material("Copa", "Cristalería", 50, 2.0, "Bazar"))
+silencio(reg.registrar_salida, 1, {"Copa": 10})
+try:
+    reg.borrar_material("Copa")
+    comprobar(False, "No se borra material que está fuera")
+except ValueError:
+    comprobar("Copa" in reg.materiales, "No se borra un material con unidades fuera en un servicio")
+silencio(reg.registrar_vuelta, 1, {"Copa": 9}, {"Copa": 1})
+rec2 = Recetario()
+silencio(rec2.agregar_receta, Receta("Pan", "Panadería", {"Harina": 0.1}))
+silencio(rec2.agregar_menu, Menu("Menú copa", [rec2.recetas["Pan"]], materiales_por_comensal={"Copa": 2}))
+silencio(reg.borrar_material, "Copa")
+comprobar("Copa" not in reg.materiales and len(reg.incidencias) == 1 and rec2.quitar_material("Copa") == ["Menú copa"]
+          and rec2.menus["Menú copa"].materiales_por_comensal == {},
+          "Un material de vuelta se borra, se quita de los menús y sus roturas se conservan")
+
+print("\n--- Fase 3, bloque 2: empezar de cero ---")
+from persistencia import copia_antes_de_empezar_de_cero, sesion_vacia, sesion_a_dict as _sad  # noqa: E402
+inv = Inventario()
+inv.iva_recuperable = False
+inv.iva_cobro = 7
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 2, "kg", 2, "Huerta"))
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = str(Path(carpeta) / "sesion.json")
+    datos = _sad(inv, RegistroServicios(), Recetario(), GestorCompras(), ArchivoInformes(), RegistroGastos(), RegistroMaterial())
+    copia = copia_antes_de_empezar_de_cero(datos, ruta)
+    comprobar(copia.exists() and copia.parent.name == "copias" and copia.name.startswith("antes_de_empezar_de_cero_")
+              and "Tomate" in copia.read_text(encoding="utf-8"),
+              "Antes de empezar de cero se guarda una copia con todo (copias/antes_de_empezar_de_cero_...)")
+vacia = sesion_vacia(inv)
+comprobar(not vacia.inventario.productos and vacia.inventario.iva_recuperable is False and vacia.inventario.iva_cobro == 7,
+          "La sesión nueva está vacía y conserva los ajustes del IVA")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

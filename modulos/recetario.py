@@ -436,6 +436,21 @@ class Recetario:
         del self.menus[nombre]
         print(f"🗑️  Menú borrado: {nombre}")
 
+    def donde_se_usa_producto(self, nombre: str) -> list[str]:
+        """Las recetas (como ingrediente) y los menús (como consumible) que llevan un producto."""
+        usos = [f"la receta '{r.nombre}'" for r in self.recetas.values() if nombre in r.ingredientes_por_comensal]
+        usos += [f"el menú '{m.nombre}'" for m in self.menus.values() if nombre in m.consumibles_por_comensal]
+        return usos
+
+    def quitar_material(self, nombre: str) -> list[str]:
+        """Quita un material de todos los menús que lo llevan. Devuelve esos menús."""
+        menus = []
+        for menu in self.menus.values():
+            if nombre in menu.materiales_por_comensal:
+                menu.materiales_por_comensal = {n: c for n, c in menu.materiales_por_comensal.items() if n != nombre}
+                menus.append(menu.nombre)
+        return menus
+
     def renombrar_producto(self, antiguo: str, nuevo: str) -> list[str]:
         """
         Al renombrar un producto del inventario, lo renombra también en las

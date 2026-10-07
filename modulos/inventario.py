@@ -1111,6 +1111,36 @@ class Inventario:
         else:
             print(f"❌ No existe el producto '{nombre}'.")
 
+    def donde_se_usa(self, nombre: str) -> list[str]:
+        """
+        Dónde se usa un producto DENTRO del inventario (lo que impide borrarlo):
+        la fórmula de una elaboración base, o ser el producto en bruto del que
+        sale un producto limpio. (Las recetas y los menús los mira el Recetario.)
+        """
+        usos = [f"la fórmula de la elaboración base '{b.nombre}'" for b in self.bases()
+                if nombre in b.formula["ingredientes"]]
+        usos += [f"el origen del producto limpio '{p.nombre}'" for p in self.productos.values() if p.origen == nombre]
+        return usos
+
+    def borrar_producto(self, nombre: str, otros_usos: Optional[list[str]] = None) -> float:
+        """
+        Borra un producto que ya no se usa. No se puede si se usa en algún
+        sitio (`otros_usos`: recetas y menús, que mira quien llama; más
+        donde_se_usa()). Si le queda stock, se quita SIN contar como
+        desperdicio. Su historial (compras, consumos, precios) se conserva,
+        para no descuadrar los meses pasados. Devuelve el stock que tenía.
+        """
+        producto = self.productos.get(nombre)
+        if producto is None:
+            raise ValueError(f"No existe el producto '{nombre}'.")
+        usos = list(otros_usos or []) + self.donde_se_usa(nombre)
+        if usos:
+            raise ValueError(f"No se puede borrar '{nombre}': se usa en " + "; ".join(usos) + ".")
+        stock = producto.stock
+        del self.productos[nombre]
+        print(f"🗑️  Producto borrado: {nombre}")
+        return stock
+
     def _registrar(
         self, producto: Producto, lote: Lote, tipo: str, cantidad: float, motivo: str,
         servicio_id: Optional[int] = None,

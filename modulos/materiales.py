@@ -215,6 +215,20 @@ class RegistroMaterial:
         print(f"✏️  Material actualizado: {material.nombre}")
         return True
 
+    def borrar_material(self, nombre: str) -> None:
+        """
+        Borra un material. No se puede si hay unidades fuera en algún
+        servicio. Sus roturas y pérdidas se conservan (cuentan en el coste de
+        sus servicios). Quitarlo de los menús lo hace el Recetario.
+        """
+        if nombre not in self.materiales:
+            raise ValueError(f"No existe el material '{nombre}'.")
+        if self.en_uso(nombre):
+            raise ValueError(f"Hay {self.en_uso(nombre)} unidades de '{nombre}' fuera en algún servicio: registra "
+                             "antes su vuelta.")
+        del self.materiales[nombre]
+        print(f"🗑️  Material borrado: {nombre}")
+
     def _renombrar_referencias(self, antiguo: str, nuevo: str) -> None:
         for s in self.salidas:
             if antiguo in s.cantidades:
