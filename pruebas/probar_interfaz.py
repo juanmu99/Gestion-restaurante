@@ -1474,6 +1474,21 @@ def prueba_fase3_bloque6(at: AppTest) -> None:
               "Al cambiar de kg a g, el peso ya escrito se convierte (1,2 kg -> 1200 g)")
 
 
+@prueba("Dashboard: hoy, pasados sin completar y dinero del mes (mejora 1)")
+def prueba_mejora1(at: AppTest) -> None:
+    serv = at.session_state["registro_servicios"]
+    olvidado = Servicio(date.today() - timedelta(days=2), time(14, 0), 5, "Menú del día")
+    serv.agregar_servicio(olvidado)
+    ir_a(at, "Dashboard")
+    comprobar(sin_excepciones(at, "Dashboard") and any(f"#{olvidado.id}" in t and "ya pasó" in t for t in textos(at.warning)),
+              "El Dashboard avisa de un servicio pasado que sigue pendiente")
+    comprobar(any(t.startswith("📅 Hoy") for t in textos(at.subheader)) and any(m.label == "Facturado" for m in at.metric),
+              "El Dashboard muestra los servicios de hoy y el dinero del mes")
+    comprobar(any("último guardado" in t for t in textos(at.sidebar.caption)),
+              "La barra lateral muestra la hora del último guardado")
+    serv.cancelar_servicio(olvidado.id)
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1510,6 +1525,7 @@ def main() -> int:
     prueba_fase3_bloque2(at)
     prueba_fase3_bloque3(at)
     prueba_fase3_bloque6(at)
+    prueba_mejora1(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

@@ -245,6 +245,21 @@ class RegistroServicios:
             if hoy <= s.fecha <= limite and s.estado not in ("cancelado", "completado")
         ]
 
+    def servicios_de_hoy(self, hoy: Optional[date] = None) -> list[Servicio]:
+        """Los servicios de hoy (sin los cancelados), por hora."""
+        hoy = hoy or date.today()
+        return sorted((s for s in self.servicios if s.fecha == hoy and s.estado != "cancelado"), key=lambda s: s.hora)
+
+    def pasados_sin_completar(self, hoy: Optional[date] = None) -> list[Servicio]:
+        """
+        Servicios de días ANTERIORES a hoy que siguen pendientes o confirmados:
+        seguramente se hicieron (o se anularon) y nadie lo apuntó. Mientras
+        tanto, su stock no se descuenta y su coste real no cuenta.
+        """
+        hoy = hoy or date.today()
+        return sorted((s for s in self.servicios if s.fecha < hoy and s.estado in ("pendiente", "confirmado")),
+                      key=lambda s: (s.fecha, s.hora))
+
     def total_comensales_periodo(self, fecha_inicio: date, fecha_fin: date) -> int:
         return sum(
             s.comensales for s in self.servicios

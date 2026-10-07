@@ -1624,6 +1624,40 @@ consola.input = lambda mensaje="": next(_entradas)
 comprobar(silencio(consola.pedir_nombre, "Nombre: ") == "Tarta", "La consola no acepta un nombre vacío (vuelve a preguntar)")
 del consola.input
 
+print("\n--- Mejora 1: Dashboard (hoy, pasados sin completar y dinero del mes) ---")
+from gastos import resumen_periodo  # noqa: E402
+registro = RegistroServicios()
+ayer = Servicio(HOY - timedelta(days=1), time(14, 0), 10, "Menú")
+hoy_tarde = Servicio(HOY, time(21, 0), 5, "Menú")
+hoy_temprano = Servicio(HOY, time(13, 0), 8, "Menú")
+cancelado_hoy = Servicio(HOY, time(15, 0), 8, "Menú")
+for s_ in (ayer, hoy_tarde, hoy_temprano, cancelado_hoy):
+    silencio(registro.agregar_servicio, s_)
+silencio(registro.cancelar_servicio, cancelado_hoy.id)
+comprobar([s_.id for s_ in registro.servicios_de_hoy()] == [hoy_temprano.id, hoy_tarde.id],
+          "Los servicios de hoy, por hora (sin los cancelados)")
+comprobar(registro.pasados_sin_completar() == [ayer], "Se detectan los servicios de días pasados sin completar")
+
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Tomate", "Verduras", 0, "kg", 0, "Huerta"))
+silencio(inv.entrada_stock, "Tomate", 10, precio_unitario=2, proveedor="Huerta")
+rec = Recetario()
+ensalada = Receta("Ensalada", "Entrantes", {"Tomate": 0.1})
+silencio(rec.agregar_receta, ensalada)
+silencio(rec.agregar_menu, Menu("Menú", [ensalada]))
+inv.iva_recuperable = False
+cobrado = Servicio(HOY, time(14, 0), 10, "Menú", precio_cobrado=100)
+sin_cobro = Servicio(HOY, time(20, 0), 10, "Menú")
+gastos = RegistroGastos()
+for s_ in (cobrado, sin_cobro):
+    s_.id = 950 + (s_ is sin_cobro)
+    silencio(rec.completar_servicio, s_, inv)
+silencio(gastos.agregar_gasto, Gasto("Gasolina", "Transporte", 30, HOY, 950, iva=21))
+r = resumen_periodo([cobrado, sin_cobro], inv, rec, gastos, None, HOY.replace(day=1), HOY)
+comprobar(r["facturado"] == 100 and r["margen"] == 68 and r["coste"] == 34 and r["servicios"] == 2 and r["sin_cobro"] == 1,
+          "Dinero del mes: facturado 100 €, margen 68 € (100 - 2 € de tomate - 30 € de gasolina), 1 servicio sin cobro")
+comprobar(r["compras"] == 20 and r["gastos"] == 30, "...y lo gastado en compras (20 €) y en gastos (30 €)")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

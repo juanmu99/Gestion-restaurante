@@ -181,6 +181,38 @@ class RegistroGastos:
         return registro
 
 
+def resumen_periodo(
+    servicios: list[Servicio], inventario: Inventario, recetario: Recetario, registro_gastos: RegistroGastos,
+    registro_material: Optional[RegistroMaterial], desde: date, hasta: date,
+) -> dict:
+    """
+    El dinero de un periodo (por ejemplo, el mes en curso), para el Dashboard:
+    - facturado: lo cobrado (sin IVA) de los servicios COMPLETADOS del periodo
+      que tienen precio de cobro; coste y margen de esos mismos servicios
+      (el margen solo de los que tienen cobro, como en la rentabilidad).
+    - servicios / sin_cobro: cuántos servicios completados hay y cuántos no
+      tienen precio de cobro (no cuentan en el margen).
+    - compras: lo pagado en compras de productos (con IVA); gastos: lo
+      pagado en gastos (gasolina, personal...) del periodo.
+    """
+    hechos = [s for s in servicios if s.estado == "completado" and desde <= s.fecha <= hasta]
+    facturado = coste = margen = 0.0
+    for s in hechos:
+        r = resumen_servicio(s, inventario, recetario, registro_gastos, registro_material)
+        coste += r["coste_total"]
+        if r["cobrado"] is not None:
+            facturado += r["cobrado"]
+            margen += r["margen"]
+    compras = sum(m.valor() for m in inventario.historial if m.es_compra() and desde <= m.fecha <= hasta)
+    gastos = sum(g.importe for g in registro_gastos.gastos_en_rango(desde, hasta))
+    return {
+        "servicios": len(hechos),
+        "sin_cobro": len([s for s in hechos if s.precio_cobrado is None]),
+        "facturado": round(facturado, 2), "coste": round(coste, 2), "margen": round(margen, 2),
+        "compras": round(compras, 2), "gastos": round(gastos, 2),
+    }
+
+
 def resumen_servicio(
     servicio: Servicio, inventario: Inventario, recetario: Recetario, registro_gastos: RegistroGastos,
     registro_material: Optional[RegistroMaterial] = None,

@@ -49,7 +49,7 @@ from persistencia import (
     Sesion, SesionIlegible, carpeta_datos, cargar_sesion_segura, escribir_sesion, firma, sesion_a_dict,
     copia_antes_de_empezar_de_cero, sesion_vacia, listar_copias, cargar_sesion,
 )
-from gastos import Gasto, RegistroGastos, resumen_servicio, NOTA_COSTE_AL_COMPLETAR
+from gastos import Gasto, RegistroGastos, resumen_servicio, resumen_periodo, NOTA_COSTE_AL_COMPLETAR
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
 from metricas import trimestre
@@ -285,8 +285,14 @@ def autoguardar(zona) -> None:
         ss._firma_guardada = huella
         ss._mtime_guardado = _mtime_sesion()
         ss._hora_guardado = datetime.now()
-    hora = f" · {ss._hora_guardado:%H:%M:%S}" if ss._hora_guardado else ""
-    zona.caption(f"💾 Los cambios se guardan solos{hora}")
+    # Hora del último guardado: el de esta ventana o, si aún no ha guardado
+    # nada, la del archivo en disco.
+    cuando = ss._hora_guardado or (datetime.fromtimestamp(ss._mtime_guardado) if ss._mtime_guardado else None)
+    if cuando is None:
+        zona.caption("💾 Los cambios se guardan solos")
+    else:
+        dia = "hoy" if cuando.date() == date.today() else cuando.strftime("%d/%m/%Y")
+        zona.caption(f"💾 Los cambios se guardan solos · último guardado: {dia} a las {cuando:%H:%M:%S}")
 
 
 def _app_vacia() -> bool:
@@ -675,6 +681,39 @@ def _filas_lotes(producto: Producto) -> list[dict]:
 
 # ---------- Página: Dashboard ----------
 
+def _dashboard_hoy(serv: RegistroServicios) -> None:
+    """Lo primero del Dashboard: servicios pasados sin completar, los de hoy y el dinero del mes."""
+    for s in serv.pasados_sin_completar():
+        st.warning(f"⚠️ El servicio **{_texto_servicio(s)}** ya pasó y sigue **{s.estado}**: complétalo (o cancélalo) "
+                   "en Servicios. Mientras tanto no se descuenta su stock ni cuenta su coste real.")
+
+    hoy = serv.servicios_de_hoy()
+    st.subheader(f"📅 Hoy, {date.today().strftime('%d/%m/%Y')}")
+    if not hoy:
+        st.caption("No hay servicios hoy.")
+    for s in hoy:
+        donde = " · ".join(x for x in (s.cliente, s.lugar) if x)
+        hecho = " · ✅ completado" if s.estado == "completado" else (" · ✔️ confirmado" if s.estado == "confirmado" else "")
+        st.markdown(f"**{s.hora.strftime('%H:%M')}** · {s.comensales} comensales · {s.menu}"
+                    + (f" · {donde}" if donde else "") + hecho)
+
+    desde, hasta = rango_desde_periodo("este mes")
+    r = resumen_periodo(serv.servicios, st.session_state.inventario, st.session_state.recetario,
+                        st.session_state.registro_gastos, st.session_state.registro_material, desde, hasta)
+    st.subheader(f"💶 {NOMBRES_MESES[date.today().month].capitalize()}")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Facturado", f"{_eur(r['facturado'])} €", help="Lo cobrado (sin IVA) de los servicios completados este mes.")
+    m2.metric("Margen", f"{_eur(r['margen'])} €",
+              help="Cobro menos coste de los servicios completados este mes que tienen precio de cobro.")
+    m3.metric("Compras", f"{_eur(r['compras'])} €", help="Lo pagado este mes en compras de productos (con IVA).")
+    m4.metric("Gastos", f"{_eur(r['gastos'])} €", help="Gasolina, personal, alquileres... apuntados este mes.")
+    detalle = f"{r['servicios']} servicio(s) completado(s) este mes"
+    if r["sin_cobro"]:
+        detalle += f", {r['sin_cobro']} sin precio de cobro (no cuentan en facturado ni margen)"
+    st.caption(detalle + ".")
+    st.divider()
+
+
 def pagina_dashboard() -> None:
     st.header("📊 Dashboard")
     inv = st.session_state.inventario
@@ -688,6 +727,8 @@ def pagina_dashboard() -> None:
     tandas_caducadas = inv.elaboraciones.caducadas()
     tandas_proximas = inv.elaboraciones.proximas_a_caducar()
     pendientes_compra = comp.items_pendientes()
+
+    _dashboard_hoy(serv)
 
     col1, col2, col3, col4 = st.columns(4)
 
