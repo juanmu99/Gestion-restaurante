@@ -21,7 +21,7 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 
-from inventario import Inventario
+from inventario import Inventario, nombre_iva
 from servicios import RegistroServicios
 from compras import GestorCompras
 from gastos import RegistroGastos, resumen_servicio
@@ -46,9 +46,10 @@ def _ajustar_ancho_columnas(hoja, ancho: int = 18) -> None:
 
 def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
     hoja = wb.create_sheet("Inventario")
-    columnas = ["Nombre", "Categoría", "Stock", "Unidad", "Precio medio (€)",
-                "Valor total (€)", "Proveedor habitual", "Stock mínimo", "Próxima caducidad",
-                "Tipo", "Peso medio por unidad en bruto (kg)", "Lotes", "Clase"]
+    criterio = "con IVA" if inventario.costes_con_iva else "sin IVA"
+    columnas = ["Nombre", "Categoría", "Stock", "Unidad", f"Precio medio (€, {criterio})",
+                f"Valor total (€, {criterio})", "Proveedor habitual", "Stock mínimo", "Próxima caducidad",
+                "Tipo", "Peso medio por unidad en bruto (kg)", "Lotes", "Clase", "IVA"]
     _escribir_cabecera(hoja, columnas)
 
     fila = 2
@@ -69,6 +70,7 @@ def _hoja_inventario(wb: Workbook, inventario: Inventario) -> None:
         hoja.cell(row=fila, column=12, value=len(producto.lotes)).font = Font(name=FUENTE)
         clase = producto.NOMBRES_TIPOS[producto.tipo]
         hoja.cell(row=fila, column=13, value=clase).font = Font(name=FUENTE)
+        hoja.cell(row=fila, column=14, value=nombre_iva(producto.iva)).font = Font(name=FUENTE)
         fila += 1
 
     if fila > 2:
@@ -192,12 +194,14 @@ def _hoja_bases(wb: Workbook, inventario: Inventario) -> None:
 def _hoja_precios(wb: Workbook, inventario: Inventario) -> None:
     """Historial de precios: cada compra con su proveedor y precio por unidad."""
     hoja = wb.create_sheet("Historial de precios")
-    _escribir_cabecera(hoja, ["Fecha", "Producto", "Proveedor", "Cantidad", "Unidad", "Precio por unidad (€)",
-                              "Total (€)", "Lote", "Origen"])
+    _escribir_cabecera(hoja, ["Fecha", "Producto", "Proveedor", "Cantidad", "Unidad", "Precio sin IVA (€)",
+                              "IVA (%)", "Precio con IVA (€)", "Total sin IVA (€)", "IVA pagado (€)",
+                              "Total con IVA (€)", "Lote", "Origen"])
     fila = 2
     for p in sorted(inventario.historial_precios, key=lambda p: (p.producto, p.fecha)):
-        valores = [p.fecha.strftime("%d/%m/%Y"), p.producto, p.proveedor, p.cantidad, p.unidad, p.precio_unitario,
-                   f"=D{fila}*F{fila}", p.lote_id or "—", "Stock inicial" if p.origen == "inicial" else "Compra"]
+        valores = [p.fecha.strftime("%d/%m/%Y"), p.producto, p.proveedor, p.cantidad, p.unidad, round(p.precio_base, 4),
+                   p.iva, f"=F{fila}*(1+G{fila}/100)", f"=D{fila}*F{fila}", f"=I{fila}*G{fila}/100",
+                   f"=I{fila}+J{fila}", p.lote_id or "—", "Stock inicial" if p.origen == "inicial" else "Compra"]
         for columna, valor in enumerate(valores, start=1):
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
         fila += 1

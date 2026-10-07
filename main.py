@@ -27,6 +27,7 @@ from typing import Optional
 # nombre que uno de nuestros módulos, se usaría la nuestra y no la otra.
 sys.path.insert(0, str(Path(__file__).parent / "modulos"))
 
+from inventario import TIPOS_IVA, nombre_iva, precio_a_coste
 from inventario import Inventario, PrecioCompra, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
 from recetario import Recetario, Receta, Menu
@@ -300,12 +301,37 @@ def mostrar_lotes(producto, lotes: Optional[list] = None) -> None:
         print(f"   {lote.descripcion(producto.unidad)}{aviso}")
 
 
-def pedir_precio(unidad: str, cantidad: float, referencia: Optional[float] = None) -> Optional[float]:
+def pedir_iva(actual: Optional[float] = None) -> Optional[float]:
+    """Tipo de IVA de un producto (21, 10, 4 o sin IVA). Con `actual`, vacío = no cambiar."""
+    opciones = {"21": 21.0, "10": 10.0, "4": 4.0, "0": 0.0}
+    pista = f" [{nombre_iva(actual)}]" if actual is not None else " [21]"
+    while True:
+        texto = pedir_texto(f"IVA: 21 (general), 10 (reducido), 4 (superreducido) o 0 (sin IVA){pista}: ")
+        if texto == "":
+            return actual if actual is not None else 21.0
+        if texto in opciones:
+            return opciones[texto]
+        print("⚠️  Escribe 21, 10, 4 o 0.")
+
+
+def pedir_precio(unidad: str, cantidad: float, referencia: Optional[float] = None, iva: float = 0.0) -> Optional[float]:
     """
     Precio POR UNIDAD de una compra. Se puede escribir por unidad o el total
     pagado (terminado en 't': "15.60t"), y entonces se calcula por unidad.
-    Vacío = el de referencia (si lo hay).
+    Vacío = el de referencia (si lo hay). Si el producto lleva IVA, se
+    pregunta si el precio escrito lo incluye (y se separa).
     """
+    precio = _pedir_precio_escrito(unidad, cantidad, referencia)
+    if precio is None or iva <= 0:
+        return precio
+    incluye = pedir_si_no(f"¿Ese precio incluye el IVA ({iva:g} %)?")
+    coste = round(precio_a_coste(precio, incluye, iva), 6)
+    criterio = "con IVA" if inventario.costes_con_iva else "sin IVA"
+    print(f"   Coste para el programa ({criterio}): {coste:g} €")
+    return coste
+
+
+def _pedir_precio_escrito(unidad: str, cantidad: float, referencia: Optional[float] = None) -> Optional[float]:
     unidad_txt = "unidad" if unidad == "unidades" else unidad
     pista = f" [{referencia} €]" if referencia is not None else ""
     while True:
@@ -333,7 +359,7 @@ def pedir_precio(unidad: str, cantidad: float, referencia: Optional[float] = Non
 
 def pedir_datos_entrada(producto, cantidad: float = 0) -> dict:
     """Pide los datos de un lote NUEVO (compra): precio, proveedor, caducidad y, si hace falta, peso por unidad."""
-    precio = pedir_precio(producto.unidad, cantidad, producto.precio_referencia)
+    precio = pedir_precio(producto.unidad, cantidad, producto.precio_referencia, producto.iva)
     proveedor = pedir_texto_no_numerico_opcional(f"Proveedor de este lote [{producto.proveedor}]: ")
     fecha = None
     if not producto.es_consumible() and pedir_si_no("¿Este lote tiene fecha de caducidad?"):
@@ -379,7 +405,8 @@ def menu_inventario():
                 tiene_merma = pedir_si_no("¿Es un producto con merma (se limpia o despieza antes de usarse)?")
                 if tiene_merma and unidad == "unidades":
                     peso_unitario = pedir_peso_kg("Peso en bruto de cada unidad")
-            precio = pedir_precio(unidad, stock) or 0.0
+            iva = pedir_iva()
+            precio = pedir_precio(unidad, stock, iva=iva) or 0.0
             proveedor = pedir_texto_no_numerico("Proveedor habitual: ")
             stock_minimo = pedir_numero("Stock mínimo: ")
             fecha_caducidad = None
@@ -388,7 +415,7 @@ def menu_inventario():
             try:
                 inventario.agregar_producto(Producto(
                     nombre, categoria, stock, unidad, precio, proveedor, stock_minimo, fecha_caducidad,
-                    tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo,
+                    tiene_merma=tiene_merma, peso_unitario=peso_unitario, tipo=tipo, iva=iva,
                 ))
             except ValueError as e:
                 print(f"❌ {e}")
@@ -463,6 +490,7 @@ def menu_inventario():
                 categoria = pedir_texto_no_numerico_opcional(f"Nueva categoría [{producto.categoria}]: ")
                 proveedor = pedir_texto_no_numerico_opcional(f"Nuevo proveedor habitual [{producto.proveedor}]: ")
                 stock_minimo = pedir_numero_opcional(f"Nuevo stock mínimo [{producto.stock_minimo}]: ")
+                iva_nuevo = pedir_iva(producto.iva)
 
                 tiene_merma = None
                 peso_unitario = None
@@ -503,6 +531,7 @@ def menu_inventario():
                         tiene_merma=tiene_merma,
                         peso_unitario=peso_unitario,
                         tipo=tipo,
+                        iva=iva_nuevo,
                     )
                     if exito and lote is not None:
                         cambia = (correccion["precio_unitario"] is not None
@@ -590,6 +619,14 @@ def accion_lotes() -> None:
     if pedir_si_no("¿Quieres desechar alguno entero (desperdicio)?"):
         lote = pedir_lote(producto, "Número de lote", sugerir=False, mostrar=False)
         inventario.desechar_lote(nombre, lote.id)
+
+
+def accion_ajustes() -> None:
+    actual = "CON IVA (el negocio no lo deduce)" if inventario.costes_con_iva else "SIN IVA (el negocio deduce el IVA)"
+    print(f"Ahora los costes se calculan {actual}. El precio de cobro de los servicios se apunta sin IVA.")
+    eleccion = pedir_opcion("¿Cómo se calculan los costes?", ("sin", "con"))
+    inventario.costes_con_iva = eleccion == "con"
+    print(f"✅ Los costes se calculan {eleccion} IVA.")
 
 
 def accion_historial_precios() -> None:
@@ -913,7 +950,9 @@ def pedir_costes_adicionales(servicio: Servicio) -> None:
             if not producto.es_consumible() and comprada > usada and pedir_si_no("  ¿Lo que sobra tiene fecha de caducidad?"):
                 fecha = pedir_fecha("  Fecha de caducidad")
             try:
-                inventario.compra_para_servicio(nombre, comprada, usada, importe, servicio.id, proveedor, fecha)
+                incluye = inventario.buscar_producto(nombre).iva > 0 and pedir_si_no("¿El importe incluye IVA?")
+                inventario.compra_para_servicio(nombre, comprada, usada, importe, servicio.id, proveedor, fecha,
+                                                importe_incluye_iva=incluye)
             except ValueError as e:
                 print(f"❌ {e}")
             continue
@@ -1556,7 +1595,7 @@ def menu_metricas():
 
 def pedir_precio_cobro(comensales: int) -> Optional[float]:
     """Precio de cobro de un servicio: opcional. Devuelve el total del servicio, o None si no se indica."""
-    precio = pedir_numero_opcional("Precio de cobro en € (opcional, vacío para no indicarlo): ")
+    precio = pedir_numero_opcional("Precio de cobro en €, sin IVA (opcional, vacío para no indicarlo): ")
     if not precio:
         return None
     forma = pedir_opcion("¿Ese precio es el total o por comensal?", ("total", "comensal"))
@@ -1860,6 +1899,7 @@ def menu_principal():
         print("12. Gastos y rentabilidad")
         print("13. Material (vajilla, cubertería...)")
         print("14. Historial de servicios")
+        print("15. Ajustes (IVA)")
         print("0. Salir")
         opcion = pedir_texto("Elige una opción: ")
 
@@ -1897,6 +1937,9 @@ def menu_principal():
             menu_material()
         elif opcion == "14":
             menu_historial()
+        elif opcion == "15":
+            accion_ajustes()
+            pausa()
         elif opcion == "0":
             respuesta = pedir_texto("¿Guardar sesión antes de salir? (s/n): ").strip().lower()
             if respuesta == "s":

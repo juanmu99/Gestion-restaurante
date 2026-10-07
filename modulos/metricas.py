@@ -162,6 +162,12 @@ class Metricas:
             for tipo in ("alimento", "consumible", "mantenimiento")
         }
 
+    def iva_soportado(self, fecha_inicio: date, fecha_fin: date) -> float:
+        """El IVA pagado en las compras del rango (lo que se puede deducir si el negocio lo deduce)."""
+        return round(sum(
+            m.cantidad * m.precio_base * m.iva / 100 for m in self._en_rango(fecha_inicio, fecha_fin) if m.es_compra()
+        ), 2)
+
     def valor_desperdiciado_total(self, fecha_inicio: date, fecha_fin: date, tipo: Optional[str] = None) -> float:
         """
         Valor económico estimado de TODO lo desperdiciado en el rango dado:

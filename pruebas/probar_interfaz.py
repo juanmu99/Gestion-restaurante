@@ -199,6 +199,33 @@ def prueba_precios(at: AppTest) -> None:
               and salida.precio_unitario == 3.5,
               "Desde el historial de precios se corrige una compra y lo que ya salió de ella")
 
+    # (D) IVA: producto al 4 % con el precio escrito con IVA incluido
+    v = at.session_state["add_version"]
+    at.text_input(key=f"add_nombre_{v}").input("Huevos camperos")
+    at.text_input(key=f"add_categoria_{v}").input("Huevos")
+    at.number_input(key=f"add_stock_{v}").set_value(30.0)
+    at.selectbox(key=f"add_unidad_{v}").select("unidades")
+    at.selectbox(key=f"add_iva_{v}").select("4 % (superreducido)").run()
+    at.radio(key=f"add_con_iva_{v}").set_value("Con IVA incluido (4 %)").run()
+    at.number_input(key=f"add_precio_{v}").set_value(0.26).run()
+    comprobar(any("Sin IVA: 0.25 €" in t for t in textos(at.caption)),
+              "Al escribir el precio con IVA se ve el desglose (0,26 € con IVA = 0,25 € + IVA)")
+    at.text_input(key=f"add_proveedor_{v}").input("Granja Sol")
+    at.button(key=f"add_boton_{v}").click().run()
+    huevos = inv.buscar_producto("Huevos camperos")
+    comprobar(sin_excepciones(at, "producto con IVA") and huevos is not None and huevos.iva == 4
+              and abs(huevos.lotes[0].precio_base - 0.25) < 1e-9 and abs(huevos.precio_unitario - 0.25) < 1e-9,
+              "El producto se guarda con su IVA (4 %) y su precio sin IVA (0,25 €)")
+
+    at.sidebar.radio(key="ajuste_iva").set_value("Con IVA (el negocio no lo deduce)").run()
+    comprobar(inv.costes_con_iva and abs(huevos.precio_unitario - 0.26) < 1e-9,
+              "En Ajustes se elige calcular los costes con IVA (los huevos pasan a costar 0,26 €)")
+    for pagina in ("Dashboard", "Servicios", "Métricas", "Inventario"):
+        ir_a(at, pagina)
+        comprobar(sin_excepciones(at, f"{pagina} con IVA") and not at.error, f"'{pagina}' funciona con los costes con IVA")
+    at.sidebar.radio(key="ajuste_iva").set_value("Sin IVA (el negocio deduce el IVA)").run()
+    comprobar(not inv.costes_con_iva and abs(huevos.precio_unitario - 0.25) < 1e-9, "...y volver a calcularlos sin IVA")
+
 
 @prueba("Añadir productos")
 def prueba_anadir(at: AppTest) -> None:

@@ -55,7 +55,68 @@ def convertir(cantidad: float, desde: str, hasta: str) -> float:
     return cantidad * factor
 
 
-class MovimientoStock:
+# ---------- IVA ----------
+# Cada precio se guarda SIN IVA (la "base") junto a su tipo de IVA. Los
+# costes (servicios, rentabilidad, Métricas...) se calculan con o sin IVA
+# según este ajuste del negocio (Inventario.costes_con_iva):
+#   - False: el negocio deduce el IVA de sus compras -> el coste real es sin IVA.
+#   - True: no lo deduce (p. ej. recargo de equivalencia) -> el coste incluye el IVA.
+AJUSTES = {"costes_con_iva": False}
+
+# Tipos de IVA de España para comprar: general, reducido, superreducido y sin IVA.
+TIPOS_IVA = {"21 % (general)": 21.0, "10 % (reducido)": 10.0, "4 % (superreducido)": 4.0, "Sin IVA": 0.0}
+IVA_POR_DEFECTO = 21.0
+
+
+def nombre_iva(iva: float) -> str:
+    """'21 % (general)', 'Sin IVA'... (o '7 %' si es un tipo que no está en la lista)."""
+    return next((nombre for nombre, valor in TIPOS_IVA.items() if abs(valor - iva) < 1e-9), f"{iva:g} %")
+
+
+def coste_desde_base(base: float, iva: float) -> float:
+    """El coste que cuenta para el negocio (con o sin IVA, según el ajuste) a partir del precio sin IVA."""
+    return base * (1 + iva / 100) if AJUSTES["costes_con_iva"] else base
+
+
+def base_desde_coste(coste: float, iva: float) -> float:
+    """El camino inverso de coste_desde_base()."""
+    return coste / (1 + iva / 100) if AJUSTES["costes_con_iva"] else coste
+
+
+def precio_a_coste(precio: float, incluye_iva: bool, iva: float) -> float:
+    """
+    Convierte un precio tal y como se apunta (con o sin IVA, el de un ticket
+    o una factura) en el coste que usa el programa según el ajuste.
+    """
+    base = precio / (1 + iva / 100) if incluye_iva else precio
+    return coste_desde_base(base, iva)
+
+
+class ConPrecio:
+    """
+    Precio guardado SIN IVA (`precio_base`) y su tipo de IVA (`iva`, en %).
+    `precio_unitario` es el COSTE según el ajuste del negocio (con o sin
+    IVA): es el que usan todos los cálculos. Al asignarlo, se interpreta
+    con el mismo criterio.
+    """
+
+    iva: float = 0.0
+    precio_base: float = 0.0
+
+    @property
+    def precio_unitario(self) -> float:
+        return round(coste_desde_base(self.precio_base, self.iva), 6)
+
+    @precio_unitario.setter
+    def precio_unitario(self, valor: float) -> None:
+        self.precio_base = base_desde_coste(valor, self.iva)
+
+    @property
+    def precio_con_iva(self) -> float:
+        return round(self.precio_base * (1 + self.iva / 100), 6)
+
+
+class MovimientoStock(ConPrecio):
     """
     Registra UN movimiento de stock (una entrada o una salida) para poder
     consultar el historial más adelante: cuánto se ha consumido, cuánto
@@ -99,6 +160,8 @@ class MovimientoStock:
         lote: Optional[str] = None,
         tipo_producto: str = "alimento",
         servicio_id: Optional[int] = None,
+        iva: float = 0.0,
+        precio_base: Optional[float] = None,
     ):
         if tipo not in ("entrada", "salida"):
             raise ValueError("tipo debe ser 'entrada' o 'salida'")
@@ -116,7 +179,12 @@ class MovimientoStock:
         self.tipo = tipo
         self.cantidad = cantidad
         self.unidad = unidad
-        self.precio_unitario = precio_unitario
+        # El IVA de la compra de la que viene (0 si no aplica). Ver ConPrecio.
+        self.iva = iva
+        if precio_base is not None:
+            self.precio_base = precio_base
+        else:
+            self.precio_unitario = precio_unitario
         self.fecha = fecha or date.today()
         self.motivo = motivo
         # Los movimientos anteriores a los lotes no tienen lote (None).
@@ -153,7 +221,8 @@ class MovimientoStock:
             "tipo": self.tipo,
             "cantidad": self.cantidad,
             "unidad": self.unidad,
-            "precio_unitario": self.precio_unitario,
+            "precio_base": self.precio_base,
+            "iva": self.iva,
             "fecha": self.fecha.isoformat(),
             "motivo": self.motivo,
             "lote_id": self.lote_id,
@@ -170,7 +239,10 @@ class MovimientoStock:
             tipo=datos["tipo"],
             cantidad=datos["cantidad"],
             unidad=datos["unidad"],
-            precio_unitario=datos["precio_unitario"],
+            precio_unitario=0,
+            # Sesiones de antes del IVA: su precio se toma tal cual, sin IVA aparte.
+            precio_base=datos.get("precio_base", datos.get("precio_unitario", 0)),
+            iva=datos.get("iva", 0.0),
             fecha=date.fromisoformat(datos["fecha"]),
             motivo=datos.get("motivo"),
             lote_id=datos.get("lote_id"),
@@ -209,7 +281,7 @@ class ConNotas:
         self.notas_fecha = date.fromisoformat(fecha) if fecha else None
 
 
-class Lote:
+class Lote(ConPrecio):
     """
     UNA partida concreta de un producto: lo que entró en una compra (o salió
     de una limpieza) en una fecha, de un proveedor, a un precio y con una
@@ -239,6 +311,8 @@ class Lote:
         fecha_caducidad: Optional[date] = None,
         peso_unitario: Optional[float] = None,
         procedencia: str = "compra",
+        iva: float = 0.0,
+        precio_base: Optional[float] = None,
     ):
         if cantidad < 0:
             raise ValueError("La cantidad de un lote no puede ser negativa.")
@@ -248,7 +322,13 @@ class Lote:
             raise ValueError(f"Procedencia no válida: {procedencia}")
         self.id = id
         self.cantidad = cantidad
-        self.precio_unitario = precio_unitario
+        # Precio sin IVA + tipo de IVA de esta compra (ver ConPrecio). Lo
+        # que sale de una limpieza o una elaboración no lleva IVA propio (0).
+        self.iva = iva
+        if precio_base is not None:
+            self.precio_base = precio_base
+        else:
+            self.precio_unitario = precio_unitario
         self.proveedor = proveedor
         self.fecha_entrada = fecha_entrada or date.today()
         self.fecha_caducidad = fecha_caducidad
@@ -288,7 +368,8 @@ class Lote:
         return {
             "id": self.id,
             "cantidad": self.cantidad,
-            "precio_unitario": self.precio_unitario,
+            "precio_base": self.precio_base,
+            "iva": self.iva,
             "proveedor": self.proveedor,
             "fecha_entrada": self.fecha_entrada.isoformat(),
             "fecha_caducidad": self.fecha_caducidad.isoformat() if self.fecha_caducidad else None,
@@ -301,7 +382,9 @@ class Lote:
         return cls(
             id=datos["id"],
             cantidad=datos["cantidad"],
-            precio_unitario=datos["precio_unitario"],
+            precio_unitario=0,
+            precio_base=datos.get("precio_base", datos.get("precio_unitario", 0)),
+            iva=datos.get("iva", 0.0),
             proveedor=datos["proveedor"],
             fecha_entrada=date.fromisoformat(datos["fecha_entrada"]),
             fecha_caducidad=date.fromisoformat(datos["fecha_caducidad"]) if datos.get("fecha_caducidad") else None,
@@ -369,6 +452,7 @@ class Producto(ConNotas):
         tipo: str = "alimento",
         formula: Optional[dict] = None,
         vida_util_dias: Optional[int] = None,
+        iva: float = IVA_POR_DEFECTO,
     ):
         """
         `stock`, `precio_unitario`, `fecha_caducidad` y `peso_unitario` son
@@ -423,8 +507,13 @@ class Producto(ConNotas):
                 raise ValueError("Una elaboración base es un alimento sin merma que no sale de una limpieza.")
         if vida_util_dias is not None and vida_util_dias < 0:
             raise ValueError("La vida útil no puede ser negativa.")
+        if iva < 0:
+            raise ValueError("El IVA no puede ser negativo.")
 
         self.nombre = nombre
+        # Tipo de IVA habitual de este producto (21, 10, 4 o 0 = sin IVA):
+        # el que se aplica a sus compras. Cada lote guarda el suyo.
+        self.iva = iva
         self.tipo = tipo
         self.categoria = categoria
         self.unidad = unidad  # kg, litros, unidades, etc.
@@ -449,6 +538,15 @@ class Producto(ConNotas):
 
         if lotes is None and stock > 0:
             self.nuevo_lote(stock, precio_unitario, proveedor, fecha_caducidad, peso_unitario, "inicial")
+
+    @property
+    def precio_referencia(self) -> float:
+        """Precio de la última compra (coste según el ajuste de IVA). Ver ConPrecio."""
+        return round(coste_desde_base(self.precio_referencia_base, self.iva), 6)
+
+    @precio_referencia.setter
+    def precio_referencia(self, valor: float) -> None:
+        self.precio_referencia_base = base_desde_coste(valor, self.iva)
 
     def es_consumible(self) -> bool:
         return self.tipo == "consumible"
@@ -521,6 +619,9 @@ class Producto(ConNotas):
             fecha_caducidad=None if self.es_consumible() else fecha_caducidad,
             peso_unitario=(peso_unitario or self.peso_unitario_referencia) if self.unidad == "unidades" else None,
             procedencia=procedencia,
+            # Solo lo comprado lleva IVA: lo que sale de limpiar o elaborar ya
+            # tiene su coste calculado a partir de sus ingredientes.
+            iva=self.iva if procedencia in ("compra", "inicial") else 0.0,
         )
         self.siguiente_lote += 1
         self.lotes.append(lote)
@@ -621,7 +722,8 @@ class Producto(ConNotas):
             "tipo": self.tipo,
             "categoria": self.categoria,
             "unidad": self.unidad,
-            "precio_referencia": self.precio_referencia,
+            "precio_referencia_base": self.precio_referencia_base,
+            "iva": self.iva,
             "proveedor": self.proveedor,
             "stock_minimo": self.stock_minimo,
             "tiene_merma": self.tiene_merma,
@@ -664,6 +766,7 @@ class Producto(ConNotas):
             tipo=datos.get("tipo", "alimento"),
             formula=datos.get("formula"),
             vida_util_dias=datos.get("vida_util_dias"),
+            iva=datos.get("iva", IVA_POR_DEFECTO),
         )
         if "lotes" in datos:
             producto = cls(
@@ -681,6 +784,14 @@ class Producto(ConNotas):
                 fecha_caducidad=date.fromisoformat(fecha) if fecha else None,
                 **comun,
             )
+        # Precio de referencia guardado sin IVA (las sesiones de antes del IVA lo tenían tal cual).
+        producto.precio_referencia_base = datos.get(
+            "precio_referencia_base", datos.get("precio_referencia", datos.get("precio_unitario", 0))
+        )
+        if "lotes" not in datos:
+            for lote in producto.lotes:  # sesiones muy antiguas: el precio, tal cual y sin IVA aparte
+                lote.iva = 0.0
+                lote.precio_base = datos["precio_unitario"]
         producto._cargar_notas(datos)
         return producto
 
@@ -794,7 +905,7 @@ class Limpieza:
         )
 
 
-class PrecioCompra:
+class PrecioCompra(ConPrecio):
     """
     UNA compra en el HISTORIAL DE PRECIOS: qué se compró, cuándo, a quién,
     cuánto y a qué precio por unidad (kg, litro, unidad...). Se apunta en
@@ -805,14 +916,18 @@ class PrecioCompra:
 
     def __init__(
         self, producto: str, fecha: date, proveedor: str, cantidad: float, unidad: str, precio_unitario: float,
-        lote_id: Optional[int] = None, origen: str = "compra",
+        lote_id: Optional[int] = None, origen: str = "compra", iva: float = 0.0, precio_base: Optional[float] = None,
     ):
         self.producto = producto
         self.fecha = fecha
         self.proveedor = proveedor
         self.cantidad = cantidad
         self.unidad = unidad
-        self.precio_unitario = precio_unitario
+        self.iva = iva
+        if precio_base is not None:
+            self.precio_base = precio_base
+        else:
+            self.precio_unitario = precio_unitario
         self.lote_id = lote_id
         self.origen = origen  # "compra" o "inicial" (stock con el que se dio de alta)
 
@@ -823,7 +938,7 @@ class PrecioCompra:
     def to_dict(self) -> dict:
         return {
             "producto": self.producto, "fecha": self.fecha.isoformat(), "proveedor": self.proveedor,
-            "cantidad": self.cantidad, "unidad": self.unidad, "precio_unitario": self.precio_unitario,
+            "cantidad": self.cantidad, "unidad": self.unidad, "precio_base": self.precio_base, "iva": self.iva,
             "lote_id": self.lote_id, "origen": self.origen,
         }
 
@@ -831,7 +946,8 @@ class PrecioCompra:
     def from_dict(cls, datos: dict) -> "PrecioCompra":
         return cls(
             datos["producto"], date.fromisoformat(datos["fecha"]), datos["proveedor"], datos["cantidad"],
-            datos["unidad"], datos["precio_unitario"], datos.get("lote_id"), datos.get("origen", "compra"),
+            datos["unidad"], 0, datos.get("lote_id"), datos.get("origen", "compra"), datos.get("iva", 0.0),
+            precio_base=datos.get("precio_base", datos.get("precio_unitario", 0)),
         )
 
 
@@ -859,6 +975,15 @@ class Inventario:
         # Historial de precios: una fila por compra (ver PrecioCompra).
         self.historial_precios: list[PrecioCompra] = []
 
+    @property
+    def costes_con_iva(self) -> bool:
+        """Ajuste del negocio: ¿los costes incluyen el IVA de las compras? (ver AJUSTES)."""
+        return AJUSTES["costes_con_iva"]
+
+    @costes_con_iva.setter
+    def costes_con_iva(self, valor: bool) -> None:
+        AJUSTES["costes_con_iva"] = bool(valor)
+
     def agregar_producto(self, producto: Producto) -> None:
         if producto.nombre in self.productos:
             print(f"⚠️  Ya existe '{producto.nombre}'. Registra una entrada para añadir un lote nuevo.")
@@ -874,8 +999,8 @@ class Inventario:
 
     def _apuntar_precio(self, producto: Producto, lote: Lote, cantidad: float, origen: str = "compra") -> None:
         self.historial_precios.append(PrecioCompra(
-            producto.nombre, lote.fecha_entrada, lote.proveedor, cantidad, producto.unidad, lote.precio_unitario,
-            lote.id, origen,
+            producto.nombre, lote.fecha_entrada, lote.proveedor, cantidad, producto.unidad, 0,
+            lote.id, origen, lote.iva, precio_base=lote.precio_base,
         ))
 
     def precios_de(self, nombre: str) -> list[PrecioCompra]:
@@ -957,7 +1082,9 @@ class Inventario:
             tipo=tipo,
             cantidad=cantidad,
             unidad=producto.unidad,
-            precio_unitario=lote.precio_unitario,
+            precio_unitario=0,
+            precio_base=lote.precio_base,
+            iva=lote.iva,
             motivo=motivo,
             lote_id=lote.id,
             lote=lote.etiqueta(),
@@ -1099,6 +1226,7 @@ class Inventario:
         servicio_id: int,
         proveedor: Optional[str] = None,
         fecha_caducidad: Optional[date] = None,
+        importe_incluye_iva: bool = False,
     ) -> Lote:
         """
         Una compra NO PREVISTA hecha para un servicio (ej: 5 kg de tomate de
@@ -1122,8 +1250,9 @@ class Inventario:
         if proveedor is not None and proveedor.strip() and _es_numero(proveedor.strip()):
             raise ValueError("El proveedor debe ser texto descriptivo.")
 
+        precio = precio_a_coste(importe_total / comprada, importe_incluye_iva, producto.iva)
         lote = self.entrada_stock(
-            nombre, comprada, precio_unitario=round(importe_total / comprada, 4),
+            nombre, comprada, precio_unitario=round(precio, 4),
             proveedor=proveedor, fecha_caducidad=fecha_caducidad,
         )
         if usada > 0:
@@ -1535,6 +1664,7 @@ class Inventario:
         tiene_merma: Optional[bool] = None,
         peso_unitario: Optional[float] = None,
         tipo: Optional[str] = None,
+        iva: Optional[float] = None,
     ) -> bool:
         """
         Corrige los datos GENERALES de un producto ya existente: nombre,
@@ -1571,6 +1701,8 @@ class Inventario:
             raise ValueError("La categoría debe ser texto descriptivo, no puede estar vacía ni ser un número")
         if not proveedor_final.strip() or _es_numero(proveedor_final):
             raise ValueError("El proveedor debe ser texto descriptivo, no puede estar vacío ni ser un número")
+        if iva is not None and iva < 0:
+            raise ValueError("El IVA no puede ser negativo.")
         tipo_final = tipo if tipo is not None else producto.tipo
         if tipo_final not in Producto.TIPOS:
             raise ValueError(f"Tipo de producto no válido: '{tipo_final}'.")
@@ -1614,6 +1746,11 @@ class Inventario:
         producto.proveedor = proveedor_final
         if stock_minimo is not None:
             producto.stock_minimo = stock_minimo
+        if iva is not None:
+            # Solo para las compras de aquí en adelante: cada lote ya comprado guarda su IVA.
+            referencia = producto.precio_referencia_base
+            producto.iva = iva
+            producto.precio_referencia_base = referencia
 
         print(f"✏️  Producto actualizado: {producto}")
         return True
@@ -1806,11 +1943,14 @@ class Inventario:
             "limpiezas": [l.to_dict() for l in self.limpiezas],
             "elaboraciones": self.elaboraciones.to_dict(),
             "historial_precios": [p.to_dict() for p in self.historial_precios],
+            "costes_con_iva": self.costes_con_iva,
         }
 
     @classmethod
     def from_dict(cls, datos: dict) -> "Inventario":
         inventario = cls()
+        # El ajuste va PRIMERO: los precios se interpretan según él al cargarlos.
+        inventario.costes_con_iva = datos.get("costes_con_iva", False)
         for datos_producto in datos["productos"]:
             producto = Producto.from_dict(datos_producto)
             inventario.productos[producto.nombre] = producto
@@ -1833,7 +1973,8 @@ class Inventario:
                     producto = inventario.productos.get(m.producto_nombre)
                     proveedor = proveedor or (producto.proveedor if producto else "")
                     inventario.historial_precios.append(PrecioCompra(
-                        m.producto_nombre, m.fecha, proveedor, m.cantidad, m.unidad, m.precio_unitario, m.lote_id,
+                        m.producto_nombre, m.fecha, proveedor, m.cantidad, m.unidad, 0, m.lote_id,
+                        iva=m.iva, precio_base=m.precio_base,
                     ))
         return inventario
 
