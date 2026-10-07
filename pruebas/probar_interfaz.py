@@ -859,7 +859,7 @@ def prueba_gastos(at: AppTest) -> None:
     ir_a(at, "Servicios")
     por_etiqueta(at.number_input, "Comensales").set_value(10)
     por_etiqueta(at.text_input, "Nombre del menú").input("Menú del día")
-    por_etiqueta(at.number_input, "Precio de cobro (€, opcional)").set_value(25.0)
+    por_etiqueta(at.number_input, "Precio de cobro (€, sin IVA, opcional)").set_value(25.0)
     por_etiqueta(at.radio, "El precio es").set_value("Por comensal")
     por_etiqueta(at.text_input, "Cliente (opcional)").input("Familia García")
     por_etiqueta(at.text_input, "Lugar (opcional)").input("Finca Los Olivos")
@@ -871,7 +871,7 @@ def prueba_gastos(at: AppTest) -> None:
 
     # Sin precio: es opcional (en la app el formulario se vacía solo; el
     # simulador de pruebas conserva lo escrito, así que se pone a 0 a mano)
-    por_etiqueta(at.number_input, "Precio de cobro (€, opcional)").set_value(0.0)
+    por_etiqueta(at.number_input, "Precio de cobro (€, sin IVA, opcional)").set_value(0.0)
     por_etiqueta(at.text_input, "Cliente (opcional)").input("")
     por_etiqueta(at.text_input, "Lugar (opcional)").input("")
     por_etiqueta(at.number_input, "Comensales").set_value(4)
