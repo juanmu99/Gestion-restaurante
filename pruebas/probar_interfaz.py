@@ -1552,6 +1552,35 @@ def prueba_mejora3(at: AppTest) -> None:
               "Se puede poner vida útil 0 (el mismo día), distinta de 'sin indicar'")
 
 
+@prueba("Preparar una base desde el Recetario y guía de primer uso (mejora 5)")
+def prueba_mejora5(at: AppTest) -> None:
+    import os
+    import tempfile
+
+    ir_a(at, "Recetario")
+    at.button(key="ir_preparar_Sofrito").click().run()
+    v = at.session_state["base_version"]
+    comprobar(sin_excepciones(at, "ir a preparar base") and at.session_state["pagina_nav"] == "Inventario"
+              and at.selectbox(key=f"base_preparar_{v}").value == "Sofrito",
+              "'Preparar' en el Recetario lleva a Inventario con la base ya elegida")
+
+    with tempfile.TemporaryDirectory() as carpeta:
+        anterior = os.environ.get("GESTION_RESTAURANTE_DATOS")
+        os.environ["GESTION_RESTAURANTE_DATOS"] = carpeta
+        try:
+            vacia = nueva_app()
+            comprobar(sin_excepciones(vacia, "app vacía") and any("Para empezar" in t for t in textos(vacia.subheader)),
+                      "Con la app vacía, el Dashboard enseña la guía de primer uso")
+            vacia.button(key="guia_0").click().run()
+            comprobar(vacia.session_state["pagina_nav"] == "Inventario" and sin_excepciones(vacia, "guía -> inventario"),
+                      "Cada paso de la guía lleva a su pantalla")
+        finally:
+            if anterior is None:
+                os.environ.pop("GESTION_RESTAURANTE_DATOS", None)
+            else:
+                os.environ["GESTION_RESTAURANTE_DATOS"] = anterior
+
+
 # ---------------------------------------------------------------- ejecución
 
 def main() -> int:
@@ -1591,6 +1620,7 @@ def main() -> int:
     prueba_mejora1(at)
     prueba_mejora2(at)
     prueba_mejora3(at)
+    prueba_mejora5(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

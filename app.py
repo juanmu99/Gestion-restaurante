@@ -688,6 +688,35 @@ def _filas_lotes(producto: Producto) -> list[dict]:
 
 # ---------- Página: Dashboard ----------
 
+def _guia_primer_uso() -> None:
+    """Mientras no hay ningún servicio: los 4 pasos para empezar, con un botón a cada pantalla."""
+    ss = st.session_state
+    pasos = [
+        ("Añade tus productos", "Lo que compras: alimentos, consumibles (servilletas, vasos...) y limpieza. "
+         "Pestaña ➕ Añadir producto.", "Inventario", bool(ss.inventario.productos)),
+        ("Crea tus recetas", "Cada plato con sus ingredientes por comensal. Pestaña ➕ Crear receta.",
+         "Recetario", bool(ss.recetario.recetas)),
+        ("Junta las recetas en menús", "Lo que ofreces en un servicio, con sus consumibles y material. "
+         "Pestaña ➕ Crear menú.", "Recetario", bool(ss.recetario.menus)),
+        ("Apunta tu primer servicio", "Fecha, comensales, menú y, si quieres, el precio de cobro. "
+         "Pestaña ➕ Añadir servicio.", "Servicios", bool(ss.registro_servicios.servicios)),
+    ]
+    with st.container(border=True):
+        st.subheader("👋 Para empezar")
+        st.caption("Cuatro pasos y el programa ya calcula la lista de la compra, el stock y la rentabilidad de cada "
+                   "servicio. Esta guía desaparece cuando apuntas tu primer servicio.")
+        siguiente = next((i for i, p in enumerate(pasos) if not p[3]), None)
+        for i, (titulo, texto, pagina, hecho) in enumerate(pasos):
+            c1, c2 = st.columns([5, 1])
+            marca = "✅" if hecho else ("👉" if i == siguiente else "⬜")
+            c1.markdown(f"{marca} **{i + 1}. {titulo}** — {texto}")
+            c2.button(f"Ir a {pagina}", key=f"guia_{i}", on_click=_ir, args=(pagina,),
+                      type="primary" if i == siguiente else "secondary")
+        if _app_vacia():
+            st.caption("¿Solo quieres probarlo? Carga los datos de ejemplo (botón 🧪 de la barra lateral) y, cuando "
+                       "termines, bórralos en Ajustes › Empezar de cero.")
+
+
 def _dashboard_hoy(serv: RegistroServicios) -> None:
     """Lo primero del Dashboard: servicios pasados sin completar, los de hoy y el dinero del mes."""
     for s in serv.pasados_sin_completar():
@@ -735,6 +764,8 @@ def pagina_dashboard() -> None:
     tandas_proximas = inv.elaboraciones.proximas_a_caducar()
     pendientes_compra = comp.items_pendientes()
 
+    if not serv.servicios:
+        _guia_primer_uso()
     _dashboard_hoy(serv)
 
     col1, col2, col3, col4 = st.columns(4)
@@ -3521,11 +3552,32 @@ def _editor_formula(inv: Inventario, clave: str, actuales: dict[str, float], exc
     return resultado
 
 
+PAGINAS = ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas",
+           "Exportar / Backup", "Ajustes"]
+
+
+def _ir(pagina: str, **campos) -> None:
+    """
+    Para los botones que llevan a otra pantalla (on_click): cambia la página
+    del menú lateral y, si se indican, deja elegidos algunos campos de esa
+    pantalla (por ejemplo, la elaboración base que se quiere preparar).
+    """
+    st.session_state["pagina_nav"] = pagina
+    for clave, valor in campos.items():
+        st.session_state[clave] = valor
+
+
+def _ir_a_preparar_base(nombre: str) -> None:
+    v = st.session_state.get("base_version", 0)
+    _ir("Inventario", inv_tipo="🥘 Elaboraciones", elab_que="Una elaboración base (kg / litros)",
+        **{f"base_preparar_{v}": nombre})
+
+
 def _pestana_bases(inv: Inventario) -> None:
     st.caption(
         "Sofritos, fondos, salsas, masas... Se preparan con una fórmula y entran en el inventario como un "
         "alimento más (en Alimentos aparecen como 'Elaboración base'), así que las recetas pueden usarlas "
-        "como ingrediente. Se preparan en Inventario > 🥘 Elaboraciones."
+        "como ingrediente. Se preparan en Inventario > 🥘 Elaboraciones (o con el botón 'Preparar' de cada una)."
     )
     bases = inv.bases()
     if bases:
@@ -3538,7 +3590,10 @@ def _pestana_bases(inv: Inventario) -> None:
             "Coste estimado": f"{_precio(inv.coste_estimado_base(b.nombre))} €/{b.unidad}",
         } for b in bases], width="stretch", hide_index=True)
         for b in bases:
-            st.markdown(f"**{b.nombre}**")
+            c1, c2 = st.columns([4, 1])
+            c1.markdown(f"**{b.nombre}** · en stock {_num(b.stock)} {b.unidad}")
+            c2.button("🥄 Preparar", key=f"ir_preparar_{b.nombre}", on_click=_ir_a_preparar_base, args=(b.nombre,),
+                      help="Lleva a Inventario > 🥘 Elaboraciones con esta base ya elegida.")
             _editor_nota(b, f"base_{b.nombre}", b.nombre)
 
     modo = st.radio("¿Qué quieres hacer?", ("➕ Crear una nueva", "✏️ Editar una fórmula"), horizontal=True, key="base_modo",
@@ -4258,11 +4313,7 @@ st.sidebar.markdown(
     """,
     unsafe_allow_html=True,
 )
-pagina = st.sidebar.radio(
-    "Navegación",
-    ["Dashboard", "Inventario", "Servicios", "Historial", "Recetario", "Compras", "Gastos", "Métricas", "Exportar / Backup",
-     "Ajustes"],
-)
+pagina = st.sidebar.radio("Navegación", PAGINAS, key="pagina_nav")
 
 st.sidebar.divider()
 zona_guardado = st.sidebar.empty()
