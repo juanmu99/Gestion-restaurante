@@ -1,0 +1,26 @@
+✅ Existe GestionRestaurante.exe
+✅ El .exe arranca y la app responde
+   (tardó 9 s en arrancar)
+✅ La página inicial se abre sin errores
+✅ Página 'Dashboard' sin errores
+✅ Página 'Inventario' sin errores
+✅ Página 'Servicios' sin errores
+✅ Página 'Historial' sin errores
+✅ Página 'Recetario' sin errores
+✅ Página 'Compras' sin errores
+✅ Página 'Gastos' sin errores
+✅ Página 'Métricas' sin errores
+✅ Página 'Exportar / Backup' sin errores
+✅ Página 'Ajustes' sin errores
+✅ Los cambios se guardan solos en %LOCALAPPDATA%\GestionRestaurante (no junto al .exe)
+✅ Se crea la copia de seguridad del día
+✅ Abrirlo otra vez no arranca un segundo programa (se cierra solo)
+✅ 'Generar Excel' crea el .xlsx en la carpeta de datos
+✅ Las librerías de Google Drive están dentro del .exe
+✅ Sin credenciales, pide credentials.json en la carpeta del .exe
+✅ El .exe vuelve a arrancar tras cerrarlo
+✅ Al reabrir, los datos guardados siguen ahí
+✅ 'Cerrar el programa' avisa de que se ha cerrado
+✅ 'Cerrar el programa' apaga el .exe
+
+RESULTADO: TODO BIEN

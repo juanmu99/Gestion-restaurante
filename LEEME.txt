@@ -1,0 +1,2 @@
+Resultados de la prueba del .exe del cambio dfed3ce64bdde342ccbbea7420666dc2157e618e
+Prueba del .exe: success
