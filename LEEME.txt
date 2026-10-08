@@ -1,0 +1,4 @@
+Resultados de las pruebas del cambio dfed3ce64bdde342ccbbea7420666dc2157e618e
+Pruebas de la lógica: success
+Pruebas de la interfaz: success
+Capturas de pantalla: success

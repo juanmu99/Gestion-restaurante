@@ -1,0 +1,413 @@
+--- Entradas: cada compra es un lote ---
+✅ Una compra nueva crea un segundo lote
+✅ El stock total es la suma de los lotes (1,8 kg)
+✅ La caducidad del producto es la del lote más próximo
+✅ El valor es cada lote a su precio (14 + 12 = 26 €)
+✅ Cada lote guarda su proveedor
+✅ Aunque tenga la misma caducidad, cada compra es un lote aparte
+✅ Sin indicar proveedor ni precio se usan el habitual y el de la última compra
+✅ Los productos sin caducidad también tienen un lote por compra
+
+--- Salidas: del lote que elige el usuario ---
+✅ Se puede sacar del lote que caduca MÁS TARDE
+✅ Solo baja el lote elegido
+✅ No se puede sacar de un lote más de lo que tiene
+✅ El historial apunta el lote y su precio real
+✅ Un lote que llega a 0 desaparece
+✅ Los números de lote no se reutilizan
+
+--- Desechar un lote caducado ---
+✅ Se detecta el lote caducado
+✅ Y el que caduca en los próximos días, aparte
+✅ Se desecha el lote caducado
+✅ Solo queda el lote bueno
+✅ Queda registrado como desperdicio (2 kg)
+✅ El gasto cuenta la compra a su precio (3 kg x 2,5 €); el stock inicial no es una compra
+
+--- Limpieza de un lote concreto ---
+✅ Cada lote de patas guarda su propio peso por unidad
+✅ Con varios lotes hay que elegir cuál se limpia
+✅ Usa el peso y el precio de ESE lote (8 kg, 50 €)
+✅ La limpieza recuerda de qué lote salió
+✅ El lote limpio carga con todo el coste (50 € / 5 kg)
+✅ Los derivados entran a coste 0
+✅ Solo sale el lote limpiado
+
+--- Completar un servicio eligiendo lotes ---
+✅ Por defecto propone el lote que caduca antes (y aquí llega)
+✅ Si el lote elegido no llega, dice cuánto falta y con qué lotes se puede completar
+✅ No deja completar sin elegir con qué lote se completa
+✅ ...y no toca nada
+✅ Saca 0,8 del lote 2 y los 0,2 que faltan del lote 1
+✅ El servicio queda completado
+✅ Si no hay bastante en total, se usan todos los lotes
+✅ ...y se descuenta todo lo que había
+
+--- Guardar, cargar y sesiones antiguas ---
+✅ Los lotes se guardan y se cargan igual
+✅ El historial conserva el lote de cada movimiento
+✅ Una sesión de antes de los lotes se convierte en un lote con su stock, precio y caducidad
+
+--- Corregir lotes y productos ---
+✅ Se puede corregir la cantidad, el proveedor y la caducidad de un lote
+✅ Se puede quitar la caducidad de un lote
+✅ Renombrar el producto conserva sus lotes
+
+--- Excel ---
+✅ El Excel tiene una hoja 'Lotes' con un renglón por lote (+ cabecera y total)
+
+--- Consumibles ---
+✅ Un consumible no guarda caducidad
+✅ Un consumible no puede tener merma
+✅ Sus compras tampoco guardan caducidad
+✅ Alimentos y consumibles se listan por separado
+✅ A simple vista, el menú solo muestra sus ingredientes
+✅ Las necesidades suman comida y consumibles
+✅ El coste de la comida y el de los consumibles se calculan por separado
+✅ Completar el servicio descuenta también los consumibles (8 servilletas)
+✅ El historial sabe qué movimientos son de consumibles
+✅ El gasto se separa en alimentos y consumibles ({'alimento': 0, 'consumible': 2.0, 'mantenimiento': 0})
+✅ La lista de la compra incluye los consumibles que faltan (400 - 292 = 108)
+✅ Renombrar un consumible lo actualiza en los menús
+✅ Los consumibles del menú se guardan y se cargan
+✅ El tipo del producto se guarda y se carga
+✅ Corregir el tipo a consumible quita la caducidad y pasa su historial a consumibles
+
+--- Gastos, precio de cobro y margen ---
+✅ Un gasto con importe 0 se rechaza
+✅ Un gasto con categoría inventada se rechaza
+✅ Un gasto con concepto vacío se rechaza
+✅ Servicio pendiente: coste estimado de la comida + sus gastos (no los generales)
+✅ Margen = cobro - coste
+✅ Sin precio de cobro no hay margen (y no falla nada)
+✅ Servicio completado: coste REAL de lo que salió (0,8 kg del lote a 15 €/kg = 12 €)
+✅ Las salidas de un servicio quedan apuntadas con su número
+✅ Los gastos y los precios de cobro se guardan y se cargan
+✅ Tras guardar y cargar, el coste real del servicio sigue igual
+✅ Una sesión de antes de los gastos se carga sin gastos
+✅ El Excel tiene las hojas 'Gastos' y 'Rentabilidad'
+
+--- Compra no prevista de un producto para un servicio ---
+✅ No se puede usar más de lo que se compró (y no toca nada)
+✅ Entra como lote (a 12,5 € / 5 kg = 2,5 €/kg) y sobran 2 kg en el inventario
+✅ El servicio carga solo lo usado (3 kg x 2,5 € = 7,5 €)
+✅ En Métricas cuenta como compra (12,5 €), una sola vez
+
+--- Lista de la compra al día ---
+✅ La lista pide arroz (faltan 4 kg) y aceite
+✅ Al regenerar la lista, se quita lo que ya no hace falta (el arroz) y se mantiene lo demás
+✅ ...y se avisa de ello
+
+--- Material reutilizable ---
+✅ El material se cuenta en unidades enteras
+✅ La lista de carga se calcula por comensal y redondea hacia arriba (7,5 copas -> 8)
+✅ El material fuera sigue existiendo (50) pero no está disponible (20)
+✅ No se puede sacar más material del disponible
+✅ El total no puede bajar de lo que está en uso
+✅ Al volver: deja de estar en uso y lo que falta (3) deja de contar en el total
+✅ De lo que falta: 2 roturas y 1 pérdida
+✅ Coste de roturas y pérdidas del servicio: 3 x 3,5 € = 10,5 €
+✅ Reponer suma unidades; una rotura en el almacén resta y no es de ningún servicio
+✅ El coste del servicio incluye el material roto o perdido
+✅ Renombrar un material lo actualiza en salidas, roturas y menús
+✅ El material, sus roturas y el material de los menús se guardan y se cargan
+✅ El Excel tiene la hoja 'Material'
+
+--- Historial de servicios ---
+✅ Al completar se guardan la fecha y una copia del menú
+✅ Si después se cambia la receta, el historial sigue mostrando lo que se hizo (0,2 x 4 = 0,8 kg)
+✅ Previsto frente a real: el menú pedía 3 kg y solo salió 1 kg (lo que quedaba)
+✅ El historial solo lista los completados, los más recientes primero
+✅ Opcionalmente, también los cancelados
+✅ Filtrar por cliente
+✅ Buscar texto (también en la valoración)
+✅ Lista de clientes
+✅ Resumen del periodo: 2 servicios, 19 comensales, 100 € facturados (1 sin precio)
+✅ La ficha recoge lo que salió de cada lote y el coste por comensal
+✅ Repetir un servicio crea uno nuevo igual en otra fecha
+✅ Cliente, lugar, valoración y copia del menú se guardan y se cargan
+✅ El Excel tiene la hoja 'Historial' con una fila por servicio completado
+
+--- Elaboraciones (recetas preparadas por adelantado) ---
+✅ La vida útil propone la caducidad (hoy + 3 días)
+✅ La vida útil se guarda y se carga
+✅ Sin ingredientes suficientes no se prepara (y no toca nada)
+✅ Preparar gasta los ingredientes del lote elegido (2 kg del lote 2)
+✅ Queda en el historial con el motivo 'elaboración'
+✅ La tanda tiene 20 raciones, su caducidad y su coste real por ración (0,34 €)
+✅ Por defecto se usan las raciones preparadas (20) y el resto (10) se hace con ingredientes
+✅ Solo se descuentan los ingredientes de las 10 raciones restantes (1 kg de tomate)
+✅ Se puede elegir no usar las raciones preparadas (todo con ingredientes: 3 kg)
+✅ La lista de la compra descuenta lo ya preparado (80 - 20 = 60 raciones: 6 kg, hay 3 -> faltan 3)
+✅ ...pero no cuenta una tanda que habrá caducado el día del servicio (ni el tomate caducado: 8 kg)
+✅ Al completar, la tanda se gasta y su coste queda apuntado en el servicio
+✅ El coste del servicio = raciones preparadas + ingredientes del resto
+✅ El historial muestra las raciones preparadas usadas y el previsto ya las descuenta
+✅ Se detectan las tandas caducadas
+✅ Desechar una tanda cuenta como desperdicio, con su coste
+✅ Lo gastado al preparar cuenta como consumo en Métricas
+✅ Las tandas y sus usos se guardan y se cargan
+
+--- Elaboraciones base (sofritos, fondos, salsas...) ---
+✅ Una elaboración base es un alimento más, con su fórmula y stock 0
+✅ La fórmula se escala a la cantidad que se prepara
+✅ La fórmula no admite un ingrediente que no existe (y no cambia nada)
+✅ La fórmula no admite un consumible (y no cambia nada)
+✅ La fórmula no admite a sí misma (y no cambia nada)
+✅ Las fórmulas no pueden ir en círculo (Sofrito lleva Salsa, que lleva Sofrito)
+✅ Sin ingredientes suficientes no se prepara la base
+✅ Preparar 2 kg gasta lo que pide la fórmula (3 kg de cebolla, 0,2 l de aceite)
+✅ Entra lo que salió DE VERDAD (1,6 kg) y queda apuntado: previsto 2, obtenido 1,6, diferencia -0,4
+✅ El lote del sofrito tiene su caducidad (vida útil 4 días) y su coste real (5,30 € / 1,6 kg)
+✅ Preparar una base no cuenta como compra (no es dinero gastado)
+✅ Al renombrar un ingrediente, la fórmula de la base se actualiza
+✅ Las bases, sus fórmulas y sus preparaciones se guardan y se cargan
+✅ Si falta una base, la lista pide sus ingredientes (aquí hay de todo: no se compra nada)
+✅ Bases dentro de bases: no se compran salsa ni sofrito, sino huesos (7 kg) y la cebolla que falta (4,1 kg)
+✅ El Excel tiene la hoja 'Elaboraciones base' con fórmulas y preparaciones
+
+--- Anotaciones (bloc de notas) ---
+✅ Una receta nueva no tiene notas
+✅ Se guarda la nota (con sus saltos de línea) y la fecha en que se editó
+✅ Guardar la misma nota sin cambios no cambia la fecha
+✅ Las notas de recetas, menús y bases se guardan y se cargan
+✅ La copia del menú de un servicio completado guarda también sus notas
+✅ Las sesiones de antes de las notas se cargan sin notas
+✅ Una nota vacía la borra
+✅ El Excel tiene la hoja 'Recetario' con recetas, menús y notas, y las notas de las bases
+
+--- Limpieza y mantenimiento ---
+✅ Los productos de limpieza y mantenimiento van en su propia lista y pueden tener caducidad
+✅ No pueden tener merma
+✅ No pueden ser ingrediente de una elaboración base
+✅ Lo que sale para un servicio cuenta en su rentabilidad (1 l de lejía = 1,50 €); lo general no
+✅ Métricas separa el gasto en limpieza y mantenimiento (compra de 2 l de lejía = 3 €)
+✅ La lista de la compra repone hasta el mínimo lo que está por debajo (4 bayetas), aunque no haya servicios
+✅ Al volver a generarla no se borran: se mantienen y se añaden los nuevos (0,5 l de lejía)
+✅ Se puede corregir el tipo si se dio de alta en la lista equivocada
+✅ Se guardan y se cargan
+✅ En el Excel aparecen con su clase
+
+--- Historial de precios ---
+✅ Cada compra (y el stock inicial) queda en el historial de precios, con su proveedor
+✅ El resumen por proveedor da el precio medio ponderado, del más barato al más caro
+✅ Aunque el lote se gaste entero, su precio sigue en el historial
+✅ Sin cambios grandes de precio no hay avisos
+✅ Una compra mucho más cara de lo habitual da un aviso
+✅ ...y una mucho más barata, también (solo cuenta la última compra de cada producto)
+✅ Las compras de hace más de 30 días ya no avisan
+✅ Lo que sale de una limpieza o elaboración no es una compra: no entra
+✅ Se renombra con el producto y se guarda y se carga
+✅ En sesiones antiguas se reconstruye con las compras del historial de movimientos
+✅ El Excel tiene la hoja 'Historial de precios' (una fila por compra)
+
+--- Corregir un precio hacia atrás ---
+✅ Se sabe qué hay registrado con un lote: su compra, el servicio #900, un desperdicio y una elaboración
+✅ Sin corregir lo registrado, solo cambia el lote (lo que salga a partir de ahora)
+✅ Corrigiendo lo registrado: el servicio cuesta 8 €, la compra 20 € y el historial dice 4 € (y el proveedor nuevo)
+✅ (el lote ya se ha gastado entero)
+✅ Desde el historial de precios se corrige una compra aunque su lote ya no exista
+✅ Un precio negativo no se acepta
+
+--- IVA ---
+✅ El IVA por defecto es el 21 %
+✅ Un precio escrito sin IVA se convierte en lo pagado (1 € + 4 % = 1,04 €)
+✅ Se ve lo pagado (1,04 €/l) y se guarda aparte sin IVA (1 €) y su tipo (4 %)
+✅ Métricas: el gasto es lo pagado (10,40 €) y el IVA soportado se ve aparte (0,40 €)
+✅ Si NO se recupera el IVA, el servicio cuesta lo pagado (3,12 €)
+✅ Si se recupera, el margen se calcula sin IVA (3 €) y el IVA recuperable va aparte (0,12 €); el precio se sigue viendo con IVA
+✅ El ajuste y los precios se guardan y se cargan
+✅ Las sesiones de antes del IVA se cargan con sus precios tal cual
+✅ Una elaboración base cuesta lo pagado (1,56 €) y guarda su parte sin IVA (1,50 €)
+✅ Una tanda guarda su coste con IVA y sin IVA
+✅ Cambiar el IVA de un producto vale para las compras nuevas; las ya hechas conservan el suyo
+✅ IVA del trimestre: 0,40 € pagado, 10 € cobrado (10 % de 100 €) -> 9,60 € a ingresar (estimación)
+✅ El Excel separa precio sin IVA, IVA y precio con IVA
+
+--- Fase 1: guardado seguro ---
+✅ Guardar deja la versión anterior en .bak y una copia del día en copias/
+✅ Si sesion.json está dañado, se recupera de la copia y el dañado se aparta (no se borra)
+✅ Sin ninguna copia válida, se avisa y se empieza vacío
+✅ Un archivo guardado con BOM también se carga
+✅ La huella de los datos sirve para saber si hay cambios sin guardar
+✅ Al recuperar, se usa la copia MÁS RECIENTE (no se pierde lo último guardado)
+✅ Si el archivo se lee pero no se entiende, se avisa y NO se aparta ni se sobrescribe
+✅ Si la copia del día falla, el guardado principal se hace igual
+✅ Los ajustes de IVA son de cada sesión (dos ventanas no se los pisan)
+✅ La carpeta de datos se puede fijar (pruebas)
+✅ Fuera del .exe, los datos siguen en la carpeta 'datos'
+
+--- Fase 1: servicios, recetas y limpiezas ---
+✅ Dos servicios nunca tienen el mismo número
+✅ Un servicio completado no se puede cancelar
+✅ Una receta con un nombre que ya existe (aunque cambien mayúsculas o espacios) no sustituye a la otra
+✅ Un menú con un nombre que ya existe no sustituye al otro
+✅ La lista de la compra AVISA de un servicio cuyo menú no existe
+✅ Una limpieza no puede dar una elaboración base (antes dejaba la sesión imposible de abrir)
+
+--- Fase 2, bloque 1: precios exactos ---
+✅ 25.000 g comprados por 15,50 € valen 15,50 € (antes, por el redondeo, 15,00 €)
+✅ Una limpieza en gramos conserva el coste exacto (40 €)
+✅ Una compra de última hora en gramos también (10.000 g por 6,30 €)
+
+--- Fase 2, bloque 1: elaboraciones base sin preparar ---
+✅ Una base sin preparar cuesta lo que su fórmula (sofrito 4,50 €/kg; salsa con sofrito 2,75 €/l), no 0 €
+✅ La rentabilidad estimada de un servicio cuenta las bases (200 comensales = 100 €, antes 0 €)
+
+--- Fase 2, bloque 1: 'la última compra fue a…' ---
+✅ Al corregir el precio de la última compra, se corrige también 'la última compra fue a…' (22 €, no 220 €)
+✅ ...también desde 'Editar producto'
+✅ Un derivado a 0 € de una limpieza no cambia 'la última compra fue a…'
+✅ En datos de antes del IVA, el precio de referencia no sube un 21 % (sigue en 1,50 €)
+
+--- Fase 2, bloque 2: caducidades en la lista de la compra ---
+✅ Un lote que sigue bueno el día del servicio cuenta (1,5 kg de 2: no se compra)
+✅ Un lote que caduca ANTES del servicio no cuenta (se compran los 1,5 kg)
+✅ ...y se avisa de que ese lote caduca antes del servicio #702
+✅ Con dos servicios, el lote cubre el primero (antes de caducar) y para el segundo se compra
+✅ Lo que no caduca cuenta siempre (sal)
+✅ Un lote YA caducado no cuenta, y se avisa de que se puede desechar
+✅ El mismo lote no cubre dos servicios a la vez (3 kg necesarios, 2 en stock: falta 1)
+
+--- Fase 2, bloque 2: lotes caducados al preparar o completar ---
+✅ Primero se propone el lote bueno; el caducado, al final (aunque caduque antes)
+✅ Por defecto se gasta del lote bueno, no del caducado
+✅ Si se elige el lote caducado, la fila lo señala (para avisar)
+✅ Si no llega con todo, lo caducado se gasta al final, y se señala
+✅ Con un único lote caducado también se señala (antes pasaba sin avisar)
+
+--- Fase 2, bloque 2: varias tandas y varios servicios ---
+✅ Cada servicio usa la tanda que caduca antes y sigue buena: no se compra de más (antes pedía 1 kg)
+✅ ...y las raciones que ya no quedan sí se compran (1 kg)
+
+--- Fase 2, bloque 3: corregir la cantidad de una compra ---
+✅ Compra de 50 kg corregida a 5 kg con 2 usados: quedan 3 kg en el lote
+✅ El gasto en Métricas (5,50 €) y el historial de precios (5 kg) también se corrigen
+✅ ...y el IVA soportado (0,50 €)
+✅ No se puede corregir a menos de lo ya usado (2 kg), y no cambia nada
+
+--- Fase 2, bloque 3: anular una compra ---
+✅ Una compra de la que no ha salido nada se puede anular
+✅ Anular quita el lote, su gasto (queda 30 €) y su línea del historial de precios
+✅ 'La última compra fue a…' vuelve a la compra anterior (6 €)
+✅ Una compra de la que ya se ha usado algo no se puede anular
+✅ ...ni forzándolo (no cambia nada)
+
+--- Fase 2, bloque 3: IVA de compras y productos ---
+✅ Corregir el IVA de una compra mantiene lo pagado (11 €) y la base pasa a 10 €
+✅ El IVA soportado pasa a 2 € (10 % de 20) y el gasto sigue en 22 €
+✅ Lo que ya salió del lote también se corrige
+✅ El producto usa ese IVA en las próximas compras, y 'la última compra fue a…' sigue en 11 €
+✅ Cambiar el IVA del producto no cambia 'la última compra fue a…' (sigue en 11 €)
+✅ Los productos que nacen de una limpieza llevan el IVA del producto en bruto (10 %)
+
+--- Fase 2, bloque 4: IVA de los gastos ---
+✅ Si se recupera el IVA, los gastos cuentan sin IVA (100 + 100 + 50) y su IVA (21 €) va aparte
+✅ Si no se recupera, cuentan con IVA (271 €)
+✅ Se propone 21 % (y 'Sin IVA' para personal y seguros)
+✅ El IVA de cada gasto se guarda y se carga (los antiguos: sin desglosar)
+✅ La estimación de IVA del trimestre suma el IVA de los gastos y avisa de los no desglosados
+
+--- Fase 2, bloque 4: completar un servicio no queda a medias ---
+✅ Un lote con más de 6 decimales se puede gastar entero (antes se rechazaba por redondeo)
+✅ Si una salida no se puede hacer, el servicio NO se completa y no se toca nada
+
+--- Fase 2, bloque 4: renombrar un producto ---
+✅ Un nombre vacío o con solo espacios no se acepta
+✅ Un nombre que ya existe con otras mayúsculas no se acepta
+✅ Los espacios de los lados se quitan ('Tomate pera')
+✅ Cambiar solo las mayúsculas del propio nombre sí se puede
+✅ La lista de la compra pasa a usar el nombre nuevo
+
+--- Fase 3, bloque 1: editar servicios ---
+✅ Un servicio pendiente se puede editar (fecha, comensales, menú, cliente) y marcar como confirmado
+✅ Se le puede quitar el precio de cobro
+✅ Editar rechaza un valor no válido (comensales)
+✅ Editar rechaza un valor no válido (estado)
+✅ Un servicio completado no se edita
+
+--- Fase 3, bloque 1: editar y borrar recetas y menús ---
+✅ Editar una receta cambia cantidades, quita ingredientes (a 0) y el menú lo ve
+✅ Una receta no se queda sin ingredientes
+✅ No se borra una receta que está en un menú (y dice cuál)
+✅ No se borra una receta con raciones preparadas
+✅ Se pueden cambiar las recetas de un menú
+✅ Quitada del menú, la receta ya se puede borrar
+✅ No se borra un menú que usa un servicio pendiente (y dice cuál)
+✅ Un menú que solo usan servicios ya hechos sí se puede borrar
+
+--- Fase 3, bloque 2: borrar productos y material ---
+✅ No se borra un producto que usa una receta (y dice cuál)
+✅ No se borra un ingrediente de una elaboración base (y dice cuál)
+✅ Un producto que ya no se usa se borra; su stock (1 kg) no cuenta como desperdicio y su historial se conserva
+✅ Lo pendiente de un producto borrado se quita de la lista de la compra
+✅ No se borra un material con unidades fuera en un servicio
+✅ Un material de vuelta se borra, se quita de los menús y sus roturas se conservan
+
+--- Fase 3, bloque 2: empezar de cero ---
+✅ Antes de empezar de cero se guarda una copia con todo (copias/antes_de_empezar_de_cero_...)
+✅ La sesión nueva está vacía y conserva los ajustes del IVA
+
+--- Fase 3, bloque 3: deshacer un servicio completado ---
+✅ (Al completar se gasta el lote 1 entero, 0,5 kg del lote 2 y la tanda entera)
+✅ Deshacer: vuelve a pendiente y lo usado vuelve a sus lotes (el lote 1 se recrea con su precio y caducidad)
+✅ Las raciones preparadas vuelven a su tanda (con su caducidad)
+✅ Los consumibles también vuelven, y su consumo desaparece del historial
+✅ La limpieza y mantenimiento apuntado a mano para el servicio no se toca
+✅ Se quitan los costes añadidos al completar; los demás gastos del servicio se quedan
+✅ Después se puede volver a completar
+✅ Solo se deshace un servicio completado
+✅ Las tandas gastadas enteras se guardan (para poder deshacer tras reabrir)
+
+--- Fase 3, bloque 3: copias de seguridad ---
+✅ Se listan las copias con su tipo y lo que contienen (una dañada sale sin resumen)
+
+--- Fase 3, bloque 4: Excel ---
+✅ En el Excel, las fechas son fechas de verdad y los importes tienen formato de euros
+✅ La tabla de roturas y pérdidas tiene cabecera
+✅ El TOTAL de la lista de la compra es solo lo pendiente
+✅ El Excel se llama gestion_catering_<fecha>.xlsx
+
+--- Fase 3, bloque 5: cálculos y métricas menores ---
+✅ 'Últimos 7 días' son 7 días justos (antes 8)
+✅ 'Este mes / trimestre / año' empiezan el día 1 (el trimestre, como en el IVA)
+✅ El valor del inventario incluye las raciones preparadas (4 € de tomate + 5 € de tandas)
+✅ No se acepta una caducidad anterior a la preparación (y no se toca nada)
+✅ No se acepta una preparación en el futuro (y no se toca nada)
+✅ Corregir una tanda no deja una caducidad anterior a la preparación (ni cambia nada)
+✅ El Recomendador ve el lote bueno a punto de caducar aunque haya otro ya caducado
+✅ ...y no cuenta el stock caducado para decir si se puede preparar (2 kg buenos: 20 sí, 25 no)
+✅ El ranking de más consumidos se ordena por valor (0,5 kg de jamón = 20 € antes que 24 huevos = 6 €)
+✅ En el Excel, un precio por gramo (0,0125 €/g) se ve con sus decimales, no como 0,00 €
+
+--- Fase 3, bloque 6: categorías, tipo de producto y consola ---
+✅ Una categoría igual con otras mayúsculas o espacios se escribe como la que ya existe
+✅ ...también al editar un producto
+✅ Los datos guardados con categorías repetidas se unifican al abrirlos
+✅ No se puede pasar a consumible un ingrediente de receta (y dice cuál)
+✅ No se puede pasar a alimento un consumible de menú (y dice cuál)
+✅ Un producto que no se usa sí puede cambiar de tipo
+✅ La consola rechaza 'nan' e 'inf' como número, y acepta la coma decimal (2,5)
+✅ La consola no acepta un nombre vacío (vuelve a preguntar)
+
+--- Mejora 1: Dashboard (hoy, pasados sin completar y dinero del mes) ---
+✅ Los servicios de hoy, por hora (sin los cancelados)
+✅ Se detectan los servicios de días pasados sin completar
+✅ Dinero del mes: facturado 100 €, margen 68 € (100 - 2 € de tomate - 30 € de gasolina), 1 servicio sin cobro
+✅ ...y lo gastado en compras (20 €) y en gastos (30 €)
+
+--- Mejora 2: lista de la compra (a mano, para qué, bajo mínimo) ---
+✅ Cada artículo dice para qué servicios es (tomate: #961 y #962)
+✅ Se proponen también los alimentos y consumibles bajo mínimo (harina 4 kg, servilletas 90)
+✅ Se puede añadir a mano algo nuevo o sumar a lo que ya está pendiente
+✅ Al volver a generar la lista, lo añadido a mano se respeta (tomate 1 de #961 + 1 a mano; papel de horno)
+✅ Si ya ningún servicio lo pide, se queda lo añadido a mano
+✅ Se puede cambiar la cantidad de un artículo o quitarlo de la lista
+✅ Para qué es cada cosa y lo añadido a mano se guardan y se cargan
+
+--- Mejora 3: caducidad al comprar y vida útil 'el mismo día' ---
+✅ Sin compras anteriores con caducidad, se proponen 7 días
+✅ Si no, se propone lo que duró la última compra (3 días)
+✅ Vida útil 0 = se toma el mismo día (y se guarda como 0, no como 'sin indicar')
+
+RESULTADO: TODO BIEN

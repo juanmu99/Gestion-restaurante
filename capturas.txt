@@ -1,0 +1,26 @@
+📸 Dashboard
+📸 Inventario
+📸 Inventario > ✏️ Editar producto
+📸 Inventario > 📦 Actualizar stock
+📸 Inventario > 🏷️ Lotes
+📸 Inventario > 📈 Historial de precios
+📸 Inventario > 🔪 Limpiar producto
+📸 Inventario > 📜 Limpiezas
+📸 Inventario > Consumibles
+📸 Inventario > Elaboraciones
+📸 Inventario > Elaboraciones > Preparar base
+📸 Inventario > Preparaciones de bases
+📸 Inventario > Material
+📸 Servicios
+📸 Servicios > 🚚 Material
+📸 Servicios > 💶 Rentabilidad
+📸 Historial
+📸 Recetario
+📸 Recetario > Detalle de menú
+📸 Recetario > Elaboraciones base
+📸 Compras
+📸 Gastos
+📸 Métricas
+📸 Métricas > IVA
+📸 Exportar / Backup
+📸 Ajustes

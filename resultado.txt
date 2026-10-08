@@ -1,0 +1,284 @@
+Streamlit 1.64.0 | Python 3.12.15 | 2026-10-08
+
+--- Arranque y datos de ejemplo ---
+✅ La app arranca sin errores
+✅ Datos de ejemplo cargados
+✅ Con datos, el botón de datos de ejemplo desaparece (no se pueden mezclar con los reales)
+✅ Los cambios se guardan solos en disco, sin pulsar nada
+
+--- Todas las páginas se muestran ---
+✅ Página 'Dashboard' sin errores
+✅ Página 'Inventario' sin errores
+✅ Página 'Servicios' sin errores
+✅ Página 'Historial' sin errores
+✅ Página 'Recetario' sin errores
+✅ Página 'Compras' sin errores
+✅ Página 'Gastos' sin errores
+✅ Página 'Métricas' sin errores
+✅ Página 'Exportar / Backup' sin errores
+✅ Página 'Ajustes' sin errores
+
+--- Precios: total pagado, historial y avisos ---
+✅ El Dashboard avisa de los precios fuera de lo habitual (tomate más caro, harina más barata)
+✅ Con el total pagado se muestra el precio por kg antes de guardar (48 € / 10 kg = 4,8 €)
+✅ La compra se guarda a 4,8 €/kg y entra en el historial de precios
+✅ La pestaña 'Historial de precios' se muestra (con la gráfica por proveedor)
+✅ Corregir el precio de un lote sin usar corrige también su compra y el historial de precios
+✅ Si ya ha salido algo del lote, se avisa de lo registrado y se pregunta qué hacer
+✅ 'Dejarlo como estaba': cambia el lote, pero no lo ya registrado
+✅ Desde el historial de precios se corrige una compra y lo que ya salió de ella
+✅ Por defecto el precio se escribe con IVA incluido (lo que se paga)
+✅ Al escribir el precio se ve el desglose (0,26 € = 0,25 € sin IVA + 0,01 € de IVA)
+✅ Se ve lo pagado (0,26 €) y se guarda aparte el precio sin IVA (0,25 €) y su tipo (4 %)
+✅ Ajustes explica las dos opciones del IVA y avisa de que no sustituye a un gestor
+✅ Se puede elegir 'No recupero el IVA' (los precios se siguen viendo igual)
+✅ 'Dashboard' funciona sin recuperar el IVA
+✅ 'Servicios' funciona sin recuperar el IVA
+✅ 'Métricas' funciona sin recuperar el IVA
+✅ 'Inventario' funciona sin recuperar el IVA
+✅ ...y volver a 'Recupero el IVA', con el IVA de cobro (10 %)
+✅ Métricas > IVA: estimación del trimestre (cobrado y pagado) con el aviso de que no sustituye a un gestor
+
+--- Añadir productos ---
+✅ Añadir producto sin excepciones
+✅ Pollo con merma por unidades: 2200 g/unidad se guardan como 2.2 kg
+✅ Mensaje de 'producto añadido' visible
+✅ El formulario queda vacío tras añadir
+✅ Sin peso por unidad: error visible y no se añade
+✅ Con stock inicial y sin precio no se añade (antes entraba a 0 €)
+✅ Se guarda la fecha de caducidad elegida (en su primer lote)
+
+--- Actualizar stock ---
+✅ Salida con motivo 'desperdicio' registrada
+✅ Salida mayor que el stock: error visible y el stock no cambia
+✅ El precio de la compra empieza vacío (no se da por bueno el de la última vez)
+✅ Sin precio no se registra la compra
+✅ Compra con peso por unidad: un lote nuevo, 4 patas de media 6.5 kg (hay 4.0, 6.5 kg)
+✅ Salida del lote elegido (lote 2): solo baja ese lote
+✅ El historial apunta de qué lote salió
+✅ Tras registrar la salida, el formulario queda vacío
+✅ Más de lo que tiene el lote: error visible y no cambia nada
+✅ Compra: lote 3 con su cantidad, precio, proveedor y caducidad
+
+--- Limpiar producto ---
+✅ Vista previa de la limpieza sin errores
+✅ Limpieza registrada
+✅ Lote 2: 2 patas de 6 kg = 12 kg bruto, 8 kg limpio, 4 kg de merma (bruto 12.0, merma 4.0)
+✅ Se crea 'Carne de cerdo limpia' con 8 kg y su origen
+✅ Quedan las 2 patas del lote 1
+✅ Mensaje de limpieza visible tras recargar
+✅ Al volver a limpiar, el formulario empieza vacío (sin datos de la limpieza anterior)
+✅ Más limpio que bruto: error visible y no se registra nada
+
+--- Editar producto ---
+✅ Editar: activar la merma de un producto
+✅ Al cambiar de producto se cargan sus datos
+✅ Con un solo lote, sus datos aparecen sin elegir nada
+✅ Tras una salida, 'Editar producto' muestra la cantidad actual (15), no la de antes
+✅ Guardar solo el stock mínimo no deshace la salida (sigue habiendo 15)
+✅ Editar producto corrige a la vez los datos generales y los de la compra (cantidad, precio, proveedor, caducidad)
+
+--- Lotes: corregir y desechar ---
+✅ Editar producto con varios lotes: se corrige solo el lote elegido
+✅ El lote caducado se avisa en rojo arriba
+✅ Desechar un lote pide confirmación (el primer clic no tira nada)
+✅ 'Desechar lote' lo tira entero y lo apunta como desperdicio
+✅ Quedan los lotes 2 y 3
+
+--- Consumibles ---
+✅ La lista de consumibles se muestra sin errores
+✅ En la lista de consumibles solo aparecen consumibles
+✅ Al añadir un consumible no se pide caducidad ni merma
+✅ Se añade como consumible
+✅ Y no aparece en la lista de alimentos
+✅ Las recetas solo ofrecen alimentos como ingredientes
+✅ En el detalle del menú se cambian sus consumibles (3 servilletas por comensal)
+✅ Métricas de consumibles sin errores
+
+--- Elaboraciones ---
+✅ La lista de elaboraciones se muestra (con la tanda de ejemplo)
+✅ Sin vida útil, la caducidad empieza vacía
+✅ Sin caducidad no se prepara
+✅ Preparar 2 raciones de pan gasta 0,3 kg de harina y crea la tanda
+✅ Se puede poner la vida útil a una receta
+✅ Con vida útil, la caducidad se propone (hoy + 4 días)
+
+--- Elaboraciones base ---
+✅ Los datos de ejemplo traen el sofrito (base) con una preparación: previsto 1 kg, salió 0,9
+✅ La pestaña 'Elaboraciones base' se muestra
+✅ Sin ingredientes no se crea la base
+✅ Se crea una base que lleva otra base (salsa con sofrito)
+✅ Las fórmulas no pueden ir en círculo
+✅ Se puede cambiar la vida útil de una base
+✅ La caducidad se propone con la vida útil de la base (hoy + 5)
+✅ Sin indicar cuánto salió de verdad no se prepara
+✅ Preparar 2 kg gasta 3 kg de cebolla dulce, entra lo obtenido (1,7 kg) y queda apuntada la diferencia
+✅ El historial de preparaciones de bases se muestra
+
+--- Anotaciones ---
+✅ Se escribe la nota de una receta (con varias líneas y su fecha)
+✅ Se escribe la nota de un menú
+✅ Se puede borrar la nota de una base
+✅ ...y volver a escribirla
+✅ Al crear una base se puede escribir su nota
+✅ Al preparar un plato se ve su nota
+✅ Al preparar una base se ve su nota
+✅ Al completar un servicio se ven las notas del menú y de sus recetas
+
+--- Limpieza y mantenimiento ---
+✅ La lista de limpieza y mantenimiento se muestra (y avisa de las bayetas bajo mínimo)
+✅ Al añadir no se pregunta por la merma, pero sí (opcional) por la caducidad
+✅ Se añade a la lista de limpieza y mantenimiento
+✅ Una salida de lejía se puede asociar a un servicio
+✅ La rentabilidad de los servicios se muestra con la limpieza y el mantenimiento
+✅ No se pueden usar como ingrediente de una receta
+✅ La lista de la compra repone las bayetas hasta el mínimo (4)
+✅ Métricas de limpieza y mantenimiento sin errores
+
+--- Completar servicio ---
+✅ El último paso enseña el resumen (con el coste) y todavía no ha tocado nada
+✅ Servicio completado desde la interfaz
+✅ También descuenta los consumibles del menú (quedan 476.0 servilletas)
+✅ Al completar se usan por defecto las raciones ya preparadas (4 de ensalada y 2 de pan)
+✅ Al completar se guardan la valoración y la copia del menú
+
+--- Completar servicio eligiendo lotes ---
+✅ Si el lote elegido no llega, pide elegir con qué lote completar (sin elegirlo por ti)
+✅ Sin elegir el lote de complemento no se puede seguir (error visible, nada cambia)
+✅ Al volver al paso 1, los lotes elegidos siguen ahí
+✅ Un producto nuevo no puede llamarse como uno que ya existe
+✅ El producto nuevo no se da de alta hasta completar el servicio
+✅ Se pueden añadir y quitar costes adicionales antes de completar
+✅ ...y no se guardan hasta completar el servicio
+✅ Completa: 0,5 kg del lote 3 y los 0,3 que faltan del lote 2
+✅ Al completar, el coste adicional se guarda como gasto del servicio
+✅ La compra de tomate entra como lote y los 0,6 kg que sobran se quedan en el inventario
+✅ Lo usado sale como consumo de ese servicio
+✅ Al completar se da de alta 'Cebolla' con sus datos, entra la compra (2 kg a 1,5 €/kg) y sobran 0,5 kg
+
+--- Precio de cobro, gastos y rentabilidad ---
+✅ Servicio con precio por comensal: se guarda el total (250 €, hay 250.0)
+✅ Se guardan el cliente y el lugar
+✅ El precio de cobro es opcional
+✅ Se registran un gasto del servicio y uno general
+✅ Eliminar un gasto pide confirmación
+✅ Eliminar un gasto
+✅ La pestaña de rentabilidad se muestra sin errores
+✅ Se puede cambiar el precio de cobro después
+
+--- Fase 1: servicios, recetas y guardado ---
+✅ Los servicios completados no aparecen para cancelar
+✅ Sin marcar la confirmación el botón de cancelar no se puede pulsar
+✅ Marcando la confirmación, se cancela
+✅ Se avisa de un servicio con un menú que no existe
+✅ Se le puede elegir el menú correcto
+✅ Una receta con un nombre que ya existe no sustituye a la otra, y lo escrito no se borra
+✅ Para un ingrediente en gramos se propone 'g' (no 'kg')
+✅ Si otra ventana guardó, esta no sobrescribe sin preguntar y lo avisa
+✅ ...y se puede elegir guardar lo de esta ventana
+
+--- Material reutilizable ---
+✅ La lista de material se muestra sin errores
+✅ Añadir material
+✅ La lista de carga propone el material del menú (2 platos x 10 comensales = 20)
+✅ Tras la salida, los platos siguen existiendo (60) pero solo 40 están disponibles
+✅ El inventario de material avisa de lo que está fuera
+✅ Vuelta: todo deja de estar en uso y los 2 platos que faltan se apuntan (1 rotura y 1 pérdida)
+✅ Las roturas y pérdidas cuestan 2 x 3,5 € = 7 €
+✅ En el detalle del menú se cambia su material
+
+--- Compras ---
+✅ La lista pide patas enteras (3 unidades)
+✅ Aviso de la conversión limpio -> bruto visible
+✅ Marcar como comprado repone las patas en el inventario
+✅ Hay algún producto pendiente en la lista para probar
+✅ Al comprar desde el inventario, avisa de que está en la lista y propone marcarlo
+✅ 'Harina de trigo' queda marcado como comprado en la lista
+
+--- Lotes caducados al preparar (Fase 2, bloque 2) ---
+✅ Al preparar se propone el lote bueno (no el caducado, que va al final y marcado)
+✅ Si se elige el lote caducado, se avisa en rojo antes de preparar
+
+--- Corregir y anular compras (Fase 2, bloque 3) ---
+✅ Al cambiar la cantidad se pregunta si es un recuento o un error en la compra (y se explica qué cambia)
+✅ 'Error en la compra': se corrigen el lote, la compra (Métricas e IVA) y el historial de precios
+✅ Anular una compra pide confirmarlo antes
+✅ Anular una compra quita su lote, su gasto y su línea del historial de precios
+
+--- Historial de servicios ---
+✅ La página de historial se muestra sin errores
+✅ Lista los 2 servicios completados
+✅ La ficha del servicio se muestra sin errores
+✅ La ficha muestra la valoración
+✅ Desde la ficha se puede poner o cambiar el cliente
+✅ Filtrar el historial por cliente
+✅ Repetir un servicio crea uno nuevo pendiente con los mismos datos
+
+--- Métricas y guardado ---
+✅ Página de métricas (con la pestaña de merma) sin errores
+✅ Dashboard con todos los datos sin errores
+✅ Todo lo hecho ya está guardado en datos/sesion.json, sin pulsar ningún botón
+✅ Al reabrir, se carga la sesión con la limpieza y el producto limpio
+✅ Al reabrir, se cargan también los gastos
+✅ Al reabrir, se carga también el material con sus roturas
+
+--- Gastos, completar y material (Fase 2, bloque 4) ---
+✅ Al apuntar un gasto se ve su desglose de IVA (121 € = 100 € + 21 €)
+✅ El gasto se guarda con su IVA (21 %)
+✅ Un gasto con fecha futura aparece en la lista, marcado como futuro
+✅ Con un coste adicional escrito sin añadir, no se puede seguir (y se avisa)
+✅ Sin nada pendiente, se completa
+✅ Un servicio cancelado con material fuera aparece para registrar su vuelta
+✅ Se registra la vuelta del material de un servicio cancelado (deja de estar 'en uso')
+
+--- Editar y borrar servicios, recetas y menús (Fase 3, bloque 1) ---
+✅ Editar un servicio pendiente: comensales (6 -> 9) y marcarlo como confirmado
+✅ Editar la cantidad de un ingrediente de una receta
+✅ Borrar una receta que no está en ningún menú
+✅ Una receta que está en un menú no se puede borrar (y dice en cuál)
+✅ Cambiar las recetas de un menú
+✅ Un menú que usa un servicio pendiente no se puede borrar (y dice cuál)
+✅ Borrar un menú que no se usa
+
+--- Borrar productos y material, y empezar de cero (Fase 3, bloque 2) ---
+✅ Un producto que usa una receta no se puede borrar (y dice cuál)
+✅ Borrar un producto que no se usa (con confirmación)
+✅ Borrar un material (con confirmación)
+✅ (La copia de los datos se abre con todo)
+✅ 'Borrar todos los datos' está desactivado hasta escribir BORRAR
+✅ Empezar de cero deja la app vacía (también en disco) y antes hace una copia con todo
+
+--- Deshacer un servicio, restaurar una copia y cerrar (Fase 3, bloque 3) ---
+✅ Deshacer un servicio pide confirmarlo
+✅ Deshacer un servicio completado: vuelve a pendiente y lo usado vuelve al inventario
+✅ Se listan las copias de seguridad con su fecha y contenido
+✅ Restaurar una copia: se cargan sus datos y antes se guarda una copia de lo que había
+✅ 'Cerrar el programa' guarda y avisa (aquí no se apaga: no lo ha abierto el lanzador)
+
+--- Categorías, tipo de producto y unidades al limpiar (Fase 3, bloque 6) ---
+✅ Una categoría repetida con otras mayúsculas se unifica
+✅ Cambiar a consumible un ingrediente de receta: aviso que dice en qué receta está
+✅ ...y no se guarda el cambio de tipo
+✅ Al cambiar de kg a g, el peso ya escrito se convierte (1,2 kg -> 1200 g)
+
+--- Dashboard: hoy, pasados sin completar y dinero del mes (mejora 1) ---
+✅ El Dashboard avisa de un servicio pasado que sigue pendiente
+✅ El Dashboard muestra los servicios de hoy y el dinero del mes
+✅ La barra lateral muestra la hora del último guardado
+
+--- Lista de la compra: a mano, cambiar y quitar (mejora 2) ---
+✅ Se puede añadir a mano a la lista algo que no está en el inventario
+✅ La lista dice para qué es cada artículo
+✅ Se puede quitar un artículo de la lista
+
+--- Caducidad al comprar, servicios ordenados y vida útil (mejora 3) ---
+✅ Al comprar un alimento, la caducidad viene marcada y con una fecha propuesta
+✅ Los desplegables de servicios muestran el estado
+✅ Se puede poner vida útil 0 (el mismo día), distinta de 'sin indicar'
+
+--- Preparar una base desde el Recetario y guía de primer uso (mejora 5) ---
+✅ 'Preparar' en el Recetario lleva a Inventario con la base ya elegida
+✅ Con la app vacía, el Dashboard enseña la guía de primer uso
+✅ Cada paso de la guía lleva a su pantalla
+
+RESULTADO: 217/217 comprobaciones correctas
