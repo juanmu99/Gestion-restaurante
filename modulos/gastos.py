@@ -229,7 +229,8 @@ def resumen_servicio(
       de lo comprado van SIN IVA, y "iva_recuperable" dice cuánto IVA era.
 
     Devuelve un diccionario con: comida, consumibles, mantenimiento (productos
-    de limpieza y mantenimiento sacados para este servicio), gastos (total) y
+    de limpieza y mantenimiento sacados para este servicio), sobrante (lo que
+    sobró y se tiró, ver sobrantes.py), gastos (total) y
     gastos_por_categoria (sin su IVA si se recupera), material (roturas y pérdidas), coste_total, cobrado (None si no se indicó),
     margen y margen_porcentaje (None si no hay cobro), y estimado.
     """
@@ -237,8 +238,8 @@ def resumen_servicio(
     # Si el negocio recupera el IVA de sus compras, ese IVA no es un coste:
     # el margen se calcula sin él (y se muestra aparte como "IVA recuperable").
     sin_iva = inventario.iva_recuperable
-    comida = consumibles = mantenimiento = 0.0
-    comida_con = consumibles_con = mantenimiento_con = 0.0
+    comida = consumibles = mantenimiento = sobrante = 0.0
+    comida_con = consumibles_con = mantenimiento_con = sobrante_con = 0.0
     if estimado:
         menu = recetario.buscar_menu(servicio.menu)
         if menu is not None:
@@ -250,7 +251,11 @@ def resumen_servicio(
         for m in inventario.historial:
             if m.servicio_id == servicio.id and m.tipo == "salida":
                 valor = m.valor_sin_iva() if sin_iva else m.valor()
-                if m.tipo_producto == "consumible":
+                if m.motivo == "sobrante":
+                    # Lo que sobró y se tiró (ver sobrantes.py): coste del servicio, en su propia línea.
+                    sobrante += valor
+                    sobrante_con += m.valor()
+                elif m.tipo_producto == "consumible":
                     consumibles += valor
                     consumibles_con += m.valor()
                 elif m.tipo_producto == "mantenimiento":
@@ -262,8 +267,13 @@ def resumen_servicio(
         # raciones ya preparadas
         comida += inventario.elaboraciones.coste_servicio(servicio.id, sin_iva=sin_iva)
         comida_con += inventario.elaboraciones.coste_servicio(servicio.id)
-    iva_recuperable = round((comida_con + consumibles_con + mantenimiento_con)
-                            - (comida + consumibles + mantenimiento), 2) if sin_iva else 0.0
+        # raciones preparadas que sobraron y se tiraron
+        for u in inventario.elaboraciones.usos:
+            if u.servicio_id == servicio.id and u.motivo == "sobrante":
+                sobrante += u.coste_sin_iva if sin_iva else u.coste
+                sobrante_con += u.coste
+    iva_recuperable = round((comida_con + consumibles_con + mantenimiento_con + sobrante_con)
+                            - (comida + consumibles + mantenimiento + sobrante), 2) if sin_iva else 0.0
 
     # Los gastos (gasolina, personal...) siguen el mismo criterio: sin su IVA si se recupera.
     gastos_por_categoria: dict[str, float] = {}
@@ -274,13 +284,15 @@ def resumen_servicio(
     gastos = round(sum(gastos_por_categoria.values()), 2)
 
     material = registro_material.coste_incidencias_servicio(servicio.id) if registro_material else 0.0
-    coste_total = round(comida + consumibles + mantenimiento + gastos + material, 2)
+    coste_total = round(comida + consumibles + mantenimiento + sobrante + gastos + material, 2)
     cobrado = servicio.precio_cobrado
     margen = round(cobrado - coste_total, 2) if cobrado is not None else None
     return {
         "comida": round(comida, 2),
         "consumibles": round(consumibles, 2),
         "mantenimiento": round(mantenimiento, 2),
+        # Lo que sobró del servicio y se decidió tirar (0 si no se apuntó nada).
+        "sobrante": round(sobrante, 2),
         "gastos": gastos,
         "gastos_por_categoria": gastos_por_categoria,
         "material": material,

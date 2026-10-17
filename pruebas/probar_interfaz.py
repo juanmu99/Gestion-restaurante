@@ -788,8 +788,12 @@ def prueba_completar(at: AppTest) -> None:
     caja.select(opcion(caja, f"#{pendiente.id} ·")).run()
     siguiente(at, pendiente, 1)
     siguiente(at, pendiente, 2)
-    at.text_area(key=f"valoracion_{pendiente.id}").input("Todo bien; sobró pan")
+    comprobar(at.session_state[f"_completar_paso_{pendiente.id}"] == 3
+              and any(w.key and w.key.startswith(f"completar_sobrante_{pendiente.id}_") for w in at.number_input),
+              "El paso 3 pregunta lo que sobró (empieza en 0: es opcional)")
     siguiente(at, pendiente, 3)
+    at.text_area(key=f"valoracion_{pendiente.id}").input("Todo bien; sobró pan")
+    siguiente(at, pendiente, 4)
     comprobar(pendiente.estado != "completado" and any("Coste del servicio" in m.label for m in at.metric),
               "El último paso enseña el resumen (con el coste) y todavía no ha tocado nada")
     at.button(key=f"completar_boton_{pendiente.id}").click().run()
@@ -892,6 +896,7 @@ def prueba_completar_lotes(at: AppTest) -> None:
 
     siguiente(at, servicio, 2)
     siguiente(at, servicio, 3)
+    siguiente(at, servicio, 4)
     at.button(key=f"completar_boton_{servicio.id}").click().run()
     comprobar(sin_excepciones(at, "completar con lotes") and servicio.estado == "completado"
               and secreto.buscar_lote(3) is None and abs(secreto.buscar_lote(2).cantidad - 0.2) < 1e-9,
@@ -1314,6 +1319,7 @@ def prueba_bloque4(at: AppTest) -> None:
     at.text_input(key=f"extras_{servicio.id}_concepto_{v}").input("").run()
     siguiente(at, servicio, 2)
     siguiente(at, servicio, 3)
+    siguiente(at, servicio, 4)
     at.button(key=f"completar_boton_{servicio.id}").click().run()
     comprobar(sin_excepciones(at, "completar sin coste pendiente") and servicio.estado == "completado",
               "Sin nada pendiente, se completa")
@@ -1552,6 +1558,94 @@ def prueba_mejora3(at: AppTest) -> None:
               "Se puede poner vida útil 0 (el mismo día), distinta de 'sin indicar'")
 
 
+@prueba("Sobrantes desechados de un servicio")
+def prueba_sobrantes(at: AppTest) -> None:
+    from inventario import Producto
+    from recetario import Menu, Receta
+
+    inv = at.session_state["inventario"]
+    rec = at.session_state["recetario"]
+    serv = at.session_state["registro_servicios"]
+    inv.agregar_producto(Producto("Merluza", "Pescados", 0, "kg", 10, "Lonja", iva=0))
+    inv.entrada_stock("Merluza", 4, precio_unitario=10, fecha_caducidad=date.today() + timedelta(days=3))
+    merluza_r = Receta("Merluza a la plancha", "Principal", {"Merluza": 0.2})
+    rec.agregar_receta(merluza_r)
+    rec.agregar_menu(Menu("Menú sobrantes", [merluza_r]))
+    servicio = Servicio(date.today(), time(14, 0), 10, "Menú sobrantes")
+    serv.agregar_servicio(servicio)
+    sid = servicio.id
+    merluza = inv.buscar_producto("Merluza")
+
+    ir_a(at, "Servicios")
+    caja = at.selectbox(key="completar_select")
+    caja.select(opcion(caja, f"#{sid} ·")).run()
+    siguiente(at, servicio, 1)
+    siguiente(at, servicio, 2)
+    campo = f"completar_sobrante_{sid}_producto_Merluza"
+    comprobar(at.number_input(key=campo).value == 0,
+              "Paso 3 'Sobrantes': cada cosa usada en el servicio, con la cantidad a tirar en 0")
+    at.number_input(key=campo).set_value(3.0).run()
+    comprobar(any("solo quedan 2 kg" in t for t in textos(at.error)),
+              "Si se pone más de lo que quedará, se avisa (según el inventario solo quedan 2 kg)")
+    siguiente(at, servicio, 3)
+    comprobar(at.session_state[f"_completar_paso_{sid}"] == 3, "...y no deja seguir")
+    at.number_input(key=campo).set_value(1.5).run()
+    siguiente(at, servicio, 3)
+    siguiente(at, servicio, 4)
+    comprobar(sin_excepciones(at, "resumen con sobrantes") and at.session_state[f"_completar_paso_{sid}"] == 5
+              and any("Sobrantes que se tirarán" in t for t in textos(at.markdown)) and merluza.stock == 4,
+              "El resumen enseña los sobrantes, y todavía no se ha tocado nada")
+    at.button(key=f"completar_atras_5_{sid}").click().run()
+    at.button(key=f"completar_atras_4_{sid}").click().run()
+    comprobar(at.number_input(key=campo).value == 1.5, "Al volver atrás, lo escrito en Sobrantes se conserva")
+    siguiente(at, servicio, 3)
+    siguiente(at, servicio, 4)
+    at.button(key=f"completar_boton_{sid}").click().run()
+    sobrante = [m for m in inv.historial if m.motivo == "sobrante" and m.servicio_id == sid]
+    comprobar(sin_excepciones(at, "completar con sobrantes") and servicio.estado == "completado"
+              and abs(merluza.stock - 0.5) < 1e-9 and len(sobrante) == 1 and sobrante[0].cantidad == 1.5,
+              "Al completar se descuenta lo consumido (2 kg) y lo tirado como sobrante (1,5 kg), ligado al servicio")
+    gastos = at.session_state["registro_gastos"]
+    from gastos import resumen_servicio
+    r = resumen_servicio(servicio, inv, rec, gastos)
+    comprobar(r["sobrante"] == 15 and r["comida"] == 20, "En la rentabilidad: comida 20 € y sobrante 15 €, por separado")
+
+    ir_a(at, "Historial")
+    at.selectbox(key="hist_cliente").select("Todos").run()
+    sb = at.selectbox(key="hist_ficha")
+    sb.select(opcion(sb, f"#{sid} -")).run()
+    comprobar(sin_excepciones(at, "ficha con sobrantes") and any("Total sobrante: 15,00 €" in t for t in textos(at.markdown)),
+              "La ficha del servicio enseña el sobrante (cantidad, % y coste)")
+    at.button(key=f"hist_sobrante_anular_{sid}_0").click().run()
+    comprobar(abs(merluza.stock - 0.5) < 1e-9, "Anular un sobrante pide confirmación")
+    at.button(key=f"hist_sobrante_anular_{sid}_0_si").click().run()
+    comprobar(sin_excepciones(at, "anular sobrante") and abs(merluza.stock - 2) < 1e-9
+              and len(inv.sobrantes_anulados) == 1,
+              "Al anularlo, la cantidad vuelve al lote y queda constancia del anulado")
+    at.number_input(key=f"hist_sobrante_{sid}_producto_Merluza").set_value(0.5).run()
+    at.button(key=f"hist_sobrante_{sid}_boton").click().run()
+    comprobar(abs(merluza.stock - 2) < 1e-9, "Apuntar un sobrante desde la ficha pide confirmación")
+    at.button(key=f"hist_sobrante_{sid}_boton_si").click().run()
+    comprobar(sin_excepciones(at, "sobrante desde la ficha") and abs(merluza.stock - 1.5) < 1e-9,
+              "También se puede apuntar después, desde la ficha del servicio")
+
+    ir_a(at, "Métricas")
+    comprobar(sin_excepciones(at, "métricas sobrantes")
+              and any("Sobrante desechado en el periodo" in m.label for m in at.metric),
+              "Métricas tiene su pestaña de sobrantes, aparte del desperdicio")
+
+    otro = Servicio(date.today() + timedelta(days=5), time(14, 0), 10, "Menú sobrantes")
+    serv.agregar_servicio(otro)
+    ir_a(at, "Servicios")
+    sb = at.selectbox(key="editar_servicio_select")
+    sb.select(opcion(sb, f"#{otro.id} ·")).run()
+    comprobar(sin_excepciones(at, "aviso al editar") and any("sobró" in t and "Merluza" in t for t in textos(at.info)),
+              "Al preparar otro servicio con ese menú, se avisa de lo que sobró las otras veces")
+    ir_a(at, "Recetario")
+    comprobar(sin_excepciones(at, "aviso en el menú") and any("sobró" in t and "Merluza" in t for t in textos(at.info)),
+              "Y también en la tarjeta del menú, en el Recetario")
+
+
 @prueba("Preparar una base desde el Recetario y guía de primer uso (mejora 5)")
 def prueba_mejora5(at: AppTest) -> None:
     import os
@@ -1621,6 +1715,7 @@ def main() -> int:
     prueba_mejora2(at)
     prueba_mejora3(at)
     prueba_mejora5(at)
+    prueba_sobrantes(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

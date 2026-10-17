@@ -21,6 +21,9 @@ empaquetado. En concreto:
   6. Si se vuelve a abrir el .exe con el programa ya abierto, no arranca otro:
      se cierra solo enseguida (solo abre el navegador).
   7. Al cerrar y volver a abrir el .exe, los datos guardados siguen ahí.
+  8. ACTUALIZAR: con los datos guardados por una versión anterior del
+     programa (pruebas/datos_guardados/sesion_v1.json), el .exe nuevo los
+     abre sin errores, sin perder nada, y antes hace una copia de seguridad.
 
 Uso:  python pruebas/probar_exe.py dist/GestionRestaurante.exe
 Deja el informe en resultados/resultado_exe.txt y capturas en
@@ -62,12 +65,12 @@ def comprobar(condicion: bool, descripcion: str, detalle: str = "") -> bool:
 LOCALAPPDATA_PRUEBA = Path(tempfile.mkdtemp(prefix="localappdata_"))
 
 
-def arrancar_exe(exe: Path, log: Path) -> subprocess.Popen:
+def arrancar_exe(exe: Path, log: Path, localappdata: Path = LOCALAPPDATA_PRUEBA) -> subprocess.Popen:
     # Se ejecuta desde SU carpeta, como cuando el cliente hace doble clic.
     # LOCALAPPDATA apunta a una carpeta temporal: así la prueba no toca nada
     # del ordenador y se sabe exactamente dónde deben aparecer los datos.
     salida = open(log, "a", encoding="utf-8", errors="replace")
-    entorno = {**os.environ, "LOCALAPPDATA": str(LOCALAPPDATA_PRUEBA)}
+    entorno = {**os.environ, "LOCALAPPDATA": str(localappdata)}
     return subprocess.Popen([str(exe)], cwd=exe.parent, stdout=salida, stderr=subprocess.STDOUT, env=entorno)
 
 
@@ -238,6 +241,45 @@ def probar(exe_original: Path) -> None:
         shutil.rmtree(LOCALAPPDATA_PRUEBA, ignore_errors=True)
 
 
+def probar_actualizacion(exe_original: Path) -> None:
+    """
+    Lo que pasará en el ordenador del cliente al actualizar: ya tiene datos
+    guardados con una versión anterior y abre el .exe nuevo.
+    """
+    localappdata = Path(tempfile.mkdtemp(prefix="localappdata_v1_"))
+    datos = localappdata / "GestionRestaurante"
+    datos.mkdir(parents=True)
+    antiguos = RAIZ / "pruebas" / "datos_guardados" / "sesion_v1.json"
+    shutil.copy2(antiguos, datos / "sesion.json")
+    carpeta = Path(tempfile.mkdtemp(prefix="cliente_v1_"))
+    exe = carpeta / exe_original.name
+    shutil.copy2(exe_original, exe)
+    log = RESULTADOS / "exe_consola.log"
+    proceso = arrancar_exe(exe, log, localappdata)
+    try:
+        if not comprobar(esperar_servidor(proceso), "Actualizar: el .exe nuevo arranca con los datos de la versión anterior"):
+            return
+        with sync_playwright() as p:
+            navegador = p.chromium.launch()
+            page = abrir_app(navegador)
+            for pagina in PAGINAS:
+                ir_a(page, pagina)
+                error = errores_en_pantalla(page)
+                comprobar(not error, f"Actualizar: página '{pagina}' sin errores con los datos anteriores", error)
+            ir_a(page, "Historial")
+            captura(page, "10_historial_datos_anteriores")
+            comprobar("Familia García" in page.content(),
+                      "Actualizar: los servicios guardados con la versión anterior siguen ahí")
+            navegador.close()
+        copias = list((datos / "copias").glob("antes_de_actualizar_*.json"))
+        comprobar(len(copias) == 1 and copias[0].read_bytes() == antiguos.read_bytes(),
+                  "Actualizar: antes de tocar nada se guarda una copia exacta de los datos anteriores")
+    finally:
+        cerrar_exe(proceso)
+        shutil.rmtree(carpeta, ignore_errors=True)
+        shutil.rmtree(localappdata, ignore_errors=True)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("Uso: python pruebas/probar_exe.py ruta\\al\\GestionRestaurante.exe")
@@ -250,6 +292,10 @@ def main() -> int:
             probar(exe)
         except Exception as e:  # noqa: BLE001
             comprobar(False, "La prueba del .exe terminó sin fallos inesperados", repr(e)[:500])
+        try:
+            probar_actualizacion(exe)
+        except Exception as e:  # noqa: BLE001
+            comprobar(False, "La prueba de actualizar con datos anteriores terminó sin fallos inesperados", repr(e)[:500])
 
     lineas.append("")
     lineas.append("RESULTADO: " + ("TODO BIEN" if fallos == 0 else f"{fallos} FALLO(S)"))

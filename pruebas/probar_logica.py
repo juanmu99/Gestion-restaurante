@@ -1714,6 +1714,257 @@ mismo_dia = Receta("Tartar", "Entrantes", {"Pescado": 0.1}, vida_util_dias=0)
 comprobar(mismo_dia.caducidad_propuesta(HOY) == HOY and Receta.from_dict(mismo_dia.to_dict()).vida_util_dias == 0,
           "Vida útil 0 = se toma el mismo día (y se guarda como 0, no como 'sin indicar')")
 
+print("\n--- Sobrantes desechados de un servicio ---")
+import json  # noqa: E402
+import sobrantes  # noqa: E402
+import historial as historial_mod  # noqa: E402
+from gastos import RegistroGastos as _RG, resumen_servicio as _rs  # noqa: E402
+from persistencia import (cargar_sesion_segura as _css, sesion_a_dict as _sad2, guardar_sesion as _gs,  # noqa: E402
+                          SesionIlegible, VERSION_DATOS)
+
+
+def foto_stock(inv: Inventario) -> dict:
+    """Cuánto hay en cada lote de cada producto y en cada tanda (para comprobar que algo vuelve EXACTAMENTE igual)."""
+    return {
+        "lotes": {n: {l.id: round(l.cantidad, 6) for l in p.lotes} for n, p in inv.productos.items()},
+        "tandas": {t.id: round(t.raciones, 6) for t in inv.elaboraciones.tandas},
+    }
+
+
+def cuadra(inv: Inventario) -> bool:
+    """Entradas - salidas del historial = stock de cada producto (para productos que empezaron a 0)."""
+    for nombre, p in inv.productos.items():
+        neto = sum(m.cantidad if m.tipo == "entrada" else -m.cantidad for m in inv.historial if m.producto_nombre == nombre)
+        if abs(neto - p.stock) > 1e-6:
+            print(f"   (no cuadra {nombre}: historial {neto}, stock {p.stock})")
+            return False
+    return True
+
+
+inv = Inventario()
+inv.iva_recuperable = False  # cifras con IVA, más fáciles de comprobar a mano
+silencio(inv.agregar_producto, Producto("Salmón", "Pescados", 0, "kg", 18, "Lonja", iva=10))
+silencio(inv.entrada_stock, "Salmón", 5, precio_unitario=18, fecha_caducidad=HOY + timedelta(days=4))
+silencio(inv.agregar_producto, Producto("Harina", "Secos", 0, "kg", 1, "Harinas"))
+silencio(inv.entrada_stock, "Harina", 3, precio_unitario=1)
+silencio(inv.agregar_producto, Producto("Servilleta", "Desechables", 0, "unidades", 0.02, "Hostelería", tipo="consumible"))
+silencio(inv.entrada_stock, "Servilleta", 100, precio_unitario=0.02)
+silencio(inv.agregar_producto, Producto("Lejía", "Limpieza", 0, "litros", 1, "Droguería", tipo="mantenimiento"))
+silencio(inv.entrada_stock, "Lejía", 2, precio_unitario=1)
+recetario = Recetario()
+salmon_r = Receta("Salmón al horno", "Principal", {"Salmón": 0.25})
+croquetas = Receta("Croquetas", "Entrantes", {"Harina": 0.05}, vida_util_dias=2)
+for r in (salmon_r, croquetas):
+    silencio(recetario.agregar_receta, r)
+silencio(recetario.agregar_menu, Menu("Boda", [salmon_r, croquetas], {"Servilleta": 2}))
+tanda = silencio(inv.elaboraciones.nueva_tanda, "Croquetas", 18, 0.5, HOY + timedelta(days=2))
+registro = RegistroServicios()
+boda = Servicio(HOY, time(14, 0), 12, "Boda", precio_cobrado=500)
+silencio(registro.agregar_servicio, boda)
+gastos_s = _RG()
+
+try:
+    sobrantes.registrar(boda, inv, {"Salmón": 1})
+    comprobar(False, "No se puede apuntar sobrante de un servicio sin completar")
+except ValueError:
+    comprobar(True, "No se puede apuntar sobrante de un servicio sin completar")
+inicial = foto_stock(inv)
+silencio(recetario.completar_servicio, boda, inv, plan_elaboraciones={"Croquetas": [tanda.id]})
+comprobar(inv.buscar_producto("Salmón").stock == 2 and inv.elaboraciones.raciones_disponibles("Croquetas") == 6,
+          "Tras completar quedan 2 kg de salmón y 6 croquetas (lo que pedía el menú: 3 kg y 12 raciones)")
+antes_rent = _rs(boda, inv, recetario, gastos_s)
+candidatos = {c["nombre"]: c for c in sobrantes.candidatos(boda, inv)}
+comprobar(set(candidatos) == {"Salmón", "Croquetas (preparada)", "Servilleta"}
+          and candidatos["Salmón"]["usado"] == 3 and candidatos["Salmón"]["disponible"] == 2,
+          "Se proponen para revisar lo del menú con stock (no la lejía), con lo consumido y lo que queda")
+comprobar("Harina" in sobrantes.otros_productos(boda, inv) and "Lejía" not in sobrantes.otros_productos(boda, inv),
+          "Se puede añadir otro alimento o consumible, pero no lo de limpieza")
+
+n_hist = len(inv.historial)
+for productos, raciones, motivo in (
+    ({"Salmón": 2.5}, {}, "más de lo que queda"),
+    ({"Harina": 0.5, "Salmón": 3}, {}, "una línea mal y otra bien"),
+    ({}, {"Croquetas": 7}, "más raciones de las que quedan"),
+    ({"Lejía": 0.5}, {}, "un producto de limpieza"),
+    ({}, {}, "nada"),
+):
+    try:
+        sobrantes.registrar(boda, inv, productos, raciones)
+        comprobar(False, f"Se rechaza tirar {motivo}")
+    except ValueError as error:
+        comprobar(len(inv.historial) == n_hist and inv.buscar_producto("Harina").stock == 3
+                  and inv.elaboraciones.raciones_disponibles("Croquetas") == 6,
+                  f"Se rechaza tirar {motivo}, sin tocar nada")
+        if motivo == "más de lo que queda":
+            comprobar("solo quedan 2 kg" in str(error) and "compra por registrar" in str(error),
+                      "El aviso dice cuánto queda según el inventario y qué puede estar pasando")
+
+plan = sobrantes.previsualizar(boda, inv, {"Salmón": 2}, {"Croquetas": 6})
+comprobar(not plan["problemas"] and plan["filas"][1]["despues"] == 0 and plan["filas"][1]["coste"] == 36,
+          "La vista previa dice cómo queda cada cosa (salmón 2 → 0 kg, 36 €) sin tocar nada")
+comprobar(inv.buscar_producto("Salmón").stock == 2, "Previsualizar no cambia el stock")
+creados = silencio(sobrantes.registrar, boda, inv, {"Salmón": 2}, {"Croquetas": 6})
+comprobar(len(creados) == 2 and inv.buscar_producto("Salmón").stock == 0
+          and inv.elaboraciones.raciones_disponibles("Croquetas") == 0,
+          "Se tiran 2 kg de salmón y 6 croquetas: salen del inventario")
+sal = [m for m in inv.historial if m.motivo == "sobrante"]
+comprobar(len(sal) == 1 and sal[0].servicio_id == boda.id and sal[0].lote_id == 1,
+          "Queda una salida 'sobrante' ligada al servicio y a su lote")
+comprobar(cuadra(inv), "El inventario cuadra: entradas - salidas = stock")
+rent = _rs(boda, inv, recetario, gastos_s)
+comprobar(rent["sobrante"] == 39 and rent["comida"] == antes_rent["comida"]
+          and abs(rent["coste_total"] - (antes_rent["coste_total"] + 39)) < 1e-9,
+          "Rentabilidad: el sobrante (36 + 3 = 39 €) va en su línea; lo consumido no cambia (no se cuenta dos veces)")
+rs = sobrantes.resumen_servicio(boda, inv)
+fs = {f["producto"]: f for f in rs["filas"]}
+comprobar(abs(fs["Salmón"]["porcentaje"] - 0.4) < 1e-9 and abs(fs["Croquetas (preparada)"]["porcentaje"] - 6 / 18) < 1e-9,
+          "Porcentaje = tirado / (consumido + tirado): salmón 40 %, croquetas 33 %")
+comida_y_cons = antes_rent["comida"] + antes_rent["consumibles"]
+comprobar(rs["total"] == 39 and abs(rs["porcentaje_coste"] - 39 / (comida_y_cons + 39)) < 1e-9,
+          "Total tirado y parte del coste de comida y consumibles del servicio")
+met = Metricas(inv)
+comprobar(met.cantidad_consumida("Salmón", HOY, HOY) == 3 and met.cantidad_desperdiciada("Salmón", HOY, HOY) == 0
+          and met.valor_desperdiciado_total(HOY, HOY) == 0,
+          "El sobrante NO cuenta como consumo ni como desperdicio (caducado) en Métricas")
+comprobar(all(c["cantidad"] != 2 or c["producto"] != "Salmón" for c in historial_mod.consumos(boda, inv)),
+          "En la ficha, lo consumido no incluye el sobrante")
+rango = sobrantes.en_rango(inv, registro.servicios, HOY, HOY)
+comprobar(rango["total"] == 39 and rango["por_producto"][0]["producto"] == "Salmón"
+          and abs(rango["por_producto"][0]["porcentaje"] - 0.4) < 1e-9 and rango["por_menu"][0]["menu"] == "Boda",
+          "Métricas de sobrantes: total, por producto (con su %) y por menú")
+aviso = sobrantes.aviso_menu("Boda", registro.servicios, inv)
+texto = sobrantes.texto_aviso_menu("Boda", aviso)
+comprobar(aviso["servicios"] == 1 and aviso["productos"][0]["producto"] == "Salmón"
+          and abs(aviso["productos"][0]["por_10"] - 2 / 12 * 10) < 1e-3 and "40 %" in texto
+          and "unas 5 raciones" in texto,
+          "Aviso para el próximo evento con ese menú: 'sobró de media un 40 % de Salmón (unos 1,667 kg por cada 10 comensales)'")
+comprobar(sobrantes.aviso_menu("Otro menú", registro.servicios, inv) is None, "Sin historial de ese menú, no hay aviso")
+
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = str(Path(carpeta) / "sesion.json")
+    silencio(_gs, inv, registro, recetario, GestorCompras(), ArchivoInformes(), ruta, gastos_s)
+    sesion = silencio(cargar_sesion, ruta)
+    s2 = sesion.registro_servicios.servicios[0]
+    comprobar(sobrantes.resumen_servicio(s2, sesion.inventario)["total"] == 39
+              and _rs(s2, sesion.inventario, sesion.recetario, sesion.registro_gastos)["sobrante"] == 39,
+              "Los sobrantes se guardan y se cargan")
+
+registro_salmon = next(r for r in rs["registros"] if not hasattr(r, "tanda_id"))
+silencio(sobrantes.anular, inv, registro_salmon)
+salmon = inv.buscar_producto("Salmón")
+comprobar(salmon.stock == 2 and salmon.lotes[0].id == 1 and salmon.lotes[0].fecha_caducidad == HOY + timedelta(days=4)
+          and salmon.lotes[0].precio_unitario == 18,
+          "Anular un sobrante lo devuelve a su MISMO lote (número, caducidad y precio), aunque se hubiera vaciado")
+comprobar(len(inv.sobrantes_anulados) == 1 and inv.sobrantes_anulados[0].anulado == HOY
+          and sobrantes.resumen_servicio(boda, inv)["total"] == 3 and cuadra(inv),
+          "Queda constancia del anulado (con su fecha), deja de contar y el inventario sigue cuadrando")
+try:
+    sobrantes.anular(inv, registro_salmon)
+    comprobar(False, "No se puede anular dos veces")
+except ValueError:
+    comprobar(True, "No se puede anular dos veces")
+copia_inv = Inventario.from_dict(json.loads(json.dumps(inv.to_dict())))
+comprobar(len(copia_inv.sobrantes_anulados) == 1 and copia_inv.sobrantes_anulados[0].anulado == HOY,
+          "Los sobrantes anulados se guardan y se cargan")
+
+proximo = Servicio(HOY + timedelta(days=2), time(14, 0), 12, "Boda")
+silencio(registro.agregar_servicio, proximo)
+plan = sobrantes.previsualizar(boda, inv, {"Salmón": 1}, registro_servicios=registro, recetario=recetario)
+comprobar(any("Ojo" in a and "Salmón" in a for a in plan["avisos"]),
+          "Si un servicio próximo necesita ese producto, se avisa antes de tirarlo")
+
+silencio(sobrantes.registrar, boda, inv, {"Salmón": 1})
+resultado = silencio(recetario.deshacer_completar, boda, inv, gastos_s)
+comprobar(resultado["sobrantes"] == 2 and foto_stock(inv) == inicial and cuadra(inv),
+          "Deshacer el servicio devuelve también lo tirado como sobrante: el stock queda EXACTAMENTE como antes")
+comprobar(not sobrantes.registros_servicio(inv, boda.id) and len(inv.sobrantes_anulados) == 2
+          and len(inv.elaboraciones.sobrantes_anulados) == 1,
+          "Esos sobrantes quedan como anulados (constancia), no desaparecen sin más")
+
+silencio(recetario.completar_servicio, boda, inv, plan_elaboraciones={"Croquetas": [tanda.id]})
+silencio(sobrantes.registrar, boda, inv, {"Salmón": 0.5})
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta_excel = silencio(exportar_todo, inv, registro, GestorCompras(), carpeta, gastos_s, recetario)
+    libro = load_workbook(ruta_excel)
+    hoja = libro["Sobrantes"]
+    filas = [[c.value for c in f] for f in hoja.iter_rows(min_row=2)]
+    vigentes = [f for f in filas if f[10] == "Vigente"]
+    anulados = [f for f in filas if isinstance(f[10], str) and f[10].startswith("Anulado")]
+    comprobar(len(vigentes) == 1 and len(anulados) == 3 and filas[-1][7] == "TOTAL tirado",
+              "Excel: hoja 'Sobrantes' con cada registro (vigentes y anulados) y el total de los vigentes")
+    cab = [c.value for c in libro["Rentabilidad"][1]]
+    comprobar(any(str(c).startswith("Sobrante desechado") for c in cab),
+              "Excel: la hoja Rentabilidad tiene la columna del sobrante")
+
+print("\n--- Compatibilidad con los datos que ya hay guardados ---")
+FOTO_V1 = RAIZ / "pruebas" / "datos_guardados" / "sesion_v1.json"
+
+
+def contiene(viejo, nuevo, ruta="datos") -> list[str]:
+    """Todo lo que había en `viejo` sigue en `nuevo` con el mismo valor (lo nuevo puede tener más cosas)."""
+    if isinstance(viejo, dict):
+        if not isinstance(nuevo, dict):
+            return [ruta]
+        fallos_c = []
+        for clave, valor in viejo.items():
+            if clave not in nuevo:
+                fallos_c.append(f"{ruta}.{clave} (desaparece)")
+            else:
+                fallos_c += contiene(valor, nuevo[clave], f"{ruta}.{clave}")
+        return fallos_c
+    if isinstance(viejo, list):
+        if not isinstance(nuevo, list) or len(viejo) != len(nuevo):
+            return [f"{ruta} (cambia el número de elementos)"]
+        return [f for i, (a, b) in enumerate(zip(viejo, nuevo)) for f in contiene(a, b, f"{ruta}[{i}]")]
+    if isinstance(viejo, float) or isinstance(nuevo, float):
+        return [] if isinstance(nuevo, (int, float)) and abs(viejo - nuevo) < 1e-9 else [ruta]
+    return [] if viejo == nuevo else [ruta]
+
+
+with tempfile.TemporaryDirectory() as carpeta:
+    ruta = Path(carpeta) / "sesion.json"
+    ruta.write_bytes(FOTO_V1.read_bytes())
+    original = json.loads(FOTO_V1.read_text(encoding="utf-8"))
+    sesion, aviso = silencio(_css, str(ruta))
+    comprobar(sesion is not None and aviso is None, "Los datos guardados con la versión anterior se abren sin avisos")
+    args = (sesion.inventario, sesion.registro_servicios, sesion.recetario, sesion.gestor_compras,
+            sesion.archivo_informes, sesion.registro_gastos, sesion.registro_material)
+    diferencias = contiene(original, _sad2(*args))
+    comprobar(not diferencias, "No se pierde ni cambia NADA de lo que había guardado"
+              + (f" (falla: {', '.join(diferencias[:5])})" if diferencias else ""))
+    copias_act = list((Path(carpeta) / "copias").glob("antes_de_actualizar_v1_a_v*.json"))
+    comprobar(len(copias_act) == 1 and copias_act[0].read_bytes() == FOTO_V1.read_bytes(),
+              "Antes de tocarlos se guarda una copia EXACTA (copias/antes_de_actualizar_...)")
+    silencio(_css, str(ruta))
+    comprobar(len(list((Path(carpeta) / "copias").glob("antes_de_actualizar_*.json"))) == 1,
+              "Esa copia se hace una sola vez por actualización")
+    inv_v1 = sesion.inventario
+    stock_antes = {n: p.stock for n, p in inv_v1.productos.items()}
+    boda_v1 = next(s for s in sesion.registro_servicios.servicios if s.estado == "completado")
+    cand = sobrantes.candidatos(boda_v1, inv_v1)
+    comprobar(any(c["nombre"] == "Salmón" for c in cand),
+              "En un servicio completado con la versión anterior ya se pueden apuntar sobrantes")
+    silencio(sobrantes.registrar, boda_v1, inv_v1, {"Salmón": 1})
+    comprobar(abs(inv_v1.buscar_producto("Salmón").stock - (stock_antes["Salmón"] - 1)) < 1e-9
+              and all(abs(p.stock - stock_antes[n]) < 1e-9 for n, p in inv_v1.productos.items() if n != "Salmón"),
+              "Apuntar un sobrante solo cambia ese producto")
+    silencio(_gs, *args[:5], str(ruta), *args[5:])
+    guardado = json.loads(ruta.read_text(encoding="utf-8"))
+    comprobar(guardado["version_datos"] == VERSION_DATOS, "Al guardar, el archivo apunta la versión de los datos")
+    sesion2, _ = silencio(_css, str(ruta))
+    comprobar(sobrantes.resumen_servicio(next(s for s in sesion2.registro_servicios.servicios if s.id == boda_v1.id),
+                                         sesion2.inventario)["filas"][0]["cantidad"] == 1,
+              "Y se vuelven a abrir con el sobrante")
+    guardado["version_datos"] = VERSION_DATOS + 1
+    ruta.write_text(json.dumps(guardado), encoding="utf-8")
+    contenido = ruta.read_bytes()
+    try:
+        silencio(_css, str(ruta))
+        comprobar(False, "Datos de una versión MÁS NUEVA no se abren (se perderían al guardar)")
+    except SesionIlegible as error:
+        comprobar("MÁS NUEVA" in str(error) and ruta.read_bytes() == contenido,
+                  "Datos de una versión MÁS NUEVA no se abren (se perderían al guardar), y no se tocan")
+
 print()
 if fallos:
     print(f"RESULTADO: {len(fallos)} FALLO(S)")

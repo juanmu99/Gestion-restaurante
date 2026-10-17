@@ -133,7 +133,10 @@ class MovimientoStock(ConPrecio):
     # y sus derivados, para que no se confundan con consumo ni con compras.
     # "elaboración" tampoco: son los ingredientes que se gastan al preparar
     # una receta por adelantado (ver elaboraciones.py).
-    MOTIVOS_SALIDA_VALIDOS = MOTIVOS_SALIDA + ("limpieza", "elaboración")
+    # "sobrante" tampoco: lo que SOBRÓ de un servicio y se decide tirar aunque
+    # esté bueno (ver sobrantes.py). Va siempre ligado a su servicio y es
+    # distinto del "desperdicio" (algo que caducó o se estropeó).
+    MOTIVOS_SALIDA_VALIDOS = MOTIVOS_SALIDA + ("limpieza", "elaboración", "sobrante")
     # "elaboración" (entrada): lo que sale de preparar una elaboración base
     # (un sofrito, un fondo...). No es una compra: no cuenta como gasto.
     MOTIVOS_ENTRADA = ("compra", "limpieza", "elaboración")
@@ -154,6 +157,7 @@ class MovimientoStock(ConPrecio):
         servicio_id: Optional[int] = None,
         iva: float = 0.0,
         precio_base: Optional[float] = None,
+        anulado: Optional[date] = None,
     ):
         if tipo not in ("entrada", "salida"):
             raise ValueError("tipo debe ser 'entrada' o 'salida'")
@@ -188,6 +192,9 @@ class MovimientoStock(ConPrecio):
         # Si salió para un servicio (al completarlo), su número: así se sabe
         # lo que costó de verdad cada servicio.
         self.servicio_id = servicio_id
+        # Solo para sobrantes anulados (Inventario.sobrantes_anulados): cuándo
+        # se anuló. Los movimientos del historial siempre tienen None.
+        self.anulado = anulado
 
     def es_compra(self) -> bool:
         """True solo para entradas que son dinero gastado (no para lo que sale de una limpieza)."""
@@ -228,6 +235,8 @@ class MovimientoStock(ConPrecio):
             "lote": self.lote,
             "tipo_producto": self.tipo_producto,
             "servicio_id": self.servicio_id,
+            # Solo si está anulado: así los movimientos de siempre se guardan igual que antes.
+            **({"anulado": self.anulado.isoformat()} if self.anulado else {}),
         }
 
     @classmethod
@@ -248,6 +257,7 @@ class MovimientoStock(ConPrecio):
             lote=datos.get("lote"),
             tipo_producto=datos.get("tipo_producto", "alimento"),
             servicio_id=datos.get("servicio_id"),
+            anulado=date.fromisoformat(datos["anulado"]) if datos.get("anulado") else None,
         )
 
 
@@ -1029,6 +1039,10 @@ class Inventario:
         self.elaboraciones = RegistroElaboraciones()
         # Historial de precios: una fila por compra (ver PrecioCompra).
         self.historial_precios: list[PrecioCompra] = []
+        # Sobrantes que se anularon (por error al apuntarlos): ya NO cuentan en
+        # nada (su cantidad volvió al lote), pero se guardan aparte, con la
+        # fecha de anulación, para que quede constancia. Ver sobrantes.py.
+        self.sobrantes_anulados: list[MovimientoStock] = []
 
     # Los ajustes de IVA son de CADA inventario (AJUSTES solo da el valor
     # inicial): si fueran globales, dos ventanas del programa se los pisarían.
@@ -2107,7 +2121,7 @@ class Inventario:
                 l.producto_limpio = nuevo
             if antiguo in l.derivados_kg:
                 l.derivados_kg = {(nuevo if n == antiguo else n): kg for n, kg in l.derivados_kg.items()}
-        for m in self.historial:
+        for m in self.historial + self.sobrantes_anulados:
             if m.producto_nombre == antiguo:
                 m.producto_nombre = nuevo
         for p in self.productos.values():
@@ -2300,6 +2314,7 @@ class Inventario:
             "historial_precios": [p.to_dict() for p in self.historial_precios],
             "iva_recuperable": self.iva_recuperable,
             "iva_cobro": self.iva_cobro,
+            "sobrantes_anulados": [m.to_dict() for m in self.sobrantes_anulados],
         }
 
     @classmethod
@@ -2323,6 +2338,8 @@ class Inventario:
         for datos_limpieza in datos.get("limpiezas", []):
             inventario.limpiezas.append(Limpieza.from_dict(datos_limpieza))
         inventario.elaboraciones = RegistroElaboraciones.from_dict(datos.get("elaboraciones", {}))
+        # Datos de antes de los sobrantes: no hay ninguno anulado.
+        inventario.sobrantes_anulados = [MovimientoStock.from_dict(d) for d in datos.get("sobrantes_anulados", [])]
         inventario.unificar_categorias()  # datos guardados con categorías repetidas ("Verduras" y "verduras ")
         if "historial_precios" in datos:
             inventario.historial_precios = [PrecioCompra.from_dict(d) for d in datos["historial_precios"]]

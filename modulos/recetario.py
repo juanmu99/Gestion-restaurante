@@ -22,6 +22,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from elaboraciones import PreparacionBase
+import sobrantes
 from inventario import ConNotas, Inventario
 from servicios import Servicio
 
@@ -860,7 +861,8 @@ class Recetario:
         - lo que salió del inventario vuelve a sus lotes, y las raciones
           preparadas, a sus tandas (su consumo desaparece de Métricas);
         - se quitan los costes adicionales apuntados al completarlo
-          (`registro_gastos`). Las compras no previstas de productos se
+          (`registro_gastos`). Lo apuntado como sobrante vuelve también a
+          sus lotes y tandas (queda como anulado). Las compras no previstas de productos se
           quedan (fueron reales): solo vuelve al stock lo que se usó.
         - la valoración se conserva; las roturas de material no se tocan.
         Comprueba antes que se puede (ValueError si no, sin tocar nada).
@@ -868,14 +870,22 @@ class Recetario:
         """
         if servicio.estado != "completado":
             raise ValueError(f"El servicio #{servicio.id} no está completado.")
+        # Los sobrantes que se tiraron de este servicio también vuelven (se
+        # anulan, con constancia). Se comprueba antes de tocar nada.
+        problemas = [p for p in (sobrantes._problema_anular(inventario, r)
+                                 for r in sobrantes.registros_servicio(inventario, servicio.id)) if p]
+        if problemas:
+            raise ValueError("No se puede deshacer: " + " ".join(dict.fromkeys(problemas)))
         salidas = inventario.devolver_salidas_servicio(servicio.id)  # comprueba antes de tocar nada
         usos = inventario.elaboraciones.devolver_usos_servicio(servicio.id)
+        n_sobrantes = sobrantes.anular_servicio(inventario, servicio.id)
         gastos = registro_gastos.quitar_costes_al_completar(servicio.id) if registro_gastos is not None else []
         servicio.estado = "pendiente"
         servicio.fecha_completado = None
         servicio.menu_completado = None
         print(f"↩️  Servicio #{servicio.id} deshecho: vuelve a estar pendiente.")
-        return {"salidas": len(salidas), "raciones": sum(u.raciones for u in usos), "gastos": gastos}
+        return {"salidas": len(salidas), "raciones": sum(u.raciones for u in usos), "gastos": gastos,
+                "sobrantes": n_sobrantes}
 
     def recomendar_menus(self, inventario: Inventario, dias: int = 7) -> list[tuple[Menu, float]]:
         """

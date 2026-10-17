@@ -53,6 +53,17 @@ class Sesion:
 # ---------- Dónde se guardan los datos ----------
 
 NOMBRE_CARPETA_WINDOWS = "GestionRestaurante"
+
+# Versión del FORMATO de los datos guardados. Se sube cada vez que una
+# actualización añade algo nuevo al archivo (los datos antiguos se siguen
+# abriendo siempre: lo nuevo empieza vacío). Sirve para:
+# - hacer una copia de los datos antes de que una versión nueva los toque
+#   por primera vez (copias/antes_de_actualizar_...json, no se borra sola);
+# - no abrir datos de una versión MÁS NUEVA con un programa antiguo (se
+#   perderían al guardar las cosas que el programa antiguo no conoce).
+# 1 = datos sin este número (todo lo anterior a los sobrantes).
+# 2 = sobrantes desechados de los servicios.
+VERSION_DATOS = 2
 COPIAS_A_CONSERVAR = 30  # copias diarias (una por día con cambios)
 
 
@@ -95,6 +106,7 @@ def sesion_a_dict(
 ) -> dict:
     """Todo el estado de la aplicación, como diccionario listo para JSON."""
     return {
+        "version_datos": VERSION_DATOS,
         "inventario": inventario.to_dict(),
         "servicios": registro_servicios.to_dict(),
         "recetario": recetario.to_dict(),
@@ -226,12 +238,26 @@ def cargar_sesion_segura(ruta: str) -> tuple[Optional[Sesion], Optional[str]]:
     if not ruta.exists():
         return None, None
     try:
-        _leer_json(ruta)
+        datos = _leer_json(ruta)
     except (ValueError, UnicodeDecodeError) as error:  # JSON roto
         print(f"❌ {ruta} está dañado: {error!r}")
     else:
+        version = version_de(datos)
+        if version > VERSION_DATOS:
+            raise SesionIlegible(
+                f"Estos datos se guardaron con una versión MÁS NUEVA del programa (formato {version}; este programa "
+                f"conoce hasta el {VERSION_DATOS}). Para no perder nada, no se abren: instala la versión más reciente "
+                f"del programa. No se ha tocado nada: el archivo sigue en {ruta}."
+            )
+        aviso = None
+        if version < VERSION_DATOS:
+            try:
+                copia_antes_de_actualizar(ruta, version)
+            except OSError as error:
+                aviso = (f"No se ha podido hacer la copia de seguridad previa a la actualización ({error}). "
+                         f"Tus datos se han abierto bien; las copias diarias siguen funcionando.")
         try:
-            return cargar_sesion(str(ruta)), None
+            return cargar_sesion(str(ruta)), aviso
         except Exception as error:  # noqa: BLE001
             raise SesionIlegible(
                 f"No se han podido abrir los datos guardados ({type(error).__name__}: {error}). No se ha tocado "
@@ -259,8 +285,34 @@ def cargar_sesion_segura(ruta: str) -> tuple[Optional[Sesion], Optional[str]]:
     )
 
 
+def version_de(datos: dict) -> int:
+    """La versión del formato de unos datos guardados (1 si son de antes de existir este número)."""
+    version = datos.get("version_datos", 1) if isinstance(datos, dict) else 1
+    return version if isinstance(version, int) and version >= 1 else 1
+
+
+def copia_antes_de_actualizar(ruta: Path, version: int) -> Optional[Path]:
+    """
+    La primera vez que una versión nueva del programa abre datos de una
+    anterior, guarda una copia EXACTA del archivo tal y como estaba
+    (copias/antes_de_actualizar_v<antigua>_a_v<nueva>_<fecha>.json). No entra
+    en la rotación de las copias diarias: no se borra sola. Si ya hay una
+    copia de ese salto de versión, no se repite. Devuelve la copia hecha (o None).
+    """
+    copias = Path(ruta).parent / "copias"
+    prefijo = f"antes_de_actualizar_v{version}_a_v{VERSION_DATOS}_"
+    if copias.exists() and any(copias.glob(prefijo + "*.json")):
+        return None
+    copias.mkdir(parents=True, exist_ok=True)
+    destino = copias / f"{prefijo}{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    shutil.copy2(ruta, destino)
+    print(f"🛟 Copia de los datos antes de actualizar: {destino}")
+    return destino
+
+
 TIPOS_DE_COPIA = {
     "sesion_": "Copia del día",
+    "antes_de_actualizar_": "Antes de actualizar el programa",
     "antes_de_empezar_de_cero_": "Antes de empezar de cero",
     "antes_de_restaurar_": "Antes de restaurar otra copia",
 }

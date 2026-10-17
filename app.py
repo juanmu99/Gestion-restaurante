@@ -21,8 +21,11 @@ Conceptos nuevos en este archivo:
   un botón, en vez de recargar la página en cada campo individual.
 """
 
+import copy
+import io
 import os
 import re
+from contextlib import redirect_stdout
 import threading
 import sys
 from pathlib import Path
@@ -52,6 +55,7 @@ from persistencia import (
 from gastos import Gasto, RegistroGastos, resumen_servicio, resumen_periodo, NOTA_COSTE_AL_COMPLETAR
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
+import sobrantes
 from metricas import trimestre
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, rango_mes_calendario, PERIODOS_VALIDOS, NOMBRES_MESES
 
@@ -1315,6 +1319,9 @@ def _pestana_stock(inv: Inventario, nombres: list[str]) -> None:
         return
     lote_id = _elegir_lote(producto, "¿De qué lote sale?", k("lote"))
     motivo = st.selectbox("Motivo de la salida", MovimientoStock.MOTIVOS_SALIDA, key=k("motivo"))
+    if motivo == "desperdicio":
+        st.caption("Desperdicio = algo que **caducó o se estropeó**. Si es lo que sobró de un servicio y se tira, "
+                   "apúntalo en Historial › ficha del servicio › 🗑️ Sobrantes: así cuenta en el coste de ese servicio.")
     servicio_id = None
     if producto.es_mantenimiento() and motivo == "consumo":
         servicios = sorted(
@@ -2493,7 +2500,7 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
 
     st.caption(
         f"Para el margen, lo comprado cuenta {_criterio_rentabilidad()} (Ajustes); el cobro, sin IVA. "
-        "Coste = comida + consumibles + limpieza y mantenimiento + gastos del servicio (gasolina, personal...) + material roto o perdido. En los servicios completados es "
+        "Coste = comida + consumibles + limpieza y mantenimiento + sobrante desechado + gastos del servicio (gasolina, personal...) + material roto o perdido. En los servicios completados es "
         "lo que salió de verdad del inventario; en los pendientes, una estimación (*) con los precios actuales."
     )
     filas = []
@@ -2521,7 +2528,7 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
         {"Concepto": "🍅 Comida", "Importe (€)": f"{_eur(r['comida'])}"},
         {"Concepto": "🧻 Consumibles", "Importe (€)": f"{_eur(r['consumibles'])}"},
         {"Concepto": "🧽 Limpieza y mantenimiento", "Importe (€)": f"{_eur(r['mantenimiento'])}"},
-    ] + [{"Concepto": f"💶 {cat}", "Importe (€)": f"{_eur(imp)}"} for cat, imp in r["gastos_por_categoria"].items()]
+    ] + ([{"Concepto": "🗑️ Sobrante desechado", "Importe (€)": f"{_eur(r['sobrante'])}"}] if r["sobrante"] else []) + [{"Concepto": f"💶 {cat}", "Importe (€)": f"{_eur(imp)}"} for cat, imp in r["gastos_por_categoria"].items()]
     if r["material"]:
         desglose.append({"Concepto": "🍽️ Material roto o perdido", "Importe (€)": f"{_eur(r['material'])}"})
     st.dataframe(desglose, width="stretch", hide_index=True)
@@ -2529,7 +2536,7 @@ def _pestana_rentabilidad(serv: RegistroServicios, inv: Inventario, rec: Recetar
         st.caption(
             f"Comida, consumibles, limpieza y gastos van **sin IVA**, porque el negocio lo recupera (Ajustes). IVA "
             f"de lo comprado y los gastos de este servicio: **{_eur(r['iva_recuperable'])} €** (lo pagado fue "
-            f"{_eur(r['comida'] + r['consumibles'] + r['mantenimiento'] + r['gastos'] + r['iva_recuperable'])} €)."
+            f"{_eur(r['comida'] + r['consumibles'] + r['mantenimiento'] + r['sobrante'] + r['gastos'] + r['iva_recuperable'])} €)."
         )
     else:
         st.caption("Comida, consumibles y limpieza van **con IVA** (lo pagado), porque el negocio no lo recupera (Ajustes).")
@@ -2612,6 +2619,9 @@ def _pestana_editar_servicio(serv: RegistroServicios, rec: Recetario) -> None:
     confirmado = c8.checkbox("✔️ Confirmado por el cliente", value=s.estado == "confirmado", key=k("confirmado"))
     if comensales != s.comensales and s.precio_cobrado:
         st.caption("Ojo: el precio de cobro es el total del servicio. Si cobras por comensal, cámbialo también.")
+    aviso_sob = _texto_aviso_sobrantes(menu) if menu else None
+    if aviso_sob:
+        st.info("📉 " + aviso_sob)
     if st.button("Guardar cambios", type="primary", key=k("guardar")):
         if not menu:
             st.error("Elige el menú del servicio.")
@@ -2718,6 +2728,9 @@ def pagina_servicios() -> None:
                         st.session_state.servicio_form_version = vs + 1
                         avisar("success", f"Servicio #{nuevo.id} añadido: {fecha.strftime('%d/%m/%Y')}, "
                                           f"{int(comensales)} comensales, {menu_nombre}.")
+                        aviso_sob = _texto_aviso_sobrantes(menu_nombre)
+                        if aviso_sob:
+                            avisar("info", "📉 " + aviso_sob)
                         st.rerun()  # para que la tabla de arriba y las demás pestañas ya lo vean
                     except ValueError as e:
                         st.error(_es(str(e)))
@@ -2753,12 +2766,183 @@ def pagina_servicios() -> None:
             _completar_por_pasos(serv.buscar_por_id(opciones2[elegido2]), inv, rec)
 
 
-PASOS_COMPLETAR = ("1. Raciones y lotes", "2. Costes adicionales", "3. ¿Cómo fue?", "4. Resumen y confirmar")
+PASOS_COMPLETAR = ("1. Raciones y lotes", "2. Costes adicionales", "3. Sobrantes", "4. ¿Cómo fue?",
+                   "5. Resumen y confirmar")
+
+
+# ---------- Sobrantes: lo que sobra de un servicio y se tira ----------
+
+TEXTO_SOBRANTE = (
+    "Lo que **sobró** del servicio y se tira aunque esté bueno, porque no se va a aprovechar. No es lo mismo que "
+    "lo caducado (desperdicio) ni que la merma: cuenta como coste de **este** servicio y sale aparte en Métricas."
+)
+
+
+def _editor_sobrantes(servicio: Servicio, inv: Inventario, prefijo: str) -> tuple[dict, dict]:
+    """
+    Campos para indicar cuánto se tira de lo que sobró de `servicio` (empiezan
+    en 0: lo pone quien usa el programa). Devuelve (productos, raciones):
+    {nombre: cantidad} y {receta: raciones}, solo con lo que sea más de 0.
+    """
+    candidatos = sobrantes.candidatos(servicio, inv)
+    otros = sobrantes.otros_productos(servicio, inv)
+    if otros:
+        for nombre in st.multiselect("➕ Añadir otro producto que se llevó al servicio", otros, key=f"{prefijo}_otros"):
+            producto = inv.buscar_producto(nombre)
+            candidatos.append({"tipo": "producto", "clave": nombre, "nombre": nombre, "unidad": producto.unidad,
+                               "disponible": producto.stock, "usado": 0.0, "tirado": 0.0})
+    if not candidatos:
+        st.info("No queda nada en el inventario de lo que se usó en este servicio.")
+        return {}, {}
+    productos: dict[str, float] = {}
+    raciones: dict[str, float] = {}
+    for c in candidatos:
+        c1, c2 = st.columns([3, 2])
+        icono = "🥘 " if c["tipo"] == "preparada" else _ICONO_TIPO.get(getattr(inv.buscar_producto(c["clave"]), "tipo", ""), "")
+        detalle = []
+        if c["usado"]:
+            detalle.append(f"usado en el servicio: {_num(c['usado'])} {c['unidad']}")
+        detalle.append(f"queda: {_num(c['disponible'])} {c['unidad']}")
+        if c["tirado"]:
+            detalle.append(f"ya apuntado como sobrante: {_num(c['tirado'])} {c['unidad']}")
+        c1.markdown(f"**{icono}{c['nombre']}**  \n{' · '.join(detalle)}")
+        entero = c["unidad"] in ("unidades", "raciones")
+        valor = c2.number_input(f"Se tira ({c['unidad']})", min_value=0.0, step=1.0 if entero else 0.1,
+                                key=f"{prefijo}_{c['tipo']}_{c['clave']}")
+        if valor > 0:
+            (raciones if c["tipo"] == "preparada" else productos)[c["clave"]] = valor
+    return productos, raciones
+
+
+def _vista_sobrantes(plan: dict, inv: Inventario) -> None:
+    """Cómo quedaría cada cosa al tirarla, los problemas (si los hay, no se apunta nada) y los avisos."""
+    criterio = "sin IVA" if inv.iva_recuperable else "con IVA"
+    if plan["filas"]:
+        st.dataframe([{
+            "Producto": ("🥘 " if f["tipo"] == "preparada" else "") + f["nombre"],
+            "Se tira": f"{_num(f['cantidad'])} {f['unidad']}",
+            "Queda": f"{_num(f['antes'])} → {_num(f['despues'])} {f['unidad']}",
+            "De dónde sale": _es(f["texto_reparto"]),
+            f"Coste (€, {criterio})": _eur(f["coste"]),
+        } for f in plan["filas"]], width="stretch", hide_index=True)
+    for problema in plan["problemas"]:
+        st.error(_es(problema))
+    for aviso in plan["avisos"]:
+        st.warning(_es(aviso))
+
+
+def _simular_completar(servicio: Servicio, inv: Inventario, rec: Recetario, elecciones, plan):
+    """
+    Copias del inventario y del servicio tal y como quedarían al completarlo
+    (para saber qué sobra antes de tocar nada). Si no se puede completar,
+    lanza ValueError; si el menú no existe, devuelve (None, None).
+    """
+    inv_sim, serv_sim = copy.deepcopy(inv), copy.deepcopy(servicio)
+    with redirect_stdout(io.StringIO()):
+        if rec.completar_servicio(serv_sim, inv_sim, elecciones, plan) is None:
+            return None, None
+    return inv_sim, serv_sim
+
+
+def _paso_sobrantes(servicio: Servicio, inv: Inventario, rec: Recetario, elecciones, plan) -> Optional[tuple]:
+    """
+    Paso 3 de completar: lo que sobró y se tira (opcional). Se calcula sobre una
+    COPIA de cómo quedaría el inventario al completar: aquí no se toca nada.
+    Devuelve (productos, raciones, vista previa) o None si no se puede.
+    """
+    st.caption(TEXTO_SOBRANTE)
+    st.caption("Si no sobró nada (o aún no lo sabes), pasa al siguiente paso: también se puede apuntar después, "
+               "desde Historial › ficha del servicio › 🗑️ Sobrantes.")
+    try:
+        inv_sim, serv_sim = _simular_completar(servicio, inv, rec, elecciones, plan)
+    except ValueError as e:
+        st.error(_es(str(e)) + " Vuelve al paso 1 para revisarlo.")
+        return None
+    if serv_sim is None:
+        st.info("El menú no existe en el recetario: no hay nada que revisar.")
+        return {}, {}, None
+    productos, raciones = _editor_sobrantes(serv_sim, inv_sim, f"completar_sobrante_{servicio.id}")
+    vista = None
+    if productos or raciones:
+        vista = sobrantes.previsualizar(serv_sim, inv_sim, productos, raciones,
+                                        st.session_state.registro_servicios, rec)
+        _vista_sobrantes(vista, inv_sim)
+    return productos, raciones, vista
+
+
+def _texto_aviso_sobrantes(menu: str) -> Optional[str]:
+    """'En los últimos 3 servicios con el menú X sobró de media...' (None si no hay nada que avisar)."""
+    aviso = sobrantes.aviso_menu(menu, st.session_state.registro_servicios.servicios, st.session_state.inventario)
+    if aviso is None:
+        return None
+    return sobrantes.texto_aviso_menu(menu, aviso, formato_num=lambda v: _dec(v, 1), formato_pct=lambda v: _pct(v, 0))
+
+
+def _ficha_sobrantes(servicio: Servicio, inv: Inventario, rec: Recetario) -> None:
+    """Pestaña 🗑️ Sobrantes de la ficha de un servicio: lo apuntado (se puede anular) y apuntar más."""
+    sid = servicio.id
+    resumen = sobrantes.resumen_servicio(servicio, inv)
+    criterio = "sin IVA" if resumen["sin_iva"] else "con IVA"
+    st.caption(TEXTO_SOBRANTE)
+    if resumen["filas"]:
+        st.dataframe([{
+            "Producto": f["producto"], "Tirado": f"{_num(f['cantidad'])} {f['unidad']}",
+            "De lo dedicado al servicio": _pct(f["porcentaje"], 0) if f["porcentaje"] is not None else "—",
+            f"Coste (€, {criterio})": _eur(f["coste"]),
+        } for f in resumen["filas"]], width="stretch", hide_index=True)
+        texto = f"**Total sobrante: {_eur(resumen['total'])} €**"
+        if resumen["porcentaje_coste"] is not None:
+            texto += f" · {_pct(resumen['porcentaje_coste'], 0)} del coste de comida y consumibles del servicio"
+        st.markdown(texto)
+        st.caption("«De lo dedicado al servicio» = lo tirado / (lo usado en el servicio + lo tirado). "
+                   "«—»: en el servicio no se usó nada de ese producto.")
+        with st.expander("Cada sobrante apuntado (para anular uno apuntado por error)"):
+            for i, registro in enumerate(resumen["registros"]):
+                c1, c2 = st.columns([4, 1])
+                c1.write(_es(sobrantes.descripcion(registro)) + f" · {_eur(sobrantes._coste(registro, resumen['sin_iva']))} €")
+                if _boton_confirmado("↩️ Anular", f"hist_sobrante_anular_{sid}_{i}", c2,
+                                     "¿Anularlo? Su cantidad vuelve a su lote (o tanda)."):
+                    try:
+                        sobrantes.anular(inv, registro)
+                    except ValueError as e:
+                        st.error(_es(str(e)))
+                        return
+                    avisar("success", "Sobrante anulado: su cantidad ha vuelto al inventario (queda constancia).")
+                    st.rerun()
+    else:
+        st.info("No hay sobrantes apuntados en este servicio.")
+    if resumen["anulados"]:
+        with st.expander(f"Anulados ({len(resumen['anulados'])}): ya no cuentan, solo queda constancia"):
+            for registro in resumen["anulados"]:
+                st.write(_es(sobrantes.descripcion(registro)) + f" · anulado el {registro.anulado.strftime('%d/%m/%Y')}")
+
+    if servicio.estado != "completado":
+        return
+    st.markdown("**➕ Apuntar lo que ha sobrado y se tira**")
+    prefijo = f"hist_sobrante_{sid}"
+    productos, raciones = _editor_sobrantes(servicio, inv, prefijo)
+    if not (productos or raciones):
+        return
+    plan = sobrantes.previsualizar(servicio, inv, productos, raciones, st.session_state.registro_servicios, rec)
+    _vista_sobrantes(plan, inv)
+    if plan["problemas"]:
+        return
+    total = sum(f["coste"] for f in plan["filas"])
+    if _boton_confirmado("🗑️ Tirar como sobrante", f"{prefijo}_boton", pregunta=(
+            f"¿Seguro? Saldrá del inventario y contará como coste de este servicio ({_eur(total)} €).")):
+        try:
+            sobrantes.registrar(servicio, inv, productos, raciones)
+        except ValueError as e:
+            st.error(_es(str(e)))
+            return
+        vaciar_campos(prefijo)
+        avisar("success", f"Sobrante apuntado en el servicio #{sid} ({_eur(total)} €).")
+        st.rerun()
 
 
 def _completar_por_pasos(servicio: Servicio, inv: Inventario, rec: Recetario) -> None:
     """
-    Completar un servicio en 4 pasos (antes era una sola pantalla muy larga).
+    Completar un servicio en 5 pasos (antes era una sola pantalla muy larga). El 3 (sobrantes) es opcional.
     No se toca nada hasta pulsar "Completar servicio" en el último paso. Lo
     elegido en cada paso se guarda al pasar al siguiente, y se recupera al
     volver atrás.
@@ -2819,22 +3003,50 @@ def _completar_por_pasos(servicio: Servicio, inv: Inventario, rec: Recetario) ->
             ir(3)
         return
 
+    clave_sob = f"_completar_sobrantes_{sid}"
+    clave_sob_widgets = f"_completar_widgets_sob_{sid}"
     if paso == 3:
+        for clave, valor in ss.get(clave_sob_widgets, {}).items():
+            if clave not in ss:
+                ss[clave] = valor
+        resultado = _paso_sobrantes(servicio, inv, rec, elecciones, plan)
+        c1, c2 = st.columns(2)
+
+        def guardar_widgets() -> None:
+            ss[clave_sob_widgets] = {k: v for k, v in ss.items()
+                                     if isinstance(k, str) and k.startswith(f"completar_sobrante_{sid}_")}
+
+        if c1.button("← Atrás", key=f"completar_atras_3_{sid}"):
+            guardar_widgets()
+            ir(2)
+        if c2.button("Siguiente →", type="primary", key=f"completar_siguiente_3_{sid}"):
+            if resultado is None:
+                return
+            productos, raciones, vista = resultado
+            if vista is not None and vista["problemas"]:
+                st.error("Corrige lo de arriba antes de seguir (o pon a 0 lo que no se tira).")
+                return
+            ss[clave_sob] = (productos, raciones)
+            guardar_widgets()
+            ir(4)
+        return
+
+    if paso == 4:
         valoracion = st.text_area(
             "📝 ¿Cómo fue? (opcional)", value=ss.get(f"_completar_valoracion_{sid}", ""), key=f"valoracion_{sid}",
             placeholder="Incidencias, qué sobró o faltó, qué cambiar la próxima vez...",
             help="Queda guardado en el historial del servicio. Se puede añadir o cambiar después.",
         )
         c1, c2 = st.columns(2)
-        if c1.button("← Atrás", key=f"completar_atras_3_{sid}"):
+        if c1.button("← Atrás", key=f"completar_atras_4_{sid}"):
             ss[f"_completar_valoracion_{sid}"] = valoracion
-            ir(2)
-        if c2.button("Siguiente →", type="primary", key=f"completar_siguiente_3_{sid}"):
+            ir(3)
+        if c2.button("Siguiente →", type="primary", key=f"completar_siguiente_4_{sid}"):
             ss[f"_completar_valoracion_{sid}"] = valoracion
-            ir(4)
+            ir(5)
         return
 
-    # --- Paso 4: resumen y confirmar ---
+    # --- Paso 5: resumen y confirmar ---
     filas = rec.previsualizar_consumo(servicio, inv, elecciones, plan)
     extras = ss.get(f"extras_{sid}", [])
     valoracion = ss.get(f"_completar_valoracion_{sid}", "")
@@ -2852,17 +3064,48 @@ def _completar_por_pasos(servicio: Servicio, inv: Inventario, rec: Recetario) ->
     coste_extras = sum(e["importe"] for e in extras)
     st.markdown("**💶 Costes adicionales**: " + (", ".join(f"{e['concepto']} ({_eur(e['importe'])} €)" for e in extras)
                                                 if extras else "ninguno"))
+    productos_sob, raciones_sob = ss.get(clave_sob, ({}, {}))
+    coste_sobrante = 0.0
+    if productos_sob or raciones_sob:
+        st.markdown("**🗑️ Sobrantes que se tirarán**:")
+        try:
+            inv_sim, serv_sim = _simular_completar(servicio, inv, rec, elecciones, plan)
+            vista = sobrantes.previsualizar(serv_sim, inv_sim, productos_sob, raciones_sob) if serv_sim else None
+        except ValueError:
+            vista = None
+        if vista is not None:
+            _vista_sobrantes(vista, inv_sim)
+            # El coste del resumen va con IVA (lo pagado), como el resto de esta pantalla.
+            coste_sobrante = sum(
+                sum(c * inv_sim.buscar_producto(f["clave"]).buscar_lote(l).precio_unitario for l, c in f["reparto"])
+                if f["tipo"] == "producto" else
+                sum(r * inv_sim.elaboraciones.buscar(t).coste_por_racion for t, r in f["reparto"])
+                for f in vista["filas"])
+    else:
+        st.markdown("**🗑️ Sobrantes**: ninguno")
     st.markdown(f"**📝 ¿Cómo fue?**: {valoracion.strip() or '—'}")
-    st.metric("Coste del servicio (lo pagado, con IVA)", f"{_eur(coste_inventario + coste_extras)} €",
-              help="Lo que sale del inventario (a precio de cada lote), las raciones ya preparadas y los costes "
-                   "adicionales. Los gastos que ya tuviera apuntados el servicio se suman aparte en la rentabilidad.")
+    st.metric("Coste del servicio (lo pagado, con IVA)", f"{_eur(coste_inventario + coste_extras + coste_sobrante)} €",
+              help="Lo que sale del inventario (a precio de cada lote), las raciones ya preparadas, los costes "
+                   "adicionales y lo que se tira como sobrante. Los gastos que ya tuviera apuntados el servicio se "
+                   "suman aparte en la rentabilidad.")
     st.caption("Hasta que pulses 'Completar servicio' no se toca nada.")
 
     c1, c2 = st.columns(2)
-    if c1.button("← Atrás", key=f"completar_atras_4_{sid}"):
-        ir(3)
+    if c1.button("← Atrás", key=f"completar_atras_5_{sid}"):
+        ir(4)
     if not c2.button("Completar servicio", type="primary", key=f"completar_boton_{sid}"):
         return
+    hay_sobrantes = bool(productos_sob or raciones_sob) and filas is not None
+    if hay_sobrantes:
+        # Se prueba TODO (completar + sobrantes) sobre una copia antes de tocar
+        # nada: o se hace entero o no se hace.
+        try:
+            inv_sim, serv_sim = _simular_completar(servicio, inv, rec, elecciones, plan)
+            with redirect_stdout(io.StringIO()):
+                sobrantes.registrar(serv_sim, inv_sim, productos_sob, raciones_sob)
+        except ValueError as e:
+            st.error(_es(str(e)) + " Vuelve al paso 3 para revisarlo. No se ha tocado nada.")
+            return
     if filas is None:
         servicio.completar()
     else:
@@ -2871,11 +3114,18 @@ def _completar_por_pasos(servicio: Servicio, inv: Inventario, rec: Recetario) ->
         except ValueError as e:
             st.error(_es(str(e)) + " Vuelve al paso 1 para revisarlo.")
             return
+    if hay_sobrantes:
+        try:
+            sobrantes.registrar(servicio, inv, productos_sob, raciones_sob)
+        except ValueError as e:  # no debería pasar: se ha probado antes en la copia
+            avisar("warning", "El servicio se ha completado, pero no se han podido apuntar los sobrantes ("
+                              + _es(str(e)) + "). Apúntalos en Historial › ficha del servicio › 🗑️ Sobrantes.")
     servicio.valoracion = valoracion.strip()
     _registrar_costes_adicionales(servicio, extras)
     for clave in [k for k in ss.keys() if isinstance(k, str) and k.startswith(
             (f"_completar_paso_{sid}", f"_completar_plan_{sid}", f"_completar_elecciones_{sid}",
-             f"_completar_widgets_{sid}", f"_completar_valoracion_{sid}"))]:
+             f"_completar_widgets_{sid}", f"_completar_valoracion_{sid}", f"_completar_sobrantes_{sid}",
+             f"_completar_widgets_sob_{sid}", f"completar_sobrante_{sid}_"))]:
         del ss[clave]
     cortos = [f["ingrediente"] for f in (filas or []) if f["faltante"] > 0]
     if filas is None:
@@ -3006,9 +3256,11 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
               delta=f"{r['margen_porcentaje']:.0%}" if r["margen_porcentaje"] is not None else None)
     m4.metric("Coste por comensal", f"{_eur(f['coste_por_comensal'])} €")
 
-    tab_gasto, tab_plan, tab_gastos, tab_material, tab_menu = st.tabs(
-        ["🍅 Lo que se gastó", "📋 Previsto frente a real", "💶 Gastos", "🍽️ Material", "📖 Menú"]
+    tab_gasto, tab_sobrantes, tab_plan, tab_gastos, tab_material, tab_menu = st.tabs(
+        ["🍅 Lo que se gastó", "🗑️ Sobrantes", "📋 Previsto frente a real", "💶 Gastos", "🍽️ Material", "📖 Menú"]
     )
+    with tab_sobrantes:
+        _ficha_sobrantes(servicio, inv, rec)
     with tab_gasto:
         if f["consumos"]:
             # La tabla y el resumen de debajo, con el MISMO criterio de IVA que la
@@ -3021,7 +3273,9 @@ def _ficha_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gastos:
                 **({"Pagado (€, con IVA)": _eur(c["coste"])} if r["sin_iva"] else {}),
             } for c in f["consumos"]], width="stretch", hide_index=True)
             st.caption(f"Comida {_eur(r['comida'])} € · consumibles {_eur(r['consumibles'])} € · limpieza y mantenimiento "
-                       f"{_eur(r['mantenimiento'])} € ({criterio}, a precio real de cada lote"
+                       f"{_eur(r['mantenimiento'])} €"
+                       + (f" · sobrante desechado {_eur(r['sobrante'])} € (pestaña 🗑️ Sobrantes)" if r["sobrante"] else "")
+                       + f" ({criterio}, a precio real de cada lote"
                        + (", como en la rentabilidad: el negocio recupera el IVA)" if r["sin_iva"] else ")"))
         else:
             st.info("No salió nada del inventario para este servicio.")
@@ -3102,7 +3356,8 @@ def _deshacer_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gast
         st.write(
             "Si lo completaste por error: el servicio vuelve a **pendiente**, lo que salió del inventario vuelve a "
             "sus lotes y las raciones preparadas a sus tandas (su consumo desaparece de Métricas y de la "
-            "rentabilidad), y se quitan los costes adicionales que se añadieron al completarlo."
+            "rentabilidad), lo apuntado como sobrante también vuelve (queda como anulado), y se quitan los costes "
+            "adicionales que se añadieron al completarlo."
         )
         st.caption("Las compras no previstas de productos se quedan (fueron reales): solo vuelve al stock lo que se "
                    "usó. La valoración se conserva y las roturas de material no se tocan.")
@@ -3121,6 +3376,8 @@ def _deshacer_servicio(servicio: Servicio, inv: Inventario, rec: Recetario, gast
             detalle = f"{r['salidas']} salida(s) devuelta(s) al inventario"
             if r["raciones"]:
                 detalle += f", {_num(r['raciones'])} raciones a sus tandas"
+            if r.get("sobrantes"):
+                detalle += f", {r['sobrantes']} sobrante(s) anulado(s)"
             if r["gastos"]:
                 detalle += f", {len(r['gastos'])} coste(s) adicional(es) quitado(s)"
             avisar("success", f"Servicio #{servicio.id} deshecho: vuelve a estar pendiente ({detalle}).")
@@ -3252,6 +3509,9 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
         c1.caption("Recetas: " + (", ".join(r.nombre for r in menu.recetas) or "—"))
         c2.metric("Comida por comensal", f"{_eur(menu.costo_por_comensal(inv))} €")
         st.write("Ingredientes por comensal: " + _texto_cantidades(menu.ingredientes_por_comensal(), inv))
+        aviso_sob = _texto_aviso_sobrantes(menu.nombre)
+        if aviso_sob:
+            st.info("📉 " + aviso_sob)
         _editor_nota(menu, f"menu_{menu.nombre}", menu.nombre)
 
         with st.expander("🔎 Ver detalle del menú"):
@@ -3729,6 +3989,15 @@ def pagina_compras() -> None:
 
     _anadir_a_mano(comp, inv)
 
+    # Para ajustar la compra: lo que sobró otras veces con los menús de los próximos servicios.
+    avisos_sob = [texto for texto in (_texto_aviso_sobrantes(m) for m in
+                                      dict.fromkeys(s.menu for s in serv.servicios_proximos(30))) if texto]
+    if avisos_sob:
+        with st.expander(f"📉 Lo que sobró otras veces con los menús de los próximos servicios ({len(avisos_sob)})"):
+            for texto in avisos_sob:
+                st.write(texto)
+            st.caption("La lista no se cambia sola: si quieres comprar menos, cambia la cantidad abajo.")
+
     st.divider()
     pendientes = comp.items_pendientes()
     if not pendientes:
@@ -4121,6 +4390,30 @@ def _poner_sesion(nueva: Sesion) -> None:
     ss.receta_ingredientes = {}
 
 
+def _pestana_sobrantes_metricas(inv: Inventario, desde: date, hasta: date) -> None:
+    """Lo que sobró de los servicios y se tiró en el periodo: total, por producto y por menú."""
+    st.caption(TEXTO_SOBRANTE)
+    datos = sobrantes.en_rango(inv, st.session_state.registro_servicios.servicios, desde, hasta)
+    if not datos["lineas"]:
+        st.info("No se ha apuntado ningún sobrante en este periodo. Se apuntan al completar un servicio (paso 3) o "
+                "después, en Historial › ficha del servicio › 🗑️ Sobrantes.")
+        return
+    criterio = "sin IVA" if datos["sin_iva"] else "con IVA"
+    st.metric(f"Sobrante desechado en el periodo ({criterio})", f"{_eur(datos['total'])} €")
+    st.markdown("**Lo que más se tira**")
+    st.dataframe([{
+        "Producto": f["producto"], "Tirado": f"{_num(f['cantidad'])} {f['unidad']}",
+        "De lo dedicado a los servicios": _pct(f["porcentaje"], 0) if f["porcentaje"] is not None else "—",
+        f"Coste (€, {criterio})": _eur(f["coste"]),
+    } for f in datos["por_producto"]], width="stretch", hide_index=True)
+    st.markdown("**Por menú** (los que más se pasan de cantidad, primero)")
+    st.dataframe([{
+        "Menú": f["menu"], "Servicios con sobrante": f["servicios"], f"Tirado (€, {criterio})": _eur(f["coste"]),
+        "Del coste de comida y consumibles": _pct(f["porcentaje"], 0) if f["porcentaje"] is not None else "—",
+    } for f in datos["por_menu"]], width="stretch", hide_index=True)
+    st.caption("Sirve para ajustar las cantidades de las recetas o de la compra en los próximos eventos.")
+
+
 def pagina_metricas() -> None:
     st.header("📊 Métricas")
     inv = st.session_state.inventario
@@ -4140,10 +4433,12 @@ def pagina_metricas() -> None:
         )
         return
 
-    tab_consumo, tab_desperdicio, tab_ranking, tab_gasto, tab_merma, tab_iva = st.tabs(
-        ["Consumo por producto", "Desperdicio por producto", "🏆 Más consumidos", "💰 Gasto por categoría", "🦴 Merma",
-         "🧾 IVA"]
+    tab_consumo, tab_desperdicio, tab_sobrantes, tab_ranking, tab_gasto, tab_merma, tab_iva = st.tabs(
+        ["Consumo por producto", "Desperdicio por producto", "🗑️ Sobrantes", "🏆 Más consumidos",
+         "💰 Gasto por categoría", "🦴 Merma", "🧾 IVA"]
     )
+    with tab_sobrantes:
+        _pestana_sobrantes_metricas(inv, desde, hasta)
     with tab_iva:
         _pestana_iva(metricas, inv)
 
@@ -4181,6 +4476,8 @@ def pagina_metricas() -> None:
             st.metric(f"Consumido de {nombre}", f"{_num(cantidad)} {inv.buscar_producto(nombre).unidad}")
 
     with tab_desperdicio:
+        st.caption("Desperdicio = lo que **caducó o se estropeó** en el almacén. Lo que sobró de un servicio y se "
+                   "tiró va aparte, en 🗑️ Sobrantes; y la merma de limpiar, en 🦴 Merma.")
         if nombres_tipo:
             nombre2 = st.selectbox("Producto", nombres_tipo, key="metricas_desperdicio_producto")
             cantidad2 = metricas.cantidad_desperdiciada(nombre2, desde, hasta)

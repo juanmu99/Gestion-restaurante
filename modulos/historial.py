@@ -115,7 +115,8 @@ def consumos(servicio: Servicio, inventario: Inventario) -> list[dict]:
         "lote": m.lote or "—",
         "coste": m.valor(),
         "coste_sin_iva": m.valor_sin_iva(),
-    } for m in inventario.historial if m.servicio_id == servicio.id and m.tipo == "salida"]
+    } for m in inventario.historial if m.servicio_id == servicio.id and m.tipo == "salida"
+        and m.motivo != "sobrante"]  # lo que sobró y se tiró va aparte (ver sobrantes.py)
 
 
 def previsto_frente_a_real(servicio: Servicio, inventario: Inventario) -> list[dict]:

@@ -40,6 +40,7 @@ from persistencia import copia_antes_de_empezar_de_cero, sesion_a_dict, sesion_v
 from gastos import Gasto, RegistroGastos, resumen_servicio, NOTA_COSTE_AL_COMPLETAR
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
+import sobrantes
 from metricas import Metricas, ArchivoInformes, rango_desde_periodo, PERIODOS_VALIDOS, NOMBRES_MESES
 
 def _carpeta_base() -> Path:
@@ -1064,6 +1065,9 @@ def menu_servicios():
                             recetario.completar_servicio(servicio, inventario, elecciones, plan)
                             print(f"✅ Servicio #{id_servicio} completado.")
                             pedir_costes_adicionales(servicio)
+                            if pedir_si_no("¿Ha sobrado algo que se vaya a tirar? (se puede apuntar también después, "
+                                           "desde el Historial)"):
+                                accion_sobrantes(servicio)
                             servicio.valoracion = pedir_texto("¿Cómo fue? (opcional, para el historial): ")
                         except ValueError as e:
                             print(f"❌ {e}")
@@ -1853,10 +1857,11 @@ def menu_metricas():
         print("7. Ver informes guardados")
         print("8. Comparar dos meses")
         print("9. Merma y rendimiento de las limpiezas")
+        print("10. Sobrantes de los servicios (lo que sobró y se tiró)")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
 
-        if opcion in ("1", "2", "3", "4", "5", "9"):
+        if opcion in ("1", "2", "3", "4", "5", "9", "10"):
             periodo = pedir_opcion("Periodo", PERIODOS_VALIDOS)
             desde, hasta = rango_desde_periodo(periodo)
             metricas = Metricas(inventario)
@@ -1928,6 +1933,21 @@ def menu_metricas():
                 )
             if resumen:
                 print(f"🦴 Merma total ({periodo}): {metricas.merma_total_kg(desde, hasta)} kg")
+        elif opcion == "10":
+            datos = sobrantes.en_rango(inventario, registro_servicios.servicios, desde, hasta)
+            if not datos["lineas"]:
+                print("No se ha apuntado ningún sobrante en ese periodo.")
+            else:
+                criterio = "sin IVA" if datos["sin_iva"] else "con IVA"
+                print(f"🗑️  Sobrante desechado ({periodo}, {criterio}): {datos['total']:.2f}€")
+                print("Por producto:")
+                for f in datos["por_producto"]:
+                    pct = f" ({f['porcentaje']:.0%} de lo dedicado)" if f["porcentaje"] is not None else ""
+                    print(f"   {f['producto']}: {round(f['cantidad'], 3)} {f['unidad']}{pct} = {f['coste']:.2f}€")
+                print("Por menú:")
+                for f in datos["por_menu"]:
+                    pct = f" ({f['porcentaje']:.0%} del coste de comida y consumibles)" if f["porcentaje"] else ""
+                    print(f"   {f['menu']}: {f['servicios']} servicio(s), {f['coste']:.2f}€{pct}")
         elif opcion == "0":
             return
         else:
@@ -2166,6 +2186,71 @@ def menu_material():
         pausa()
 
 
+def accion_sobrantes(servicio: Servicio) -> None:
+    """
+    Apuntar lo que sobró de un servicio y se tira (aunque esté bueno). No es
+    desperdicio (caducado) ni merma: cuenta como coste de ese servicio.
+    """
+    if servicio.estado != "completado":
+        print("❌ Los sobrantes se apuntan en servicios completados.")
+        return
+    print("\n🗑️  Lo que sobró y se tira (Intro = 0, no se tira nada de eso):")
+    productos: dict[str, float] = {}
+    raciones: dict[str, float] = {}
+    for c in sobrantes.candidatos(servicio, inventario):
+        usado = f"usado {round(c['usado'], 3)}, " if c["usado"] else ""
+        texto = pedir_texto(f"  {c['nombre']} ({usado}queda {round(c['disponible'], 3)} {c['unidad']}): ")
+        if texto:
+            try:
+                cantidad = a_numero(texto)
+            except ValueError:
+                print("   ⚠️  No es un número: se deja en 0.")
+                continue
+            if cantidad:
+                (raciones if c["tipo"] == "preparada" else productos)[c["clave"]] = cantidad
+    while pedir_si_no("¿Añadir otro producto que se llevó al servicio?"):
+        nombre = pedir_texto("Producto: ")
+        if nombre in sobrantes.otros_productos(servicio, inventario):
+            productos[nombre] = pedir_numero(f"Cantidad que se tira ({inventario.buscar_producto(nombre).unidad}): ")
+        else:
+            print("❌ No es un alimento ni un consumible con stock.")
+    if not productos and not raciones:
+        print("No se apunta nada.")
+        return
+    plan = sobrantes.previsualizar(servicio, inventario, productos, raciones, registro_servicios, recetario)
+    for f in plan["filas"]:
+        print(f"   {f['nombre']}: {round(f['cantidad'], 3)} {f['unidad']} ({f['texto_reparto']}) | queda "
+              f"{round(f['antes'], 3)} -> {round(f['despues'], 3)} | {f['coste']:.2f}€")
+    for problema in plan["problemas"]:
+        print(f"❌ {problema}")
+    for aviso in plan["avisos"]:
+        print(f"⚠️  {aviso}")
+    if plan["problemas"]:
+        print("No se ha apuntado nada.")
+        return
+    if pedir_si_no("¿Tirarlo como sobrante? (sale del inventario y cuenta como coste del servicio)"):
+        try:
+            sobrantes.registrar(servicio, inventario, productos, raciones)
+        except ValueError as e:
+            print(f"❌ {e}")
+
+
+def accion_anular_sobrante(servicio: Servicio) -> None:
+    registros = sobrantes.registros_servicio(inventario, servicio.id)
+    if not registros:
+        print("Este servicio no tiene sobrantes apuntados.")
+        return
+    for i, r in enumerate(registros, start=1):
+        print(f"{i}. {sobrantes.descripcion(r)}")
+    n = pedir_entero("Nº del sobrante a anular (0 = ninguno): ")
+    if 1 <= n <= len(registros) and pedir_si_no("¿Anularlo? Su cantidad vuelve a su lote (o tanda)"):
+        try:
+            sobrantes.anular(inventario, registros[n - 1])
+            print("✅ Anulado (queda constancia).")
+        except ValueError as e:
+            print(f"❌ {e}")
+
+
 def mostrar_ficha_servicio(servicio: Servicio) -> None:
     f = historial.ficha(servicio, inventario, recetario, registro_gastos, registro_material)
     r = f["rentabilidad"]
@@ -2193,6 +2278,17 @@ def mostrar_ficha_servicio(servicio: Servicio) -> None:
             print(f"   Salió: {salida.cantidades} | " + (f"volvió: {salida.vuelto}" if salida.ha_vuelto else "todavía fuera"))
     for i in f["incidencias_material"]:
         print(f"   💥 {i}")
+    s = sobrantes.resumen_servicio(servicio, inventario)
+    print("🗑️  Sobrantes desechados:")
+    for fila in s["filas"] or [None]:
+        if fila is None:
+            print("   (ninguno)")
+        else:
+            pct = f" ({fila['porcentaje']:.0%} de lo dedicado al servicio)" if fila["porcentaje"] is not None else ""
+            print(f"   {fila['producto']}: {round(fila['cantidad'], 3)} {fila['unidad']}{pct} = {fila['coste']:.2f}€")
+    if s["filas"]:
+        extra = f" ({s['porcentaje_coste']:.0%} del coste de comida y consumibles)" if s["porcentaje_coste"] else ""
+        print(f"   Total: {s['total']:.2f}€{extra}")
     print(f"📝 Cómo fue: {servicio.valoracion or '(sin valoración)'}")
 
 
@@ -2204,6 +2300,8 @@ def menu_historial():
         print("3. Cambiar cliente, lugar o valoración de un servicio")
         print("4. Repetir un servicio (crear uno igual en otra fecha)")
         print("5. Deshacer un servicio completado (si se completó por error)")
+        print("6. Apuntar lo que sobró de un servicio y se tira")
+        print("7. Anular un sobrante apuntado por error")
         print("0. Volver")
         opcion = pedir_texto("Elige una opción: ")
         if opcion == "1":
@@ -2224,10 +2322,14 @@ def menu_historial():
                       f"coste {r['coste']:.2f}€, margen {texto_euros(r['margen'])}")
                 if r["menu_mas_repetido"]:
                     print(f"Menú más repetido: {r['menu_mas_repetido']} | más rentable: {r['menu_mas_rentable'] or '—'}")
-        elif opcion in ("2", "3", "4"):
+        elif opcion in ("2", "3", "4", "6", "7"):
             servicio = registro_servicios.buscar_por_id(pedir_entero("Nº del servicio: "))
             if servicio is None:
                 print("❌ No existe ese servicio.")
+            elif opcion == "6":
+                accion_sobrantes(servicio)
+            elif opcion == "7":
+                accion_anular_sobrante(servicio)
             elif opcion == "2":
                 mostrar_ficha_servicio(servicio)
             elif opcion == "3":
@@ -2245,8 +2347,9 @@ def menu_historial():
             if servicio is None or servicio.estado != "completado":
                 print("❌ Ese servicio no existe o no está completado.")
             else:
-                print("Vuelve a pendiente: lo usado vuelve al inventario y las raciones a sus tandas, y se quitan los")
-                print("costes adicionales añadidos al completarlo. Las compras no previstas y la valoración se quedan.")
+                print("Vuelve a pendiente: lo usado (y lo apuntado como sobrante) vuelve al inventario y las raciones a")
+                print("sus tandas, y se quitan los costes adicionales añadidos al completarlo. Las compras no previstas y")
+                print("la valoración se quedan.")
                 if pedir_si_no(f"¿Deshacer el servicio #{servicio.id}?"):
                     try:
                         recetario.deshacer_completar(servicio, inventario, registro_gastos)

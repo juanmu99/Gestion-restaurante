@@ -90,13 +90,18 @@ class Tanda:
 
 
 class UsoTanda:
-    """Lo que se hizo con raciones de una tanda: se sirvieron en un servicio o se tiraron."""
+    """
+    Lo que se hizo con raciones de una tanda: se sirvieron en un servicio
+    ("consumo"), se tiraron porque caducaron ("desperdicio") o SOBRARON de un
+    servicio y se decidió tirarlas ("sobrante", ligado a su servicio).
+    """
 
-    MOTIVOS = ("consumo", "desperdicio")
+    MOTIVOS = ("consumo", "desperdicio", "sobrante")
 
     def __init__(
         self, tanda_id: int, receta: str, raciones: float, motivo: str, coste: float,
         servicio_id: Optional[int] = None, fecha: Optional[date] = None, coste_sin_iva: Optional[float] = None,
+        anulado: Optional[date] = None,
     ):
         if motivo not in self.MOTIVOS:
             raise ValueError(f"Motivo no válido: {motivo}")
@@ -108,12 +113,15 @@ class UsoTanda:
         self.coste_sin_iva = self.coste if coste_sin_iva is None else round(coste_sin_iva, 2)
         self.servicio_id = servicio_id
         self.fecha = fecha or date.today()
+        # Solo para sobrantes anulados (RegistroElaboraciones.sobrantes_anulados).
+        self.anulado = anulado
 
     def to_dict(self) -> dict:
         return {
             "tanda_id": self.tanda_id, "receta": self.receta, "raciones": self.raciones, "motivo": self.motivo,
             "coste": self.coste, "coste_sin_iva": self.coste_sin_iva, "servicio_id": self.servicio_id,
             "fecha": self.fecha.isoformat(),
+            **({"anulado": self.anulado.isoformat()} if self.anulado else {}),
         }
 
     @classmethod
@@ -121,6 +129,7 @@ class UsoTanda:
         return cls(
             datos["tanda_id"], datos["receta"], datos["raciones"], datos["motivo"], datos["coste"],
             datos.get("servicio_id"), date.fromisoformat(datos["fecha"]), datos.get("coste_sin_iva"),
+            date.fromisoformat(datos["anulado"]) if datos.get("anulado") else None,
         )
 
 
@@ -181,6 +190,8 @@ class RegistroElaboraciones:
         # Tandas que se gastaron enteras: se guardan (con su caducidad) por si
         # hay que deshacer el servicio que las gastó.
         self.agotadas: list[Tanda] = []
+        # Sobrantes de raciones que se anularon: ya no cuentan, solo constancia.
+        self.sobrantes_anulados: list[UsoTanda] = []
 
     def nueva_tanda(
         self, receta: str, raciones: float, coste_por_racion: float,
@@ -226,11 +237,12 @@ class RegistroElaboraciones:
                 pendiente -= sale
         return reparto, round(max(0.0, pendiente), 6)
 
-    def _sacar(self, tanda: Tanda, raciones: float, motivo: str, servicio_id: Optional[int]) -> UsoTanda:
+    def _sacar(self, tanda: Tanda, raciones: float, motivo: str, servicio_id: Optional[int],
+               fecha: Optional[date] = None) -> UsoTanda:
         raciones = min(raciones, tanda.raciones)
         tanda.raciones = round(tanda.raciones - raciones, 6)
         uso = UsoTanda(tanda.id, tanda.receta, raciones, motivo, raciones * tanda.coste_por_racion, servicio_id,
-                       coste_sin_iva=raciones * tanda.coste_por_racion_sin_iva)
+                       fecha=fecha, coste_sin_iva=raciones * tanda.coste_por_racion_sin_iva)
         self.usos.append(uso)
         if tanda.raciones <= 1e-9:  # una tanda vacía desaparece de la lista (y se archiva)
             self.tandas = [t for t in self.tandas if t is not tanda]
@@ -244,6 +256,13 @@ class RegistroElaboraciones:
         con su caducidad. Esos usos desaparecen. Devuelve los usos devueltos.
         """
         usos = self.usos_de_servicio(servicio_id)
+        self._devolver_a_tandas(usos)
+        devueltos = {id(u) for u in usos}
+        self.usos = [u for u in self.usos if id(u) not in devueltos]
+        return usos
+
+    def _devolver_a_tandas(self, usos: list[UsoTanda]) -> None:
+        """Vuelve a poner las raciones de `usos` en sus tandas (recuperándolas si se habían agotado)."""
         for uso in usos:
             tanda = self.buscar(uso.tanda_id)
             if tanda is None:
@@ -256,9 +275,6 @@ class RegistroElaboraciones:
                     tanda = Tanda(uso.tanda_id, uso.receta, 0, por_racion, uso.fecha, None, uso.raciones, por_racion_sin)
                 self.tandas.append(tanda)
             tanda.raciones = round(tanda.raciones + uso.raciones, 6)
-        devueltos = {id(u) for u in usos}
-        self.usos = [u for u in self.usos if id(u) not in devueltos]
-        return usos
 
     def usar(self, reparto: list[tuple[int, float]], servicio_id: Optional[int] = None) -> list[UsoTanda]:
         """Saca raciones de varias tandas (comprobando todo antes de tocar nada)."""
@@ -323,7 +339,7 @@ class RegistroElaboraciones:
         for t in self.tandas + self.agotadas:
             if t.receta == antigua:
                 t.receta = nueva
-        for u in self.usos:
+        for u in self.usos + self.sobrantes_anulados:
             if u.receta == antigua:
                 u.receta = nueva
 
@@ -334,6 +350,7 @@ class RegistroElaboraciones:
             "siguiente_id": self.siguiente_id,
             "preparaciones_base": [p.to_dict() for p in self.preparaciones_base],
             "agotadas": [t.to_dict() for t in self.agotadas],
+            "sobrantes_anulados": [u.to_dict() for u in self.sobrantes_anulados],
         }
 
     @classmethod
@@ -344,4 +361,6 @@ class RegistroElaboraciones:
         registro.siguiente_id = datos.get("siguiente_id", 1)
         registro.preparaciones_base = [PreparacionBase.from_dict(d) for d in datos.get("preparaciones_base", [])]
         registro.agotadas = [Tanda.from_dict(d) for d in datos.get("agotadas", [])]
+        # Datos de antes de los sobrantes: no hay ninguno anulado.
+        registro.sobrantes_anulados = [UsoTanda.from_dict(d) for d in datos.get("sobrantes_anulados", [])]
         return registro

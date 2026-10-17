@@ -29,6 +29,8 @@ from compras import GestorCompras
 from gastos import RegistroGastos, resumen_servicio
 from materiales import RegistroMaterial
 from recetario import Recetario
+from elaboraciones import UsoTanda
+import sobrantes
 
 FUENTE = "Arial"
 
@@ -375,7 +377,8 @@ def _hoja_rentabilidad(
     hoja = wb.create_sheet("Rentabilidad")
     criterio = "sin IVA" if inventario.iva_recuperable else "con IVA"
     _escribir_cabecera(hoja, ["ID", "Fecha", "Menú", "Estado", f"Comida (€, {criterio})", f"Consumibles (€, {criterio})",
-                              f"Limpieza y mantenimiento (€, {criterio})", f"Gastos (€, {criterio})", "Roturas y pérdidas (€)",
+                              f"Limpieza y mantenimiento (€, {criterio})", f"Sobrante desechado (€, {criterio})",
+                              f"Gastos (€, {criterio})", "Roturas y pérdidas (€)",
                               "Coste total (€)", "Cobro (€, sin IVA)", "Margen (€)", "Coste estimado",
                               "IVA recuperable de compras y gastos (€)"])
     fila = 2
@@ -384,14 +387,58 @@ def _hoja_rentabilidad(
             continue
         r = resumen_servicio(s, inventario, recetario, registro_gastos, registro_material)
         valores = [s.id, s.fecha.strftime("%d/%m/%Y"), s.menu, s.estado, r["comida"], r["consumibles"],
-                   r["mantenimiento"], r["gastos"], r["material"], f"=E{fila}+F{fila}+G{fila}+H{fila}+I{fila}",
+                   r["mantenimiento"], r["sobrante"], r["gastos"], r["material"],
+                   f"=E{fila}+F{fila}+G{fila}+H{fila}+I{fila}+J{fila}",
                    r["cobrado"] if r["cobrado"] is not None else "—",
-                   f"=K{fila}-J{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No",
+                   f"=L{fila}-K{fila}" if r["cobrado"] is not None else "—", "Sí" if r["estimado"] else "No",
                    r["iva_recuperable"]]
         for columna, valor in enumerate(valores, start=1):
             hoja.cell(row=fila, column=columna, value=valor).font = Font(name=FUENTE)
         fila += 1
     _ajustar_ancho_columnas(hoja)
+
+
+def _hoja_sobrantes(wb: Workbook, inventario: Inventario, registro: RegistroServicios) -> None:
+    """
+    Una fila por cada sobrante apuntado (lo que sobró de un servicio y se tiró),
+    también los anulados (con su fecha de anulación, sin contar en el total).
+    """
+    hoja = wb.create_sheet("Sobrantes")
+    criterio = "sin IVA" if inventario.iva_recuperable else "con IVA"
+    _escribir_cabecera(hoja, ["Fecha", "Servicio", "Fecha del servicio", "Menú", "Producto", "Cantidad", "Unidad",
+                              "Lote o tanda", f"Coste (€, {criterio})", "% de lo dedicado al servicio", "Estado"])
+    servicios = {s.id: s for s in registro.servicios}
+    vigentes = [*sobrantes.usos_sobrante(inventario), *sobrantes.salidas_sobrante(inventario)]
+    anulados = [*inventario.elaboraciones.sobrantes_anulados, *inventario.sobrantes_anulados]
+    porcentajes: dict[int, dict] = {}
+    for sid in {r.servicio_id for r in vigentes if r.servicio_id in servicios}:
+        porcentajes[sid] = {f["producto"]: f["porcentaje"]
+                            for f in sobrantes.resumen_servicio(servicios[sid], inventario)["filas"]}
+    fila = 2
+    for r in sorted(vigentes + anulados, key=lambda r: (r.fecha, r.servicio_id or 0)):
+        s = servicios.get(r.servicio_id)
+        if isinstance(r, UsoTanda):
+            producto, cantidad, unidad, lote = sobrantes.nombre_preparada(r.receta), r.raciones, "raciones", f"Tanda {r.tanda_id}"
+        else:
+            producto, cantidad, unidad, lote = r.producto_nombre, r.cantidad, r.unidad, r.lote or "—"
+        coste = sobrantes._coste(r, inventario.iva_recuperable)
+        porcentaje = None if r.anulado else porcentajes.get(r.servicio_id, {}).get(producto)
+        valores = [r.fecha.strftime("%d/%m/%Y"), f"#{r.servicio_id}" if r.servicio_id else "—",
+                   s.fecha.strftime("%d/%m/%Y") if s else "—", s.menu if s else "—", producto, cantidad, unidad,
+                   lote, coste, porcentaje if porcentaje is not None else "—",
+                   f"Anulado el {r.anulado.strftime('%d/%m/%Y')}" if r.anulado else "Vigente"]
+        for columna, valor in enumerate(valores, start=1):
+            celda = hoja.cell(row=fila, column=columna, value=valor)
+            celda.font = Font(name=FUENTE)
+            if columna == 10 and porcentaje is not None:
+                celda.number_format = "0%"
+        fila += 1
+    if fila > 2:
+        # Solo los vigentes: un sobrante anulado ya no cuenta.
+        hoja.cell(row=fila, column=8, value="TOTAL tirado").font = Font(name=FUENTE, bold=True)
+        hoja.cell(row=fila, column=9, value=f'=SUMIF(K2:K{fila - 1},"Vigente",I2:I{fila - 1})').font = Font(
+            name=FUENTE, bold=True)
+    _ajustar_ancho_columnas(hoja, ancho=18)
 
 
 def _hoja_lista_compra(wb: Workbook, gestor_compras: GestorCompras) -> None:
@@ -449,6 +496,7 @@ def exportar_todo(
         _hoja_recetario(wb, recetario)
     _hoja_limpiezas(wb, inventario)
     _hoja_servicios(wb, registro_servicios)
+    _hoja_sobrantes(wb, inventario, registro_servicios)
     _hoja_lista_compra(wb, gestor_compras)
     if registro_material is not None:
         _hoja_material(wb, registro_material)
