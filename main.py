@@ -1936,7 +1936,7 @@ def menu_metricas():
         elif opcion == "10":
             datos = sobrantes.en_rango(inventario, registro_servicios.servicios, desde, hasta)
             if not datos["lineas"]:
-                print("No se ha apuntado ningún sobrante en ese periodo.")
+                print("No hay sobrantes en los servicios de ese periodo (cuenta la fecha del servicio).")
             else:
                 criterio = "sin IVA" if datos["sin_iva"] else "con IVA"
                 print(f"🗑️  Sobrante desechado ({periodo}, {criterio}): {datos['total']:.2f}€")
@@ -2194,12 +2194,12 @@ def accion_sobrantes(servicio: Servicio) -> None:
     if servicio.estado != "completado":
         print("❌ Los sobrantes se apuntan en servicios completados.")
         return
-    print("\n🗑️  Lo que sobró y se tira (Intro = 0, no se tira nada de eso):")
+    print("\n🗑️  Lo que ha VUELTO del servicio y se tira (Intro = 0). 'En el almacén' es todo lo que hay, no lo que sobró:")
     productos: dict[str, float] = {}
     raciones: dict[str, float] = {}
     for c in sobrantes.candidatos(servicio, inventario):
         usado = f"usado {round(c['usado'], 3)}, " if c["usado"] else ""
-        texto = pedir_texto(f"  {c['nombre']} ({usado}queda {round(c['disponible'], 3)} {c['unidad']}): ")
+        texto = pedir_texto(f"  {c['nombre']} ({usado}en el almacén {round(c['disponible'], 3)} {c['unidad']}): ")
         if texto:
             try:
                 cantidad = a_numero(texto)
@@ -2219,7 +2219,7 @@ def accion_sobrantes(servicio: Servicio) -> None:
         return
     plan = sobrantes.previsualizar(servicio, inventario, productos, raciones, registro_servicios, recetario)
     for f in plan["filas"]:
-        print(f"   {f['nombre']}: {round(f['cantidad'], 3)} {f['unidad']} ({f['texto_reparto']}) | queda "
+        print(f"   {f['nombre']}: {round(f['cantidad'], 3)} {f['unidad']} ({f['texto_reparto']}) | en el almacén "
               f"{round(f['antes'], 3)} -> {round(f['despues'], 3)} | {f['coste']:.2f}€")
     for problema in plan["problemas"]:
         print(f"❌ {problema}")

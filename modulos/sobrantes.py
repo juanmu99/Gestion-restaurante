@@ -82,12 +82,20 @@ def usado_en_servicio(inventario: Inventario, servicio_id: int) -> dict[str, flo
     return usado
 
 
-def _coste_consumido(inventario: Inventario, servicio_id: int, sin_iva: bool) -> float:
-    """Coste de la comida y los consumibles CONSUMIDOS en el servicio (sin los sobrantes)."""
+def _coste_consumido(inventario: Inventario, servicio_id: int, sin_iva: bool,
+                     tipos: tuple = TIPOS_CON_SOBRANTE) -> float:
+    """Coste de lo CONSUMIDO en el servicio (sin los sobrantes): comida y consumibles, o solo los `tipos` indicados."""
     total = sum(m.valor_sin_iva() if sin_iva else m.valor() for m in inventario.historial
                 if m.servicio_id == servicio_id and m.tipo == "salida" and m.motivo == "consumo"
-                and m.tipo_producto in TIPOS_CON_SOBRANTE)
-    return round(total + inventario.elaboraciones.coste_servicio(servicio_id, sin_iva=sin_iva), 2)
+                and m.tipo_producto in tipos)
+    if "alimento" in tipos:  # las raciones preparadas son comida
+        total += inventario.elaboraciones.coste_servicio(servicio_id, sin_iva=sin_iva)
+    return round(total, 2)
+
+
+def _tipo_registro(registro: Registro) -> str:
+    """"alimento" o "consumible" (las raciones preparadas son alimento)."""
+    return "alimento" if isinstance(registro, UsoTanda) else registro.tipo_producto
 
 
 def _porcentaje(tirado: float, usado: float) -> Optional[float]:
@@ -268,7 +276,7 @@ def previsualizar(
         filas.append({"tipo": "preparada", "clave": receta, "nombre": nombre_preparada(receta), "cantidad": cantidad,
                       "unidad": "raciones", "reparto": reparto, "antes": disponible,
                       "despues": round(disponible - cantidad, 6), "coste": round(coste, 2),
-                      "texto_reparto": ", ".join(f"tanda {t}: {_numero(r)}" for t, r in reparto)})
+                      "texto_reparto": ", ".join(f"{_numero(r)} raciones de la tanda {t}" for t, r in reparto)})
 
     for nombre, cantidad in productos.items():
         producto = inventario.productos.get(nombre)
@@ -299,7 +307,7 @@ def previsualizar(
         filas.append({"tipo": "producto", "clave": nombre, "nombre": nombre, "cantidad": cantidad,
                       "unidad": producto.unidad, "reparto": reparto, "antes": round(producto.stock, 6),
                       "despues": round(producto.stock - cantidad, 6), "coste": round(coste, 2),
-                      "texto_reparto": ", ".join(f"lote {l}: {_numero(c)}" for l, c in reparto)})
+                      "texto_reparto": ", ".join(f"{_numero(c)} {producto.unidad} del lote {l}" for l, c in reparto)})
 
     if not filas and not problemas:
         problemas.append("No has indicado nada que tirar.")
@@ -405,9 +413,13 @@ def anular_servicio(inventario: Inventario, servicio_id: int, fecha: Optional[da
 
 # ---------- Para Métricas y para ajustar los próximos eventos ----------
 
-def en_rango(inventario: Inventario, servicios: list[Servicio], desde: date, hasta: date) -> dict:
+def en_rango(inventario: Inventario, servicios: list[Servicio], desde: date, hasta: date,
+             tipo: Optional[str] = None) -> dict:
     """
-    Los sobrantes tirados entre dos fechas:
+    Los sobrantes de los servicios cuya FECHA DEL SERVICIO cae entre dos fechas
+    (como la rentabilidad y el Historial: si el servicio fue el 31 y las sobras
+    se tiraron el día 1, cuentan en el mes del servicio). `tipo` ("alimento" o
+    "consumible") deja solo los de ese tipo de producto; None = todos.
     - total: su coste (criterio de la rentabilidad) y "lineas" apuntadas.
     - por_producto: producto, cantidad, unidad, coste y porcentaje medio de lo
       dedicado a esos servicios que se tiró (de más a menos coste).
@@ -415,8 +427,15 @@ def en_rango(inventario: Inventario, servicios: list[Servicio], desde: date, has
       y consumibles de esos servicios se tiró (de más a menos porcentaje).
     """
     sin_iva = inventario.iva_recuperable
-    registros = [r for r in [*usos_sobrante(inventario), *salidas_sobrante(inventario)] if desde <= r.fecha <= hasta]
     por_id = {s.id: s for s in servicios}
+    tipos = TIPOS_CON_SOBRANTE if tipo is None else (tipo,)
+
+    def fecha(r: Registro) -> date:
+        s = por_id.get(r.servicio_id)
+        return s.fecha if s else r.fecha
+
+    registros = [r for r in [*usos_sobrante(inventario), *salidas_sobrante(inventario)]
+                 if desde <= fecha(r) <= hasta and _tipo_registro(r) in tipos]
     ids = sorted({r.servicio_id for r in registros if r.servicio_id is not None})
     usados = {sid: usado_en_servicio(inventario, sid) for sid in ids}
 
@@ -446,7 +465,7 @@ def en_rango(inventario: Inventario, servicios: list[Servicio], desde: date, has
         fila = menus.setdefault(nombre, {"menu": nombre, "servicios": 0, "coste": 0.0, "_base": 0.0})
         fila["servicios"] += 1
         fila["coste"] = round(fila["coste"] + tirado, 2)
-        fila["_base"] += _coste_consumido(inventario, sid, sin_iva) + tirado
+        fila["_base"] += _coste_consumido(inventario, sid, sin_iva, tipos) + tirado
     por_menu = []
     for fila in menus.values():
         base = fila.pop("_base")

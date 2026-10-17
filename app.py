@@ -2786,8 +2786,11 @@ def _editor_sobrantes(servicio: Servicio, inv: Inventario, prefijo: str) -> tupl
     """
     candidatos = sobrantes.candidatos(servicio, inv)
     otros = sobrantes.otros_productos(servicio, inv)
+    st.caption("Pon solo lo que ha **vuelto del servicio** y vas a tirar. «En el almacén» es todo lo que hay de ese "
+               "producto, no lo que sobró.")
     if otros:
-        for nombre in st.multiselect("➕ Añadir otro producto que se llevó al servicio", otros, key=f"{prefijo}_otros"):
+        for nombre in st.multiselect("➕ Añadir otro producto que se llevó al servicio", otros, key=f"{prefijo}_otros",
+                                     placeholder="Elige productos..."):
             producto = inv.buscar_producto(nombre)
             candidatos.append({"tipo": "producto", "clave": nombre, "nombre": nombre, "unidad": producto.unidad,
                                "disponible": producto.stock, "usado": 0.0, "tirado": 0.0})
@@ -2802,7 +2805,7 @@ def _editor_sobrantes(servicio: Servicio, inv: Inventario, prefijo: str) -> tupl
         detalle = []
         if c["usado"]:
             detalle.append(f"usado en el servicio: {_num(c['usado'])} {c['unidad']}")
-        detalle.append(f"queda: {_num(c['disponible'])} {c['unidad']}")
+        detalle.append(f"en el almacén: {_num(c['disponible'])} {c['unidad']}")
         if c["tirado"]:
             detalle.append(f"ya apuntado como sobrante: {_num(c['tirado'])} {c['unidad']}")
         c1.markdown(f"**{icono}{c['nombre']}**  \n{' · '.join(detalle)}")
@@ -2821,7 +2824,7 @@ def _vista_sobrantes(plan: dict, inv: Inventario) -> None:
         st.dataframe([{
             "Producto": ("🥘 " if f["tipo"] == "preparada" else "") + f["nombre"],
             "Se tira": f"{_num(f['cantidad'])} {f['unidad']}",
-            "Queda": f"{_num(f['antes'])} → {_num(f['despues'])} {f['unidad']}",
+            "En el almacén": f"{_num(f['antes'])} → {_num(f['despues'])} {f['unidad']}",
             "De dónde sale": _es(f["texto_reparto"]),
             f"Coste (€, {criterio})": _eur(f["coste"]),
         } for f in plan["filas"]], width="stretch", hide_index=True)
@@ -4390,13 +4393,16 @@ def _poner_sesion(nueva: Sesion) -> None:
     ss.receta_ingredientes = {}
 
 
-def _pestana_sobrantes_metricas(inv: Inventario, desde: date, hasta: date) -> None:
-    """Lo que sobró de los servicios y se tiró en el periodo: total, por producto y por menú."""
-    st.caption(TEXTO_SOBRANTE)
-    datos = sobrantes.en_rango(inv, st.session_state.registro_servicios.servicios, desde, hasta)
+def _pestana_sobrantes_metricas(inv: Inventario, desde: date, hasta: date, tipo: str) -> None:
+    """Lo que sobró de los servicios del periodo y se tiró: total, por producto y por menú (del tipo elegido)."""
+    st.caption(TEXTO_SOBRANTE + " Cuenta en el periodo de la **fecha del servicio**, como la rentabilidad.")
+    if tipo not in sobrantes.TIPOS_CON_SOBRANTE:
+        st.info("Los productos de limpieza y mantenimiento no se apuntan como sobrante: elige Alimentos o Consumibles.")
+        return
+    datos = sobrantes.en_rango(inv, st.session_state.registro_servicios.servicios, desde, hasta, tipo)
     if not datos["lineas"]:
-        st.info("No se ha apuntado ningún sobrante en este periodo. Se apuntan al completar un servicio (paso 3) o "
-                "después, en Historial › ficha del servicio › 🗑️ Sobrantes.")
+        st.info("No hay sobrantes de este tipo en los servicios de este periodo. Se apuntan al completar un servicio "
+                "(paso 3) o después, en Historial › ficha del servicio › 🗑️ Sobrantes.")
         return
     criterio = "sin IVA" if datos["sin_iva"] else "con IVA"
     st.metric(f"Sobrante desechado en el periodo ({criterio})", f"{_eur(datos['total'])} €")
@@ -4438,7 +4444,7 @@ def pagina_metricas() -> None:
          "💰 Gasto por categoría", "🦴 Merma", "🧾 IVA"]
     )
     with tab_sobrantes:
-        _pestana_sobrantes_metricas(inv, desde, hasta)
+        _pestana_sobrantes_metricas(inv, desde, hasta, tipo)
     with tab_iva:
         _pestana_iva(metricas, inv)
 

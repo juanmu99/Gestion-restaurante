@@ -1584,6 +1584,8 @@ def prueba_sobrantes(at: AppTest) -> None:
     campo = f"completar_sobrante_{sid}_producto_Merluza"
     comprobar(at.number_input(key=campo).value == 0,
               "Paso 3 'Sobrantes': cada cosa usada en el servicio, con la cantidad a tirar en 0")
+    comprobar(any("en el almacén: 2 kg" in t for t in textos(at.markdown)),
+              "Junto a cada producto pone lo que hay 'en el almacén' (no 'queda', que se confundía con lo que sobró)")
     at.number_input(key=campo).set_value(3.0).run()
     comprobar(any("solo quedan 2 kg" in t for t in textos(at.error)),
               "Si se pone más de lo que quedará, se avisa (según el inventario solo quedan 2 kg)")

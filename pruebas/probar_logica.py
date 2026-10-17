@@ -1832,6 +1832,18 @@ rango = sobrantes.en_rango(inv, registro.servicios, HOY, HOY)
 comprobar(rango["total"] == 39 and rango["por_producto"][0]["producto"] == "Salmón"
           and abs(rango["por_producto"][0]["porcentaje"] - 0.4) < 1e-9 and rango["por_menu"][0]["menu"] == "Boda",
           "Métricas de sobrantes: total, por producto (con su %) y por menú")
+for r in sobrantes.registros_servicio(inv, boda.id):
+    r.fecha = HOY + timedelta(days=1)  # las sobras se tiran al día siguiente del servicio
+comprobar(sobrantes.en_rango(inv, registro.servicios, HOY, HOY)["total"] == 39
+          and sobrantes.en_rango(inv, registro.servicios, HOY + timedelta(days=1), HOY + timedelta(days=1))["lineas"] == 0,
+          "En Métricas, el sobrante cuenta en la fecha del SERVICIO (aunque se tirase al día siguiente)")
+for r in sobrantes.registros_servicio(inv, boda.id):
+    r.fecha = HOY
+comprobar(sobrantes.en_rango(inv, registro.servicios, HOY, HOY, "alimento")["total"] == 39
+          and sobrantes.en_rango(inv, registro.servicios, HOY, HOY, "consumible")["lineas"] == 0,
+          "Métricas de sobrantes por tipo: las raciones preparadas y el salmón son alimentos; no hay consumibles")
+comprobar(plan["filas"][1]["texto_reparto"] == "2 kg del lote 1" and plan["filas"][0]["texto_reparto"] == "6 raciones de la tanda 1",
+          "De dónde sale cada cosa se lee claro: '2 kg del lote 1', '6 raciones de la tanda 1'")
 aviso = sobrantes.aviso_menu("Boda", registro.servicios, inv)
 texto = sobrantes.texto_aviso_menu("Boda", aviso)
 comprobar(aviso["servicios"] == 1 and aviso["productos"][0]["producto"] == "Salmón"
