@@ -133,7 +133,55 @@ def main() -> int:
                         errores.append(f"Servicios > {pestana}: {e}")
                     numero += 1
 
+            if pagina == "Servicios":
+                # Completar un servicio, hasta el paso 3 (Sobrantes). Solo se mira: no se completa.
+                try:
+                    import re
+                    page.get_by_role("tab", name="✅ Completar servicio").click()
+                    esperar(page)
+                    page.locator('[data-testid="stSelectbox"]').filter(has_text="Servicio a completar").click()
+                    page.get_by_role("option", name=re.compile("Menú del día")).first.click()
+                    esperar(page)
+                    for _ in range(2):
+                        page.get_by_role("button", name="Siguiente →").click()
+                        esperar(page)
+                    campos = page.get_by_label(re.compile(r"Se tira \("))
+                    if campos.count():
+                        campos.first.fill("1")
+                        campos.first.press("Enter")
+                        esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "servicios completar paso 3 sobrantes")),
+                                    full_page=True)
+                    print("📸 Servicios > Completar > paso 3 (Sobrantes)")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Servicios > Completar > Sobrantes: {e}")
+                numero += 1
+
+            if pagina == "Historial":
+                try:
+                    import re
+                    page.locator('[data-testid="stSelectbox"]').filter(has_text="Servicio").last.click()
+                    page.get_by_role("option", name=re.compile("Menú sobrantes")).first.click()
+                    esperar(page)
+                    page.get_by_role("tab", name="🗑️ Sobrantes").click()
+                    esperar(page)
+                    page.get_by_text("Cada sobrante apuntado").first.click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "historial sobrantes")), full_page=True)
+                    print("📸 Historial > ficha > Sobrantes")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Historial > Sobrantes: {e}")
+                numero += 1
+
             if pagina == "Métricas":
+                try:
+                    page.get_by_role("tab", name="🗑️ Sobrantes").click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "metricas sobrantes")), full_page=True)
+                    print("📸 Métricas > Sobrantes")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Métricas > Sobrantes: {e}")
+                numero += 1
                 try:
                     page.get_by_role("tab", name="🧾 IVA").click()
                     esperar(page)
