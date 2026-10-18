@@ -210,9 +210,11 @@ def main() -> int:
                     for receta in ("Pan casero", "Ensalada de tomate"):
                         page.locator('[data-testid="stMultiSelect"]').filter(has_text="Recetas a incluir").click()
                         page.get_by_role("option", name=receta, exact=True).click()
+                        page.keyboard.press("Escape")  # cierra el desplegable
                         esperar(page)
-                    page.get_by_label("Calcular para un número de comensales (opcional)").first.fill("25")
-                    page.get_by_label("Calcular para un número de comensales (opcional)").first.press("Enter")
+                    campo = page.get_by_label("Calcular para un número de comensales (opcional)").filter(visible=True).first
+                    campo.fill("25")
+                    campo.press("Enter")
                     esperar(page)
                     page.screenshot(path=str(CARPETA / nombre_archivo(numero, "recetario crear menu coste")), full_page=True)
                     print("📸 Recetario > Crear menú (coste)")
@@ -222,7 +224,7 @@ def main() -> int:
                 try:
                     page.get_by_role("tab", name="➕ Crear receta").click()
                     esperar(page)
-                    campo = page.get_by_label(re.compile(r"Cantidad por comensal")).first
+                    campo = page.get_by_label(re.compile(r"Cantidad por comensal")).filter(visible=True).first
                     campo.fill("0.2")
                     campo.press("Enter")
                     esperar(page)
