@@ -202,6 +202,37 @@ def main() -> int:
                 except Exception as e:  # noqa: BLE001
                     errores.append(f"Recetario > Detalle de menú: {e}")
                 numero += 1
+                # Coste de cada plato al diseñar: Crear menú con dos recetas elegidas y Crear receta con un ingrediente.
+                try:
+                    import re
+                    page.get_by_role("tab", name="➕ Crear menú").click()
+                    esperar(page)
+                    for receta in ("Pan casero", "Ensalada de tomate"):
+                        page.locator('[data-testid="stMultiSelect"]').filter(has_text="Recetas a incluir").click()
+                        page.get_by_role("option", name=receta, exact=True).click()
+                        esperar(page)
+                    page.get_by_label("Calcular para un número de comensales (opcional)").first.fill("25")
+                    page.get_by_label("Calcular para un número de comensales (opcional)").first.press("Enter")
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "recetario crear menu coste")), full_page=True)
+                    print("📸 Recetario > Crear menú (coste)")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Recetario > Crear menú: {e}")
+                numero += 1
+                try:
+                    page.get_by_role("tab", name="➕ Crear receta").click()
+                    esperar(page)
+                    campo = page.get_by_label(re.compile(r"Cantidad por comensal")).first
+                    campo.fill("0.2")
+                    campo.press("Enter")
+                    esperar(page)
+                    page.get_by_role("button", name="➕ Añadir ingrediente a la receta").click()
+                    esperar(page)
+                    page.screenshot(path=str(CARPETA / nombre_archivo(numero, "recetario crear receta coste")), full_page=True)
+                    print("📸 Recetario > Crear receta (coste)")
+                except Exception as e:  # noqa: BLE001
+                    errores.append(f"Recetario > Crear receta: {e}")
+                numero += 1
                 try:
                     page.get_by_role("tab", name="🧪 Elaboraciones base").click()
                     esperar(page)
