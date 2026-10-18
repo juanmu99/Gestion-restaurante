@@ -1,0 +1,1307 @@
+{
+  "version_datos": 2,
+  "inventario": {
+    "productos": [
+      {
+        "nombre": "Harina de trigo",
+        "tipo": "alimento",
+        "categoria": "Panadería",
+        "unidad": "kg",
+        "precio_referencia_base": 1.1538461538461537,
+        "iva": 4,
+        "proveedor": "Harinas del Sur",
+        "stock_minimo": 2,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 8.2,
+            "precio_base": 1.1538461538461537,
+            "iva": 4,
+            "proveedor": "Harinas del Sur",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": null,
+            "procedencia": "inicial"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Aceite de oliva",
+        "tipo": "alimento",
+        "categoria": "Aceites",
+        "unidad": "litros",
+        "precio_referencia_base": 4.090909090909091,
+        "iva": 10,
+        "proveedor": "Oleícola Andaluza",
+        "stock_minimo": 5,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 19.795,
+            "precio_base": 4.090909090909091,
+            "iva": 10,
+            "proveedor": "Oleícola Andaluza",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": null,
+            "procedencia": "inicial"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Tomate",
+        "tipo": "alimento",
+        "categoria": "Verduras",
+        "unidad": "kg",
+        "precio_referencia_base": 2.4038461538461537,
+        "iva": 4,
+        "proveedor": "Huerta Local",
+        "stock_minimo": 2,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 3.8,
+            "precio_base": 2.019230769230769,
+            "iva": 4,
+            "proveedor": "Huerta Local",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": "2026-10-24",
+            "peso_unitario": null,
+            "procedencia": "inicial"
+          },
+          {
+            "id": 2,
+            "cantidad": 4,
+            "precio_base": 2.2115384615384612,
+            "iva": 4,
+            "proveedor": "Frutas Paco",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": "2026-10-27",
+            "peso_unitario": null,
+            "procedencia": "compra"
+          },
+          {
+            "id": 3,
+            "cantidad": 1,
+            "precio_base": 2.4038461538461537,
+            "iva": 4,
+            "proveedor": "Súper de guardia",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": null,
+            "procedencia": "compra"
+          }
+        ],
+        "siguiente_lote": 4,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Salmón",
+        "tipo": "alimento",
+        "categoria": "Pescados",
+        "unidad": "kg",
+        "precio_referencia_base": 16.363636363636363,
+        "iva": 10,
+        "proveedor": "Pescados Mar",
+        "stock_minimo": 1,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 1.6,
+            "precio_base": 16.363636363636363,
+            "iva": 10,
+            "proveedor": "Pescados Mar",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": "2026-10-21",
+            "peso_unitario": null,
+            "procedencia": "inicial"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Pata de cerdo",
+        "tipo": "alimento",
+        "categoria": "Carnes",
+        "unidad": "unidades",
+        "precio_referencia_base": 37.1900826446281,
+        "iva": 21.0,
+        "proveedor": "Carnicería Pepe",
+        "stock_minimo": 0,
+        "tiene_merma": true,
+        "peso_unitario": 7,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 1,
+            "precio_base": 37.1900826446281,
+            "iva": 21.0,
+            "proveedor": "Carnicería Pepe",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": 7,
+            "procedencia": "inicial"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Carne de pata limpia",
+        "tipo": "alimento",
+        "categoria": "Carnes",
+        "unidad": "kg",
+        "precio_referencia_base": 0.0,
+        "iva": 21.0,
+        "proveedor": "Elaboración propia",
+        "stock_minimo": 0,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": "Pata de cerdo",
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 4.5,
+            "precio_base": 8.264462809917356,
+            "iva": 21.0,
+            "proveedor": "Elaboración propia",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": null,
+            "procedencia": "limpieza"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Hueso de pata",
+        "tipo": "alimento",
+        "categoria": "Carnes",
+        "unidad": "kg",
+        "precio_referencia_base": 0.0,
+        "iva": 21.0,
+        "proveedor": "Elaboración propia",
+        "stock_minimo": 0,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": true,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 1.5,
+            "precio_base": 0.0,
+            "iva": 0.0,
+            "proveedor": "Elaboración propia",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": null,
+            "procedencia": "limpieza"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Servilletas de papel",
+        "tipo": "consumible",
+        "categoria": "Desechables",
+        "unidad": "unidades",
+        "precio_referencia_base": 0.01652892561983471,
+        "iva": 21.0,
+        "proveedor": "Hostelería Total",
+        "stock_minimo": 200,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 476,
+            "precio_base": 0.01652892561983471,
+            "iva": 21.0,
+            "proveedor": "Hostelería Total",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": null,
+            "procedencia": "inicial"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Lejía",
+        "tipo": "mantenimiento",
+        "categoria": "Limpieza",
+        "unidad": "litros",
+        "precio_referencia_base": 0.9090909090909092,
+        "iva": 21.0,
+        "proveedor": "Droguería Central",
+        "stock_minimo": 2,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 3.2,
+            "precio_base": 0.9090909090909092,
+            "iva": 21.0,
+            "proveedor": "Droguería Central",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": null,
+            "peso_unitario": null,
+            "procedencia": "inicial"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Cebolla dulce",
+        "tipo": "alimento",
+        "categoria": "Verduras",
+        "unidad": "kg",
+        "precio_referencia_base": 1.0743801652892562,
+        "iva": 21.0,
+        "proveedor": "Huerta Local",
+        "stock_minimo": 0,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 3.5,
+            "precio_base": 1.0743801652892562,
+            "iva": 21.0,
+            "proveedor": "Huerta Local",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": "2026-10-30",
+            "peso_unitario": null,
+            "procedencia": "inicial"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Sofrito",
+        "tipo": "alimento",
+        "categoria": "Elaboraciones",
+        "unidad": "kg",
+        "precio_referencia_base": 0.0,
+        "iva": 21.0,
+        "proveedor": "Elaboración propia",
+        "stock_minimo": 0,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [
+          {
+            "id": 1,
+            "cantidad": 0.54,
+            "precio_base": 2.912428180387618,
+            "iva": 14.452024,
+            "proveedor": "Elaboración propia",
+            "fecha_entrada": "2026-10-18",
+            "fecha_caducidad": "2026-10-22",
+            "peso_unitario": null,
+            "procedencia": "elaboración"
+          }
+        ],
+        "siguiente_lote": 2,
+        "formula": {
+          "cantidad": 1,
+          "ingredientes": {
+            "Cebolla dulce": 1.5,
+            "Tomate": 0.5
+          }
+        },
+        "vida_util_dias": 4,
+        "notas": "Pochar a fuego lento.",
+        "notas_fecha": "2026-10-18"
+      },
+      {
+        "nombre": "Nata",
+        "tipo": "alimento",
+        "categoria": "Lácteos",
+        "unidad": "litros",
+        "precio_referencia_base": 2.479338842975207,
+        "iva": 21.0,
+        "proveedor": "Lácteos Norte",
+        "stock_minimo": 0,
+        "tiene_merma": false,
+        "peso_unitario": null,
+        "origen": null,
+        "es_subproducto": false,
+        "lotes": [],
+        "siguiente_lote": 2,
+        "formula": null,
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      }
+    ],
+    "historial": [
+      {
+        "producto_nombre": "Tomate",
+        "categoria": "Verduras",
+        "tipo": "entrada",
+        "cantidad": 4,
+        "unidad": "kg",
+        "precio_base": 2.2115384615384612,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "compra",
+        "lote_id": 2,
+        "lote": "Lote 2 · cad. 27/10/2026 · Frutas Paco",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Pata de cerdo",
+        "categoria": "Carnes",
+        "tipo": "salida",
+        "cantidad": 1,
+        "unidad": "unidades",
+        "precio_base": 37.1900826446281,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "limpieza",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Carnicería Pepe",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Carne de pata limpia",
+        "categoria": "Carnes",
+        "tipo": "entrada",
+        "cantidad": 4.5,
+        "unidad": "kg",
+        "precio_base": 8.264462809917356,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "limpieza",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Elaboración propia",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Hueso de pata",
+        "categoria": "Carnes",
+        "tipo": "entrada",
+        "cantidad": 1.5,
+        "unidad": "kg",
+        "precio_base": 0.0,
+        "iva": 0.0,
+        "fecha": "2026-10-18",
+        "motivo": "limpieza",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Elaboración propia",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Cebolla dulce",
+        "categoria": "Verduras",
+        "tipo": "salida",
+        "cantidad": 1.5,
+        "unidad": "kg",
+        "precio_base": 1.0743801652892562,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 30/10/2026 · Huerta Local",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Tomate",
+        "categoria": "Verduras",
+        "tipo": "salida",
+        "cantidad": 0.5,
+        "unidad": "kg",
+        "precio_base": 2.019230769230769,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 24/10/2026 · Huerta Local",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Sofrito",
+        "categoria": "Elaboraciones",
+        "tipo": "entrada",
+        "cantidad": 0.9,
+        "unidad": "kg",
+        "precio_base": 2.912428180387618,
+        "iva": 14.452024,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 22/10/2026 · Elaboración propia",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Nata",
+        "categoria": "Lácteos",
+        "tipo": "salida",
+        "cantidad": 1,
+        "unidad": "litros",
+        "precio_base": 2.479338842975207,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "desperdicio",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 16/10/2026 · Lácteos Norte",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Lejía",
+        "categoria": "Limpieza",
+        "tipo": "salida",
+        "cantidad": 0.5,
+        "unidad": "litros",
+        "precio_base": 0.9090909090909092,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Droguería Central",
+        "tipo_producto": "mantenimiento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Tomate",
+        "categoria": "Verduras",
+        "tipo": "salida",
+        "cantidad": 1.0,
+        "unidad": "kg",
+        "precio_base": 2.019230769230769,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 24/10/2026 · Huerta Local",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Aceite de oliva",
+        "categoria": "Aceites",
+        "tipo": "salida",
+        "cantidad": 0.05,
+        "unidad": "litros",
+        "precio_base": 4.090909090909091,
+        "iva": 10,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Oleícola Andaluza",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Harina de trigo",
+        "categoria": "Panadería",
+        "tipo": "salida",
+        "cantidad": 0.6,
+        "unidad": "kg",
+        "precio_base": 1.1538461538461537,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Harinas del Sur",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Aceite de oliva",
+        "categoria": "Aceites",
+        "tipo": "salida",
+        "cantidad": 0.04,
+        "unidad": "litros",
+        "precio_base": 4.090909090909091,
+        "iva": 10,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Oleícola Andaluza",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Harina de trigo",
+        "categoria": "Panadería",
+        "tipo": "salida",
+        "cantidad": 1.2,
+        "unidad": "kg",
+        "precio_base": 1.1538461538461537,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Harinas del Sur",
+        "tipo_producto": "alimento",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Aceite de oliva",
+        "categoria": "Aceites",
+        "tipo": "salida",
+        "cantidad": 0.09,
+        "unidad": "litros",
+        "precio_base": 4.090909090909091,
+        "iva": 10,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Oleícola Andaluza",
+        "tipo_producto": "alimento",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Tomate",
+        "categoria": "Verduras",
+        "tipo": "salida",
+        "cantidad": 0.2,
+        "unidad": "kg",
+        "precio_base": 2.019230769230769,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 24/10/2026 · Huerta Local",
+        "tipo_producto": "alimento",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Salmón",
+        "categoria": "Pescados",
+        "tipo": "salida",
+        "cantidad": 2.4,
+        "unidad": "kg",
+        "precio_base": 16.363636363636363,
+        "iva": 10,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 21/10/2026 · Pescados Mar",
+        "tipo_producto": "alimento",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Sofrito",
+        "categoria": "Elaboraciones",
+        "tipo": "salida",
+        "cantidad": 0.36,
+        "unidad": "kg",
+        "precio_base": 2.912428180387618,
+        "iva": 14.452024,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 22/10/2026 · Elaboración propia",
+        "tipo_producto": "alimento",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Servilletas de papel",
+        "categoria": "Desechables",
+        "tipo": "salida",
+        "cantidad": 24,
+        "unidad": "unidades",
+        "precio_base": 0.01652892561983471,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Hostelería Total",
+        "tipo_producto": "consumible",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Lejía",
+        "categoria": "Limpieza",
+        "tipo": "salida",
+        "cantidad": 0.3,
+        "unidad": "litros",
+        "precio_base": 0.9090909090909092,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Droguería Central",
+        "tipo_producto": "mantenimiento",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Tomate",
+        "categoria": "Verduras",
+        "tipo": "entrada",
+        "cantidad": 2,
+        "unidad": "kg",
+        "precio_base": 2.4038461538461537,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "compra",
+        "lote_id": 3,
+        "lote": "Lote 3 · sin caducidad · Súper de guardia",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Tomate",
+        "categoria": "Verduras",
+        "tipo": "salida",
+        "cantidad": 1,
+        "unidad": "kg",
+        "precio_base": 2.4038461538461537,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "consumo",
+        "lote_id": 3,
+        "lote": "Lote 3 · sin caducidad · Súper de guardia",
+        "tipo_producto": "alimento",
+        "servicio_id": 1
+      },
+      {
+        "producto_nombre": "Tomate",
+        "categoria": "Verduras",
+        "tipo": "salida",
+        "cantidad": 0.5,
+        "unidad": "kg",
+        "precio_base": 2.019230769230769,
+        "iva": 4,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 24/10/2026 · Huerta Local",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Aceite de oliva",
+        "categoria": "Aceites",
+        "tipo": "salida",
+        "cantidad": 0.025,
+        "unidad": "litros",
+        "precio_base": 4.090909090909091,
+        "iva": 10,
+        "fecha": "2026-10-18",
+        "motivo": "elaboración",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Oleícola Andaluza",
+        "tipo_producto": "alimento",
+        "servicio_id": null
+      },
+      {
+        "producto_nombre": "Salmón",
+        "categoria": "Pescados",
+        "tipo": "salida",
+        "cantidad": 1,
+        "unidad": "kg",
+        "precio_base": 16.363636363636363,
+        "iva": 10,
+        "fecha": "2026-10-18",
+        "motivo": "sobrante",
+        "lote_id": 1,
+        "lote": "Lote 1 · cad. 21/10/2026 · Pescados Mar",
+        "tipo_producto": "alimento",
+        "servicio_id": 1
+      }
+    ],
+    "limpiezas": [
+      {
+        "producto_origen": "Pata de cerdo",
+        "cantidad_origen": 1,
+        "unidad_origen": "unidades",
+        "peso_bruto_kg": 7,
+        "producto_limpio": "Carne de pata limpia",
+        "peso_limpio_kg": 4.5,
+        "derivados_kg": {
+          "Hueso de pata": 1.5
+        },
+        "coste": 45.0,
+        "fecha": "2026-10-18",
+        "lote_origen": "Lote 1 · sin caducidad · Carnicería Pepe"
+      }
+    ],
+    "elaboraciones": {
+      "tandas": [
+        {
+          "id": 3,
+          "receta": "Ensalada de tomate",
+          "raciones": 3,
+          "raciones_iniciales": 5,
+          "coste_por_racion": 0.2325,
+          "coste_por_racion_sin_iva": 0.22237762237762237,
+          "fecha_preparacion": "2026-10-18",
+          "fecha_caducidad": "2026-10-20"
+        }
+      ],
+      "usos": [
+        {
+          "tanda_id": 2,
+          "receta": "Pan casero",
+          "raciones": 4,
+          "motivo": "consumo",
+          "coste": 0.9,
+          "coste_sin_iva": 0.86,
+          "servicio_id": 1,
+          "fecha": "2026-10-18"
+        },
+        {
+          "tanda_id": 1,
+          "receta": "Ensalada de tomate",
+          "raciones": 10,
+          "motivo": "consumo",
+          "coste": 2.33,
+          "coste_sin_iva": 2.22,
+          "servicio_id": 1,
+          "fecha": "2026-10-18"
+        },
+        {
+          "tanda_id": 3,
+          "receta": "Ensalada de tomate",
+          "raciones": 2,
+          "motivo": "sobrante",
+          "coste": 0.47,
+          "coste_sin_iva": 0.44,
+          "servicio_id": 1,
+          "fecha": "2026-10-18"
+        }
+      ],
+      "siguiente_id": 4,
+      "preparaciones_base": [
+        {
+          "producto": "Sofrito",
+          "unidad": "kg",
+          "prevista": 1,
+          "obtenida": 0.9,
+          "coste": 3.0,
+          "lote_id": 1,
+          "fecha": "2026-10-18"
+        }
+      ],
+      "agotadas": [
+        {
+          "id": 2,
+          "receta": "Pan casero",
+          "raciones": 0,
+          "raciones_iniciales": 4,
+          "coste_por_racion": 0.22499999999999998,
+          "coste_por_racion_sin_iva": 0.21398601398601397,
+          "fecha_preparacion": "2026-10-18",
+          "fecha_caducidad": null
+        },
+        {
+          "id": 1,
+          "receta": "Ensalada de tomate",
+          "raciones": 0,
+          "raciones_iniciales": 10,
+          "coste_por_racion": 0.2325,
+          "coste_por_racion_sin_iva": 0.22237762237762237,
+          "fecha_preparacion": "2026-10-18",
+          "fecha_caducidad": "2026-10-20"
+        }
+      ],
+      "sobrantes_anulados": []
+    },
+    "historial_precios": [
+      {
+        "producto": "Harina de trigo",
+        "fecha": "2026-10-18",
+        "proveedor": "Harinas del Sur",
+        "cantidad": 10,
+        "unidad": "kg",
+        "precio_base": 1.1538461538461537,
+        "iva": 4,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Aceite de oliva",
+        "fecha": "2026-10-18",
+        "proveedor": "Oleícola Andaluza",
+        "cantidad": 20,
+        "unidad": "litros",
+        "precio_base": 4.090909090909091,
+        "iva": 10,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Tomate",
+        "fecha": "2026-10-18",
+        "proveedor": "Huerta Local",
+        "cantidad": 6,
+        "unidad": "kg",
+        "precio_base": 2.019230769230769,
+        "iva": 4,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Tomate",
+        "fecha": "2026-10-18",
+        "proveedor": "Frutas Paco",
+        "cantidad": 4,
+        "unidad": "kg",
+        "precio_base": 2.2115384615384612,
+        "iva": 4,
+        "lote_id": 2,
+        "origen": "compra"
+      },
+      {
+        "producto": "Salmón",
+        "fecha": "2026-10-18",
+        "proveedor": "Pescados Mar",
+        "cantidad": 5,
+        "unidad": "kg",
+        "precio_base": 16.363636363636363,
+        "iva": 10,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Pata de cerdo",
+        "fecha": "2026-10-18",
+        "proveedor": "Carnicería Pepe",
+        "cantidad": 2,
+        "unidad": "unidades",
+        "precio_base": 37.1900826446281,
+        "iva": 21.0,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Servilletas de papel",
+        "fecha": "2026-10-18",
+        "proveedor": "Hostelería Total",
+        "cantidad": 500,
+        "unidad": "unidades",
+        "precio_base": 0.01652892561983471,
+        "iva": 21.0,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Lejía",
+        "fecha": "2026-10-18",
+        "proveedor": "Droguería Central",
+        "cantidad": 4,
+        "unidad": "litros",
+        "precio_base": 0.9090909090909092,
+        "iva": 21.0,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Cebolla dulce",
+        "fecha": "2026-10-18",
+        "proveedor": "Huerta Local",
+        "cantidad": 5,
+        "unidad": "kg",
+        "precio_base": 1.0743801652892562,
+        "iva": 21.0,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Nata",
+        "fecha": "2026-10-18",
+        "proveedor": "Lácteos Norte",
+        "cantidad": 1,
+        "unidad": "litros",
+        "precio_base": 2.479338842975207,
+        "iva": 21.0,
+        "lote_id": 1,
+        "origen": "inicial"
+      },
+      {
+        "producto": "Tomate",
+        "fecha": "2026-10-18",
+        "proveedor": "Súper de guardia",
+        "cantidad": 2,
+        "unidad": "kg",
+        "precio_base": 2.4038461538461537,
+        "iva": 4,
+        "lote_id": 3,
+        "origen": "compra"
+      }
+    ],
+    "iva_recuperable": true,
+    "iva_cobro": 10.0,
+    "sobrantes_anulados": [
+      {
+        "producto_nombre": "Servilletas de papel",
+        "categoria": "Desechables",
+        "tipo": "salida",
+        "cantidad": 5,
+        "unidad": "unidades",
+        "precio_base": 0.01652892561983471,
+        "iva": 21.0,
+        "fecha": "2026-10-18",
+        "motivo": "sobrante",
+        "lote_id": 1,
+        "lote": "Lote 1 · sin caducidad · Hostelería Total",
+        "tipo_producto": "consumible",
+        "servicio_id": 1,
+        "anulado": "2026-10-18"
+      }
+    ]
+  },
+  "servicios": {
+    "servicios": [
+      {
+        "id": 1,
+        "fecha": "2026-10-18",
+        "hora": "14:00:00",
+        "comensales": 12,
+        "menu": "Menú boda",
+        "notas": "",
+        "estado": "completado",
+        "precio_cobrado": 900,
+        "cliente": "Familia García",
+        "lugar": "Finca El Olivo",
+        "fecha_completado": "2026-10-18",
+        "menu_completado": {
+          "nombre": "Menú boda",
+          "recetas": [
+            {
+              "nombre": "Pan casero",
+              "categoria": "Panadería",
+              "ingredientes_por_comensal": {
+                "Harina de trigo": 0.15,
+                "Aceite de oliva": 0.01
+              },
+              "vida_util_dias": null,
+              "notas": "",
+              "notas_fecha": null
+            },
+            {
+              "nombre": "Ensalada de tomate",
+              "categoria": "Entrantes",
+              "ingredientes_por_comensal": {
+                "Tomate": 0.1,
+                "Aceite de oliva": 0.005
+              },
+              "vida_util_dias": 3,
+              "notas": "Aliñar justo antes de servir.",
+              "notas_fecha": "2026-10-18"
+            },
+            {
+              "nombre": "Salmón al horno",
+              "categoria": "Principal",
+              "ingredientes_por_comensal": {
+                "Salmón": 0.2,
+                "Sofrito": 0.03
+              },
+              "vida_util_dias": 1,
+              "notas": "",
+              "notas_fecha": null
+            }
+          ],
+          "consumibles_por_comensal": {
+            "Servilletas de papel": 2
+          },
+          "materiales_por_comensal": {
+            "Plato llano": 2,
+            "Copa de vino": 1
+          },
+          "notas": "",
+          "notas_fecha": null
+        },
+        "valoracion": "Todo bien; sobró bastante salmón."
+      },
+      {
+        "id": 2,
+        "fecha": "2026-10-23",
+        "hora": "21:00:00",
+        "comensales": 8,
+        "menu": "Menú del día",
+        "notas": "",
+        "estado": "pendiente",
+        "precio_cobrado": 240,
+        "cliente": "",
+        "lugar": "",
+        "fecha_completado": null,
+        "menu_completado": null,
+        "valoracion": ""
+      },
+      {
+        "id": 3,
+        "fecha": "2026-10-25",
+        "hora": "13:00:00",
+        "comensales": 20,
+        "menu": "Menú boda",
+        "notas": "",
+        "estado": "cancelado",
+        "precio_cobrado": null,
+        "cliente": "",
+        "lugar": "",
+        "fecha_completado": null,
+        "menu_completado": null,
+        "valoracion": ""
+      }
+    ]
+  },
+  "recetario": {
+    "recetas": [
+      {
+        "nombre": "Pan casero",
+        "categoria": "Panadería",
+        "ingredientes_por_comensal": {
+          "Harina de trigo": 0.15,
+          "Aceite de oliva": 0.01
+        },
+        "vida_util_dias": null,
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Ensalada de tomate",
+        "categoria": "Entrantes",
+        "ingredientes_por_comensal": {
+          "Tomate": 0.1,
+          "Aceite de oliva": 0.005
+        },
+        "vida_util_dias": 3,
+        "notas": "Aliñar justo antes de servir.",
+        "notas_fecha": "2026-10-18"
+      },
+      {
+        "nombre": "Salmón al horno",
+        "categoria": "Principal",
+        "ingredientes_por_comensal": {
+          "Salmón": 0.2,
+          "Sofrito": 0.03
+        },
+        "vida_util_dias": 1,
+        "notas": "",
+        "notas_fecha": null
+      }
+    ],
+    "menus": [
+      {
+        "nombre": "Menú boda",
+        "recetas": [
+          "Pan casero",
+          "Ensalada de tomate",
+          "Salmón al horno"
+        ],
+        "consumibles_por_comensal": {
+          "Servilletas de papel": 2
+        },
+        "materiales_por_comensal": {
+          "Plato llano": 2,
+          "Copa de vino": 1
+        },
+        "notas": "",
+        "notas_fecha": null
+      },
+      {
+        "nombre": "Menú del día",
+        "recetas": [
+          "Pan casero",
+          "Ensalada de tomate"
+        ],
+        "consumibles_por_comensal": {
+          "Servilletas de papel": 1
+        },
+        "materiales_por_comensal": {},
+        "notas": "",
+        "notas_fecha": null
+      }
+    ]
+  },
+  "compras": {
+    "items": [
+      {
+        "ingrediente": "Papel de horno",
+        "cantidad": 2,
+        "unidad": "unidades",
+        "proveedor": "Hostelería Total",
+        "precio_unitario_estimado": 1.5,
+        "comprado": true,
+        "para": [],
+        "bajo_minimo": false,
+        "a_mano": 2
+      }
+    ]
+  },
+  "informes": {
+    "informes": [
+      {
+        "año": 2026,
+        "mes": 10,
+        "gasto_total": 14.2,
+        "gasto_por_categoria": {
+          "Verduras": 14.2
+        },
+        "consumo_por_producto": {
+          "Harina de trigo": 1.8,
+          "Aceite de oliva": 0.205,
+          "Tomate": 3.2,
+          "Salmón": 2.4,
+          "Servilletas de papel": 24,
+          "Lejía": 0.8,
+          "Cebolla dulce": 1.5,
+          "Sofrito": 0.36
+        },
+        "desperdicio_por_producto": {
+          "Nata": 1
+        },
+        "valor_desperdiciado_total": 3.0,
+        "fecha_generacion": "2026-10-18"
+      }
+    ]
+  },
+  "gastos": {
+    "gastos": [
+      {
+        "id": 1,
+        "concepto": "Gasolina",
+        "categoria": "Transporte",
+        "importe": 30,
+        "fecha": "2026-10-18",
+        "servicio_id": 1,
+        "notas": "",
+        "iva": 21
+      },
+      {
+        "id": 2,
+        "concepto": "Camarero extra",
+        "categoria": "Personal extra",
+        "importe": 120,
+        "fecha": "2026-10-18",
+        "servicio_id": 1,
+        "notas": "Coste no previsto, añadido al completar el servicio",
+        "iva": 0
+      },
+      {
+        "id": 3,
+        "concepto": "Seguro furgoneta",
+        "categoria": "Seguros e impuestos",
+        "importe": 60,
+        "fecha": "2026-10-18",
+        "servicio_id": null,
+        "notas": "",
+        "iva": null
+      }
+    ]
+  },
+  "material": {
+    "materiales": [
+      {
+        "nombre": "Plato llano",
+        "categoria": "Vajilla",
+        "cantidad_total": 58,
+        "precio_reposicion": 3.5,
+        "proveedor": "Hostelería Total"
+      },
+      {
+        "nombre": "Copa de vino",
+        "categoria": "Cristalería",
+        "cantidad_total": 48,
+        "precio_reposicion": 2.8,
+        "proveedor": "Hostelería Total"
+      }
+    ],
+    "salidas": [
+      {
+        "servicio_id": 1,
+        "cantidades": {
+          "Plato llano": 24,
+          "Copa de vino": 12
+        },
+        "fecha_salida": "2026-10-18",
+        "fecha_vuelta": "2026-10-18",
+        "vuelto": {
+          "Plato llano": 22,
+          "Copa de vino": 12
+        }
+      }
+    ],
+    "incidencias": [
+      {
+        "material": "Plato llano",
+        "cantidad": 2,
+        "tipo": "rotura",
+        "coste": 7.0,
+        "servicio_id": 1,
+        "fecha": "2026-10-18"
+      }
+    ]
+  }
+}
