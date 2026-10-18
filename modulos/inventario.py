@@ -908,6 +908,7 @@ class Limpieza:
         coste: float,
         fecha: Optional[date] = None,
         lote_origen: Optional[str] = None,
+        valor_derivados: Optional[dict[str, float]] = None,
     ):
         self.producto_origen = producto_origen
         self.cantidad_origen = cantidad_origen  # en la unidad del producto (ej: 2 unidades)
@@ -916,9 +917,18 @@ class Limpieza:
         self.producto_limpio = producto_limpio
         self.peso_limpio_kg = peso_limpio_kg
         self.derivados_kg = derivados_kg
-        self.coste = coste  # todo el coste del bruto; lo carga el producto limpio
+        self.coste = coste  # todo el coste del bruto (lo pagado, con IVA)
         self.fecha = fecha or date.today()
         self.lote_origen = lote_origen  # descripción del lote en bruto usado (None en limpiezas antiguas)
+        # Lo que se dio de valor a cada derivado ({nombre: €}), que se restó del
+        # producto limpio. Vacío (lo normal y lo de las limpiezas antiguas): los
+        # derivados a 0 € y todo el coste en el producto limpio.
+        self.valor_derivados = dict(valor_derivados or {})
+
+    @property
+    def coste_limpio(self) -> float:
+        """Lo que carga el producto limpio: el coste menos el valor dado a los derivados."""
+        return round(self.coste - sum(self.valor_derivados.values()), 2)
 
     @property
     def merma_kg(self) -> float:
@@ -931,7 +941,9 @@ class Limpieza:
         return self.peso_limpio_kg / self.peso_bruto_kg if self.peso_bruto_kg else 0.0
 
     def __str__(self) -> str:
-        derivados = ", ".join(f"{n} {round(kg, 3)} kg" for n, kg in self.derivados_kg.items()) or "ninguno"
+        derivados = ", ".join(
+            f"{n} {round(kg, 3)} kg" + (f" ({self.valor_derivados[n]} €)" if self.valor_derivados.get(n) else "")
+            for n, kg in self.derivados_kg.items()) or "ninguno"
         lote = f" [{self.lote_origen}]" if self.lote_origen else ""
         return (
             f"{self.fecha.strftime('%d/%m/%Y')} | {self.cantidad_origen} {self.unidad_origen} de {self.producto_origen}"
@@ -952,6 +964,8 @@ class Limpieza:
             "coste": self.coste,
             "fecha": self.fecha.isoformat(),
             "lote_origen": self.lote_origen,
+            # Solo si se dio valor a algún derivado: las demás se guardan igual que antes.
+            **({"valor_derivados": self.valor_derivados} if self.valor_derivados else {}),
         }
 
     @classmethod
@@ -967,6 +981,7 @@ class Limpieza:
             coste=datos["coste"],
             fecha=date.fromisoformat(datos["fecha"]),
             lote_origen=datos.get("lote_origen"),
+            valor_derivados=datos.get("valor_derivados"),
         )
 
 
@@ -1795,6 +1810,7 @@ class Inventario:
         unidad_peso: str = "kg",
         caducidades: Optional[dict[str, date]] = None,
         lote_id: Optional[int] = None,
+        valores_kg: Optional[dict[str, float]] = None,
     ) -> Limpieza:
         """
         Limpia o despieza `cantidad` de UN LOTE de un producto con merma.
@@ -1803,9 +1819,12 @@ class Inventario:
           g o unidades). Si el producto solo tiene un lote, no hace falta
           indicarlo.
         - Entra un lote nuevo del producto limpio, que carga con TODO el
-          coste de lo que se ha limpiado.
+          coste de lo que se ha limpiado (salvo lo que se dé a los derivados).
         - Entra un lote de cada derivado aprovechado de `derivados`
-          ({nombre: peso}) a coste 0.
+          ({nombre: peso}) a coste 0. OPCIONAL: `valores_kg` ({nombre: € por
+          kg}, con IVA como el precio de compra) da un valor a algún derivado
+          (una cabeza y espinas para un fumet): ese valor se RESTA del
+          producto limpio, así que el total sigue siendo lo que costó el bruto.
         - Lo que no se ha asignado a nada es merma, y queda registrado.
 
         Los pesos de salida se indican en `unidad_peso` ("kg" o "g"). Los
@@ -1860,6 +1879,16 @@ class Inventario:
             raise ValueError("Un producto no puede obtenerse de sí mismo.")
         if producto_limpio in derivados_limpios:
             raise ValueError(f"'{producto_limpio}' no puede ser a la vez el producto limpio y un derivado.")
+        valores: dict[str, float] = {}
+        for nombre, valor in (valores_kg or {}).items():
+            nombre = nombre.strip()
+            if valor is None or valor == 0:
+                continue
+            if valor < 0:
+                raise ValueError(f"El valor de '{nombre}' no puede ser negativo.")
+            if nombre not in derivados_limpios:
+                raise ValueError(f"'{nombre}' tiene valor pero no está entre los derivados (o no tiene peso).")
+            valores[nombre] = valor
 
         peso_bruto_kg = origen.peso_kg(cantidad, lote)
         peso_limpio_kg = convertir(peso_limpio, unidad_peso, "kg")
@@ -1904,6 +1933,12 @@ class Inventario:
         # --- A partir de aquí todo está validado: se aplica la limpieza ---
         unidad_nueva = origen.unidad if origen.unidad in UNIDADES_PESO else "kg"
         coste = round(cantidad * lote.precio_unitario, 2)
+        valor_derivados = {n: round(derivados_kg[n] * v, 2) for n, v in valores.items()}
+        if valor_derivados and sum(valor_derivados.values()) >= coste - 1e-9:
+            raise ValueError(
+                f"Los derivados valdrían {round(sum(valor_derivados.values()), 2)} € y todo lo limpiado costó "
+                f"{coste} €: el producto limpio se quedaría sin coste. Revisa los valores."
+            )
         etiqueta_origen = lote.etiqueta()
 
         if principal is None:
@@ -1925,19 +1960,24 @@ class Inventario:
 
         self.salida_stock(nombre_origen, cantidad, "limpieza", lote_id)
 
-        # El lote limpio carga con todo el coste de lo que se limpió.
+        # El lote limpio carga con todo el coste de lo que se limpió (menos lo
+        # que se haya dado a los derivados, si se dio algo).
         cantidad_limpio = round(convertir(peso_limpio_kg, "kg", principal.unidad), 6)
+        coste_limpio = coste - sum(valor_derivados.values())
         self.entrada_stock(
-            producto_limpio, cantidad_limpio, precio_unitario=coste / cantidad_limpio,
+            producto_limpio, cantidad_limpio, precio_unitario=coste_limpio / cantidad_limpio,
             proveedor="Elaboración propia", fecha_caducidad=caducidades.get(producto_limpio), motivo="limpieza",
             iva=lote.iva,  # su coste es el del bruto: lleva el mismo IVA (y se separa igual)
         )
-        # Los derivados entran a coste 0.
+        # Los derivados entran a coste 0, salvo que se les haya dado un valor.
         for nombre, kg in derivados_kg.items():
             derivado = self.productos[nombre]
+            cantidad_derivado = round(convertir(kg, "kg", derivado.unidad), 6)
+            valor = valor_derivados.get(nombre, 0.0)
             self.entrada_stock(
-                nombre, round(convertir(kg, "kg", derivado.unidad), 6), precio_unitario=0,
+                nombre, cantidad_derivado, precio_unitario=valor / cantidad_derivado if valor else 0,
                 proveedor="Elaboración propia", fecha_caducidad=caducidades.get(nombre), motivo="limpieza",
+                **({"iva": lote.iva} if valor else {}),
             )
 
         limpieza = Limpieza(
@@ -1950,6 +1990,7 @@ class Inventario:
             derivados_kg={n: round(kg, 6) for n, kg in derivados_kg.items()},
             coste=coste,
             lote_origen=etiqueta_origen,
+            valor_derivados=valor_derivados,
         )
         self.limpiezas.append(limpieza)
         print(f"🔪 Limpieza registrada: {limpieza}")

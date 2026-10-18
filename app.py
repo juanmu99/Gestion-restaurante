@@ -45,7 +45,8 @@ from inventario import (
 )
 from inventario import Inventario, PrecioCompra, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
-from recetario import Recetario, Receta, Menu, _coste_de_filas, coste_ingredientes, ingredientes_sin_precio
+from recetario import (Recetario, Receta, Menu, _coste_de_filas, coste_ingredientes, ingredientes_sin_precio,
+                       subproductos_a_cero)
 from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import (
@@ -1669,6 +1670,21 @@ def _pestana_limpiar(inv: Inventario) -> None:
         nombre = str(nombre).strip()
         derivados[nombre] = derivados.get(nombre, 0.0) + float(peso)
 
+    # Valor de los derivados: OPCIONAL. Por defecto (vacío) todo el coste va al
+    # producto limpio y los derivados entran a 0 €, como siempre.
+    valores_kg: dict[str, float] = {}
+    if derivados:
+        with st.expander("💶 Dar valor a algún derivado (opcional)"):
+            st.caption("Por defecto, **todo el coste va al producto limpio** y los derivados cuestan 0 €. Si un derivado "
+                       "vale algo (por ejemplo, la cabeza y las espinas para un fumet), escribe cuánto vale por kg "
+                       "(con IVA, como los precios de compra): ese valor se resta del producto limpio y el total "
+                       "sigue siendo lo que costó lo limpiado. Déjalo vacío para no cambiar nada.")
+            for nombre in derivados:
+                valor = st.number_input(f"{nombre} (€/kg)", min_value=0.0, value=None, step=0.1, placeholder="0",
+                                        key=k(f"valor_{nombre}"))
+                if valor:
+                    valores_kg[nombre] = valor
+
     if cantidad > 0 and peso_limpio > 0:
         limpio_kg = convertir(peso_limpio, unidad_peso, "kg")
         derivados_kg = convertir(sum(derivados.values()), unidad_peso, "kg")
@@ -1680,6 +1696,16 @@ def _pestana_limpiar(inv: Inventario) -> None:
         m4.metric("Rendimiento", f"{_pct(limpio_kg / peso_bruto_kg)}")
         if merma_kg < -1e-6:
             st.error("El limpio más los derivados pesan más que el bruto. Revisa los pesos.")
+        coste_bruto = cantidad * lote.precio_unitario
+        valor_total = sum(convertir(derivados[n], unidad_peso, "kg") * v for n, v in valores_kg.items())
+        partes = [f"{n}: {_eur(convertir(derivados[n], unidad_peso, 'kg') * v)} €" for n, v in valores_kg.items()]
+        st.caption(
+            f"💶 Coste de lo que se limpia: {_eur(coste_bruto)} € (lo pagado, con IVA). "
+            + (f"Derivados: {', '.join(partes)}. " if partes else "Los derivados, a 0 €. ")
+            + f"El producto limpio queda a **{_precio((coste_bruto - valor_total) / limpio_kg)} €/kg**."
+        )
+        if valores_kg and valor_total >= coste_bruto:
+            st.error("Los derivados valen tanto o más que todo lo limpiado: el producto limpio se quedaría sin coste.")
 
     if st.button("Registrar limpieza", type="primary", key=k("boton")):
         try:
@@ -1687,7 +1713,7 @@ def _pestana_limpiar(inv: Inventario) -> None:
                 origen_nombre, cantidad, producto_limpio, peso_limpio, derivados,
                 unidad_peso=unidad_peso,
                 caducidades={producto_limpio.strip(): fecha_caducidad} if fecha_caducidad else None,
-                lote_id=lote.id,
+                lote_id=lote.id, valores_kg=valores_kg,
             )
             avisar(
                 "success",
@@ -1733,6 +1759,9 @@ def _pestana_limpiezas(inv: Inventario) -> None:
         "Merma (kg)": _num(l.merma_kg),
         "Rendimiento": f"{_pct(l.rendimiento)}",
         "Coste (€)": _eur(l.coste),
+        "Del producto limpio (€)": _eur(l.coste_limpio),
+        "Valor de los derivados (€)": (", ".join(f"{n} {_eur(v)}" for n, v in l.valor_derivados.items())
+                                       if l.valor_derivados else "0 (todo en el limpio)"),
     } for l in reversed(inv.limpiezas)], width="stretch", hide_index=True)
 
 
@@ -3454,6 +3483,10 @@ def _aviso_sin_precio(ingredientes, inv: Inventario) -> None:
     if faltan:
         st.warning("Sin precio todavía (cuentan como 0 €, así que el coste real será mayor): " + ", ".join(faltan)
                    + ". El coste se completa en cuanto se compren.")
+    a_cero = subproductos_a_cero(ingredientes, inv)
+    if a_cero:
+        st.caption(f"{', '.join(a_cero)}: 0 €, porque es un subproducto de limpieza y su coste va en el producto "
+                   "limpio. Si quieres que cuente, dale un valor al registrar la limpieza.")
 
 
 def _coste_plato(ingredientes: dict[str, float], inv: Inventario) -> float:

@@ -63,7 +63,8 @@ NOMBRE_CARPETA_WINDOWS = "GestionRestaurante"
 #   perderían al guardar las cosas que el programa antiguo no conoce).
 # 1 = datos sin este número (todo lo anterior a los sobrantes).
 # 2 = sobrantes desechados de los servicios.
-VERSION_DATOS = 2
+# 3 = valor opcional de los derivados de una limpieza (Limpieza.valor_derivados).
+VERSION_DATOS = 3
 COPIAS_A_CONSERVAR = 30  # copias diarias (una por día con cambios)
 
 

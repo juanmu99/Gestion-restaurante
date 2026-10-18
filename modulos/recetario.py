@@ -63,8 +63,17 @@ def ingredientes_sin_precio(ingredientes, inventario: Inventario) -> list[str]:
     Los ingredientes que cuentan como 0 € en el coste: no existen en el
     inventario o todavía no tienen precio (nunca se han comprado). Sirve para
     avisar de que el coste de un plato saldría más barato de lo que es.
+    Los subproductos de una limpieza (huesos, espinas...) NO cuentan: valen
+    0 € a propósito, porque su coste va en el producto limpio.
     """
-    return [n for n in ingredientes if inventario.buscar_producto(n) is None or inventario.precio_de(n) <= 0]
+    return [n for n in ingredientes if inventario.buscar_producto(n) is None
+            or (inventario.precio_de(n) <= 0 and not inventario.buscar_producto(n).es_subproducto)]
+
+
+def subproductos_a_cero(ingredientes, inventario: Inventario) -> list[str]:
+    """Los subproductos de limpieza que cuestan 0 € (su coste va en el producto limpio)."""
+    return [n for n in ingredientes if inventario.buscar_producto(n) is not None
+            and inventario.buscar_producto(n).es_subproducto and inventario.precio_de(n) <= 0]
 
 
 class Receta(ConNotas):

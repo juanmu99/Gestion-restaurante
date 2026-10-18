@@ -1924,6 +1924,47 @@ r = Receta("Merluza en salsa", "Principal", plato)
 comprobar(r.costo_por_comensal(inv) == 2.2 and r.costo_por_comensal(inv, sin_iva=True) == 2,
           "El coste de la receta usa el mismo cálculo")
 
+print("\n--- Valor opcional de los derivados de una limpieza ---")
+from recetario import subproductos_a_cero  # noqa: E402
+from inventario import Limpieza  # noqa: E402
+inv = Inventario()
+silencio(inv.agregar_producto, Producto("Rape entero", "Pescados", 0, "kg", 0, "Lonja", tiene_merma=True, iva=10))
+silencio(inv.entrada_stock, "Rape entero", 6, precio_unitario=20)  # 120 €
+silencio(inv.entrada_stock, "Rape entero", 6, precio_unitario=20)
+l1 = silencio(inv.limpiar_producto, "Rape entero", 6, "Rape limpio", 3, {"Cabeza de rape": 2}, lote_id=1)
+rape, cabeza = inv.buscar_producto("Rape limpio"), inv.buscar_producto("Cabeza de rape")
+comprobar(abs(rape.lotes[-1].precio_unitario - 40) < 1e-9 and cabeza.lotes[-1].precio_unitario == 0
+          and l1.valor_derivados == {} and l1.coste_limpio == 120,
+          "Por defecto, TODO el coste va al producto limpio (120 € / 3 kg = 40 €/kg) y el derivado a 0 €")
+comprobar("valor_derivados" not in l1.to_dict(), "Sin valor, la limpieza se guarda exactamente igual que antes")
+comprobar(ingredientes_sin_precio({"Cabeza de rape": 0.1}, inv) == [] and subproductos_a_cero({"Cabeza de rape": 0.1}, inv)
+          == ["Cabeza de rape"], "Un subproducto a 0 € no se avisa como 'sin precio' (vale 0 € a propósito)")
+for valores, motivo in (({"Cabeza de rape": 100}, "los derivados valen más que lo limpiado"),
+                        ({"Cabeza de rape": -1}, "un valor negativo"),
+                        ({"Espinas": 2}, "valor a algo que no es un derivado")):
+    n_hist = len(inv.historial)
+    try:
+        silencio(inv.limpiar_producto, "Rape entero", 6, "Rape limpio", 3, {"Cabeza de rape": 2}, lote_id=2,
+                 valores_kg=valores)
+        comprobar(False, f"Se rechaza {motivo}")
+    except ValueError:
+        comprobar(len(inv.historial) == n_hist and inv.buscar_producto("Rape entero").stock == 6,
+                  f"Se rechaza {motivo}, sin tocar nada")
+l2 = silencio(inv.limpiar_producto, "Rape entero", 6, "Rape limpio", 3, {"Cabeza de rape": 2}, lote_id=2,
+              valores_kg={"Cabeza de rape": 5})
+comprobar(l2.valor_derivados == {"Cabeza de rape": 10} and l2.coste_limpio == 110
+          and abs(rape.lotes[-1].precio_unitario - 110 / 3) < 1e-9 and abs(cabeza.lotes[-1].precio_unitario - 5) < 1e-9,
+          "Con valor: la cabeza (2 kg × 5 €) vale 10 € y se resta del rape limpio (110 € / 3 kg = 36,67 €/kg)")
+comprobar(abs(rape.lotes[-1].valor() + cabeza.lotes[-1].valor() - 120) < 0.01,
+          "El total sigue siendo lo que costó lo limpiado (110 + 10 = 120 €): nada se cuenta dos veces")
+comprobar(cabeza.lotes[-1].iva == 10 and abs(rape.lotes[-1].precio_base - 110 / 3 / 1.1) < 1e-9,
+          "El derivado con valor lleva el IVA del producto en bruto, como el limpio")
+copia = Limpieza.from_dict(json.loads(json.dumps(l2.to_dict())))
+comprobar(copia.valor_derivados == {"Cabeza de rape": 10} and copia.coste_limpio == 110,
+          "El valor de los derivados se guarda y se carga")
+comprobar(ingredientes_sin_precio({"Cabeza de rape": 0.1}, inv) == [] and not subproductos_a_cero({"Cabeza de rape": 0.1}, inv),
+          "Un subproducto con valor ya cuesta algo en las recetas")
+
 print("\n--- Compatibilidad con los datos que ya hay guardados ---")
 FOTO_V1 = RAIZ / "pruebas" / "datos_guardados" / "sesion_v1.json"
 
@@ -1948,6 +1989,20 @@ def contiene(viejo, nuevo, ruta="datos") -> list[str]:
         return [] if isinstance(nuevo, (int, float)) and abs(viejo - nuevo) < 1e-9 else [ruta]
     return [] if viejo == nuevo else [ruta]
 
+
+for foto in sorted((RAIZ / "pruebas" / "datos_guardados").glob("sesion_v*.json")):
+    with tempfile.TemporaryDirectory() as carpeta:
+        ruta = Path(carpeta) / "sesion.json"
+        ruta.write_bytes(foto.read_bytes())
+        sesion, aviso = silencio(_css, str(ruta))
+        args = (sesion.inventario, sesion.registro_servicios, sesion.recetario, sesion.gestor_compras,
+                sesion.archivo_informes, sesion.registro_gastos, sesion.registro_material)
+        guardado = json.loads(foto.read_text(encoding="utf-8"))
+        guardado.pop("version_datos", None)  # el número de versión sí cambia (es lo que marca la actualización)
+        diferencias = contiene(guardado, _sad2(*args))
+        comprobar(aviso is None and not diferencias,
+                  f"{foto.name}: se abre sin avisos y no se pierde ni cambia nada"
+                  + (f" (falla: {', '.join(diferencias[:5])})" if diferencias else ""))
 
 with tempfile.TemporaryDirectory() as carpeta:
     ruta = Path(carpeta) / "sesion.json"

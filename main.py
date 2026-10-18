@@ -899,21 +899,35 @@ def accion_limpiar_producto() -> None:
             break
         derivados[derivado] = pedir_numero(f"  Peso de '{derivado}' ({unidad_peso}): ")
 
+    valores_kg: dict[str, float] = {}
+    if derivados and pedir_si_no("¿Dar valor a algún derivado? (por defecto todo el coste va al producto limpio "
+                                 "y los derivados a 0 €)"):
+        for derivado in derivados:
+            valor = pedir_numero_opcional(f"  Valor de '{derivado}' en €/kg, con IVA (vacío = 0): ")
+            if valor:
+                valores_kg[derivado] = valor
+
     peso_limpio_kg = convertir(peso_limpio, unidad_peso, "kg")
     derivados_kg = convertir(sum(derivados.values()), unidad_peso, "kg")
     merma_kg = peso_bruto - peso_limpio_kg - derivados_kg
     print("\n--- Resumen ---")
     print(f"Bruto: {round(peso_bruto, 3)} kg de {nombre}")
     print(f"Limpio: {round(peso_limpio_kg, 3)} kg de {producto_limpio} (rendimiento {peso_limpio_kg / peso_bruto:.1%})")
+    coste_bruto = cantidad * lote.precio_unitario
+    valor_total = 0.0
     for derivado, peso in derivados.items():
-        print(f"Derivado: {peso} {unidad_peso} de {derivado} (coste 0 €)")
+        valor = convertir(peso, unidad_peso, "kg") * valores_kg.get(derivado, 0)
+        valor_total += valor
+        print(f"Derivado: {peso} {unidad_peso} de {derivado} (coste {valor:.2f} €)")
+    if peso_limpio_kg > 0:
+        print(f"Coste: {coste_bruto:.2f} € -> el producto limpio queda a {(coste_bruto - valor_total) / peso_limpio_kg:.2f} €/kg")
     print(f"Merma: {round(merma_kg, 3)} kg")
 
     if pedir_si_no("¿Confirmar la limpieza?"):
         try:
             inventario.limpiar_producto(
                 nombre, cantidad, producto_limpio, peso_limpio, derivados,
-                unidad_peso=unidad_peso, caducidades=caducidades, lote_id=lote.id,
+                unidad_peso=unidad_peso, caducidades=caducidades, lote_id=lote.id, valores_kg=valores_kg,
             )
             print("✅ Limpieza registrada.")
         except ValueError as e:

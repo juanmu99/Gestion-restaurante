@@ -1681,6 +1681,40 @@ def prueba_costes_platos(at: AppTest) -> None:
               "En la lista de recetas, cada plato dice su coste por comensal y si es con o sin IVA")
 
 
+@prueba("Valor opcional de los derivados de una limpieza")
+def prueba_valor_derivados(at: AppTest) -> None:
+    import pandas as pd
+    from inventario import Producto
+
+    inv = at.session_state["inventario"]
+    inv.agregar_producto(Producto("Rape entero", "Pescados", 0, "kg", 0, "Lonja", tiene_merma=True, iva=0))
+    inv.entrada_stock("Rape entero", 6, precio_unitario=20)  # 120 €
+    ir_a(at, "Inventario")
+    at.selectbox(key="limpiar_origen").select("Rape entero").run()
+    v = at.session_state["limpiar_version"]
+    k = lambda campo: f"limpiar_{campo}_Rape entero_{v}_1"
+    at.number_input(key=k("cantidad")).set_value(6.0)
+    at.radio(key=k("unidad")).set_value("kg")
+    at.text_input(key=k("limpio")).input("Rape limpio")
+    at.number_input(key=k("peso_limpio")).set_value(3.0)
+    at.session_state[k("derivados_base")] = pd.DataFrame({"Derivado": pd.Series(["Cabeza de rape"], dtype="string"),
+                                                          "Peso": pd.Series([2.0], dtype="float")})
+    at.session_state[k("derivados_version")] = 0
+    at.run()
+    comprobar(sin_excepciones(at, "limpieza con derivado")
+              and any("El producto limpio queda a **40 €/kg**" in t for t in textos(at.caption)),
+              "Por defecto, el producto limpio carga con todo el coste (120 € / 3 kg = 40 €/kg)")
+    at.number_input(key=k("valor_Cabeza de rape")).set_value(5.0).run()
+    comprobar(any("Cabeza de rape: 10,00 €" in t and "**36,67 €/kg**" in t for t in textos(at.caption)),
+              "Si se da valor a un derivado (2 kg × 5 € = 10 €), se resta del limpio: 110 € / 3 kg = 36,67 €/kg")
+    at.button(key=k("boton")).click().run()
+    limpieza = inv.limpiezas[-1]
+    comprobar(sin_excepciones(at, "registrar limpieza con valor") and limpieza.producto_origen == "Rape entero"
+              and limpieza.valor_derivados == {"Cabeza de rape": 10.0}
+              and abs(inv.buscar_producto("Cabeza de rape").precio_unitario - 5) < 1e-9,
+              "Se registra con ese valor: la cabeza entra a 5 €/kg")
+
+
 @prueba("Preparar una base desde el Recetario y guía de primer uso (mejora 5)")
 def prueba_mejora5(at: AppTest) -> None:
     import os
@@ -1752,6 +1786,7 @@ def main() -> int:
     prueba_mejora5(at)
     prueba_sobrantes(at)
     prueba_costes_platos(at)
+    prueba_valor_derivados(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")
