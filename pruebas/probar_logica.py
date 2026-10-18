@@ -1908,6 +1908,22 @@ with tempfile.TemporaryDirectory() as carpeta:
     comprobar(any(str(c).startswith("Sobrante desechado") for c in cab),
               "Excel: la hoja Rentabilidad tiene la columna del sobrante")
 
+print("\n--- Coste de cada plato al diseñar recetas y menús ---")
+from recetario import coste_ingredientes, ingredientes_sin_precio  # noqa: E402
+inv = Inventario()
+inv.iva_recuperable = True
+silencio(inv.agregar_producto, Producto("Merluza", "Pescados", 0, "kg", 0, "Lonja", iva=10))
+silencio(inv.entrada_stock, "Merluza", 2, precio_unitario=11)  # 11 € con IVA = 10 € sin IVA
+silencio(inv.agregar_producto, Producto("Azafrán", "Especias", 0, "g", 0, "Especias SL"))
+plato = {"Merluza": 0.2, "Azafrán": 0.1}
+comprobar(abs(coste_ingredientes(plato, inv) - 2.2) < 1e-9 and abs(coste_ingredientes(plato, inv, sin_iva=True) - 2) < 1e-9,
+          "Coste de un plato por comensal: 0,2 kg de merluza = 2,20 € con IVA (2 € sin IVA)")
+comprobar(ingredientes_sin_precio(plato, inv) == ["Azafrán"] and ingredientes_sin_precio({"No existe": 1}, inv) == ["No existe"],
+          "Se detectan los ingredientes sin precio todavía (cuentan como 0 €) o que no existen")
+r = Receta("Merluza en salsa", "Principal", plato)
+comprobar(r.costo_por_comensal(inv) == 2.2 and r.costo_por_comensal(inv, sin_iva=True) == 2,
+          "El coste de la receta usa el mismo cálculo")
+
 print("\n--- Compatibilidad con los datos que ya hay guardados ---")
 FOTO_V1 = RAIZ / "pruebas" / "datos_guardados" / "sesion_v1.json"
 

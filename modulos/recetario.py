@@ -49,6 +49,24 @@ def _comprobar_fechas(fecha_preparacion: Optional[date], fecha_caducidad: Option
                          f"preparación ({preparacion.strftime('%d/%m/%Y')}).")
 
 
+def coste_ingredientes(ingredientes: dict[str, float], inventario: Inventario, sin_iva: bool = False) -> float:
+    """
+    Coste de unos ingredientes ({nombre: cantidad}) a los precios ACTUALES del
+    inventario (sin redondear). Lo usan las recetas y las pantallas que
+    enseñan el coste mientras se diseña una receta o un menú.
+    """
+    return sum(cantidad * inventario.precio_de(nombre, sin_iva) for nombre, cantidad in ingredientes.items())
+
+
+def ingredientes_sin_precio(ingredientes, inventario: Inventario) -> list[str]:
+    """
+    Los ingredientes que cuentan como 0 € en el coste: no existen en el
+    inventario o todavía no tienen precio (nunca se han comprado). Sirve para
+    avisar de que el coste de un plato saldría más barato de lo que es.
+    """
+    return [n for n in ingredientes if inventario.buscar_producto(n) is None or inventario.precio_de(n) <= 0]
+
+
 class Receta(ConNotas):
     """
     Representa UN plato. Los ingredientes se guardan "por comensal" para
@@ -96,9 +114,7 @@ class Receta(ConNotas):
         no existe en el inventario, se ignora en el cálculo.
         Con IVA (lo pagado), o sin él si `sin_iva` (rentabilidad cuando se recupera el IVA).
         """
-        total = 0.0
-        for nombre_ingrediente, cantidad in self.ingredientes_por_comensal.items():
-            total += cantidad * inventario.precio_de(nombre_ingrediente, sin_iva)
+        total = coste_ingredientes(self.ingredientes_por_comensal, inventario, sin_iva)
         # Redondeado a céntimos para mostrarlo; para multiplicar por los
         # comensales se pide sin redondear (si no, el error se multiplica).
         return round(total, 2) if redondear else total

@@ -45,7 +45,7 @@ from inventario import (
 )
 from inventario import Inventario, PrecioCompra, Producto, MovimientoStock, FACTORES_CONVERSION, UNIDADES_PESO, convertir
 from servicios import RegistroServicios, Servicio
-from recetario import Recetario, Receta, Menu, _coste_de_filas
+from recetario import Recetario, Receta, Menu, _coste_de_filas, coste_ingredientes, ingredientes_sin_precio
 from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import (
@@ -3446,6 +3446,53 @@ def _editor_material(clave: str, actuales: dict[str, float]) -> dict[str, float]
     return resultado
 
 
+# ---------- Costes al diseñar recetas y menús ----------
+
+def _aviso_sin_precio(ingredientes, inv: Inventario) -> None:
+    """Avisa de los ingredientes que cuentan como 0 € (sin precio todavía): el coste real será mayor."""
+    faltan = ingredientes_sin_precio(ingredientes, inv)
+    if faltan:
+        st.warning("Sin precio todavía (cuentan como 0 €, así que el coste real será mayor): " + ", ".join(faltan)
+                   + ". El coste se completa en cuanto se compren.")
+
+
+def _coste_plato(ingredientes: dict[str, float], inv: Inventario) -> float:
+    """Coste por comensal de unos ingredientes, con el criterio de IVA de la rentabilidad (Ajustes)."""
+    return coste_ingredientes(ingredientes, inv, inv.iva_recuperable)
+
+
+def _resumen_costes_menu(recetas: list, consumibles: dict[str, float], inv: Inventario, clave: str) -> None:
+    """
+    Lo que cuesta cada plato de un menú por comensal, el total del menú y,
+    si se indica, para un número de comensales. Con los precios actuales y el
+    mismo criterio de IVA que la rentabilidad.
+    """
+    if not recetas and not consumibles:
+        return
+    criterio = _criterio_rentabilidad()
+    platos = [(r, _coste_plato(r.ingredientes_por_comensal, inv)) for r in recetas]
+    comida = sum(c for _, c in platos)
+    cons = _coste_plato(consumibles, inv)
+    total = comida + cons
+    filas = [{"Plato": r.nombre, "Categoría": r.categoria or "—", f"Por comensal (€, {criterio})": _eur(c),
+              "Parte del menú": _pct(c / total, 0) if total else "—"} for r, c in platos]
+    if consumibles:
+        filas.append({"Plato": "🧻 Consumibles", "Categoría": "—", f"Por comensal (€, {criterio})": _eur(cons),
+                      "Parte del menú": _pct(cons / total, 0) if total else "—"})
+    st.dataframe(filas, width="stretch", hide_index=True)
+    st.markdown(f"**Total por comensal: {_eur(total)} €** ({criterio}) · comida {_eur(comida)} € + consumibles "
+                f"{_eur(cons)} €")
+    comensales = st.number_input("Calcular para un número de comensales (opcional)", min_value=1, step=1, value=None,
+                                 placeholder="nº de comensales", key=f"{clave}_comensales")
+    if comensales:
+        st.markdown(f"Para **{int(comensales)} comensales**: **{_eur(total * comensales)} €** (comida "
+                    f"{_eur(comida * comensales)} € + consumibles {_eur(cons * comensales)} €)")
+    todos = [n for r in recetas for n in r.ingredientes_por_comensal] + list(consumibles)
+    _aviso_sin_precio(dict.fromkeys(todos), inv)
+    st.caption("Con los precios actuales del inventario. El coste real de cada servicio se calcula al completarlo, "
+               "con el precio de cada lote.")
+
+
 def _editar_receta(inv: Inventario, rec: Recetario) -> None:
     """Cambiar las cantidades, quitar o añadir ingredientes, cambiar la categoría o borrar una receta."""
     st.markdown("**✏️ Editar o borrar una receta**")
@@ -3477,6 +3524,11 @@ def _editar_receta(inv: Inventario, rec: Recetario) -> None:
     quitados = [n for n, c in nuevos.items() if c <= 0 and n in receta.ingredientes_por_comensal]
     if quitados:
         st.caption("Se quitarán: " + ", ".join(quitados))
+    con_cambios = {n: c for n, c in nuevos.items() if c > 0}
+    antes, ahora = _coste_plato(receta.ingredientes_por_comensal, inv), _coste_plato(con_cambios, inv)
+    st.markdown(f"💶 **Coste por comensal: {_eur(ahora)} €** ({_criterio_rentabilidad()})"
+                + (f" · antes {_eur(antes)} €" if abs(ahora - antes) >= 0.005 else ""))
+    _aviso_sin_precio(con_cambios, inv)
     menus = rec.menus_con_receta(nombre)
     if menus:
         st.caption(f"Los cambios se verán en los menús que la llevan ({', '.join(menus)}). Los servicios ya hechos "
@@ -3510,7 +3562,8 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
         c1, c2 = st.columns([3, 1])
         c1.markdown(f"**{menu.nombre}**")
         c1.caption("Recetas: " + (", ".join(r.nombre for r in menu.recetas) or "—"))
-        c2.metric("Comida por comensal", f"{_eur(menu.costo_por_comensal(inv))} €")
+        c2.metric(f"Comida por comensal ({_criterio_rentabilidad()})",
+                  f"{_eur(menu.costo_por_comensal(inv, inv.iva_recuperable))} €")
         st.write("Ingredientes por comensal: " + _texto_cantidades(menu.ingredientes_por_comensal(), inv))
         aviso_sob = _texto_aviso_sobrantes(menu.nombre)
         if aviso_sob:
@@ -3518,8 +3571,12 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
         _editor_nota(menu, f"menu_{menu.nombre}", menu.nombre)
 
         with st.expander("🔎 Ver detalle del menú"):
+            criterio = _criterio_rentabilidad()
+            st.markdown("**💶 Coste plato a plato**")
+            _resumen_costes_menu(menu.recetas, menu.consumibles_por_comensal, inv, f"menu_{menu.nombre}_detalle_coste")
             for receta in menu.recetas:
-                st.markdown(f"**{receta.nombre}** · {receta.categoria} · {receta.costo_por_comensal(inv)} €/comensal")
+                st.markdown(f"**{receta.nombre}** · {receta.categoria} · "
+                            f"{_eur(_coste_plato(receta.ingredientes_por_comensal, inv))} €/comensal ({criterio})")
                 if receta.notas:
                     st.caption(f"📝 {_saltos(receta.notas)}")
                 filas = []
@@ -3528,7 +3585,8 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                     filas.append({
                         "Ingrediente": nombre,
                         "Por comensal": f"{_num(cantidad)} {producto.unidad if producto else ''}",
-                        "Coste (€)": _num(cantidad * producto.precio_unitario) if producto else "—",
+                        f"Coste por comensal (€, {criterio})": _precio(_coste_plato({nombre: cantidad}, inv))
+                        if producto else "—",
                     })
                 st.dataframe(filas, width="stretch", hide_index=True)
 
@@ -3537,15 +3595,11 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                 st.dataframe([{
                     "Consumible": nombre,
                     "Por comensal": f"{_num(cantidad)} {inv.buscar_producto(nombre).unidad if inv.buscar_producto(nombre) else ''}",
-                    "Coste (€)": _num(cantidad * inv.buscar_producto(nombre).precio_unitario) if inv.buscar_producto(nombre) else "—",
+                    f"Coste por comensal (€, {criterio})": _precio(_coste_plato({nombre: cantidad}, inv))
+                    if inv.buscar_producto(nombre) else "—",
                 } for nombre, cantidad in menu.consumibles_por_comensal.items()], width="stretch", hide_index=True)
             else:
                 st.caption("Este menú no tiene consumibles.")
-            total = round(menu.costo_por_comensal(inv) + menu.costo_consumibles_por_comensal(inv), 2)
-            st.caption(
-                f"Coste por comensal: comida {_eur(menu.costo_por_comensal(inv))} € + consumibles "
-                f"{_eur(menu.costo_consumibles_por_comensal(inv))} € = **{_eur(total)} €**"
-            )
 
             st.markdown("**🍽️ Material**")
             if menu.materiales_por_comensal:
@@ -3577,6 +3631,10 @@ def _tarjeta_menu(menu: Menu, inv: Inventario, rec: Recetario) -> None:
                 "Recetas del menú", list(rec.recetas), default=[r for r in actuales if r in rec.recetas],
                 key=f"menu_{menu.nombre}_recetas_{_huella(actuales)}", placeholder="Elige las recetas...",
             )
+            if recetas != actuales:
+                st.markdown("**💶 Así quedaría el coste del menú**")
+                _resumen_costes_menu([rec.recetas[n] for n in recetas], menu.consumibles_por_comensal, inv,
+                                     f"menu_{menu.nombre}_coste_cambios")
             if st.button("Guardar recetas", key=f"menu_{menu.nombre}_guardar_recetas", disabled=recetas == actuales):
                 try:
                     rec.editar_recetas_menu(menu.nombre, recetas)
@@ -3621,7 +3679,8 @@ def pagina_recetario() -> None:
             st.info("No hay recetas todavía.")
         for r in rec.recetas.values():
             vida = f" · ⏳ dura {_texto_vida(r.vida_util_dias)} una vez hecha" if r.vida_util_dias is not None else ""
-            st.write(f"{_es(str(r))}  💶 {_eur(r.costo_por_comensal(inv))} €/comensal{vida}")
+            st.write(f"{_es(str(r))}  💶 {_eur(_coste_plato(r.ingredientes_por_comensal, inv))} €/comensal "
+                     f"({_criterio_rentabilidad()}){vida}")
             _editor_nota(r, f"receta_{r.nombre}", r.nombre)
         if rec.recetas:
             st.markdown("**⏳ Vida útil de una receta**")
@@ -3693,10 +3752,15 @@ def pagina_recetario() -> None:
 
             if st.session_state.receta_ingredientes:
                 st.write("Ingredientes añadidos hasta ahora:")
+                criterio = _criterio_rentabilidad()
                 st.dataframe([{
                     "Ingrediente": n,
                     "Por comensal": f"{_num(c)} {inv.buscar_producto(n).unidad if inv.buscar_producto(n) else ''}",
+                    f"Coste por comensal (€, {criterio})": _precio(_coste_plato({n: c}, inv)),
                 } for n, c in st.session_state.receta_ingredientes.items()], width="stretch", hide_index=True)
+                st.markdown(f"💶 **Coste del plato por comensal: {_eur(_coste_plato(st.session_state.receta_ingredientes, inv))} €** "
+                            f"({criterio}, con los precios actuales)")
+                _aviso_sin_precio(st.session_state.receta_ingredientes, inv)
                 if st.button("Empezar de nuevo (quitar los ingredientes añadidos)", key="receta_vaciar"):
                     st.session_state.receta_ingredientes = {}
                     st.rerun()
@@ -3743,6 +3807,9 @@ def pagina_recetario() -> None:
             recetas_elegidas = st.multiselect("Recetas a incluir", list(rec.recetas.keys()), key="recetas_multiselect",
                                               placeholder="Elige las recetas...")
             consumibles = _editor_consumibles(inv, "nuevo_menu", {})
+            if recetas_elegidas or consumibles:
+                st.markdown("**💶 Coste del menú, plato a plato**")
+                _resumen_costes_menu([rec.recetas[n] for n in recetas_elegidas], consumibles, inv, "nuevo_menu_coste")
             materiales = _editor_material("nuevo_menu", {})
             notas_menu = st.text_area("Anotaciones (opcional)", key="nuevo_menu_notas",
                                       placeholder="Lo que quieras explicar a tus compañeros sobre este menú")

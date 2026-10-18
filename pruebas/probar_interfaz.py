@@ -1648,6 +1648,40 @@ def prueba_sobrantes(at: AppTest) -> None:
               "Y también en la tarjeta del menú, en el Recetario")
 
 
+@prueba("Coste de cada plato al diseñar recetas y menús")
+def prueba_costes_platos(at: AppTest) -> None:
+    from inventario import Producto
+
+    inv = at.session_state["inventario"]
+    if "Azafrán" not in inv.productos:
+        inv.agregar_producto(Producto("Azafrán", "Especias", 0, "g", 0, "Especias SL"))
+    ir_a(at, "Recetario")
+    at.multiselect(key="recetas_multiselect").select("Merluza a la plancha").run()
+    comprobar(sin_excepciones(at, "coste al crear menú")
+              and any("Total por comensal: 2,00 €" in t for t in textos(at.markdown)),
+              "Al crear un menú, según eliges recetas sale el coste de cada plato y el total por comensal (2,00 €)")
+    at.number_input(key="nuevo_menu_coste_comensales").set_value(10).run()
+    comprobar(any("Para **10 comensales**: **20,00 €**" in t for t in textos(at.markdown)),
+              "Y, si lo indicas, para un número de comensales (10 → 20,00 €)")
+    at.multiselect(key="recetas_multiselect").unselect("Merluza a la plancha").run()
+
+    at.selectbox(key="ing_select").select("Merluza").run()
+    at.number_input(key="cantidad_ing_Merluza").set_value(0.3).run()
+    boton(at.button, "➕ Añadir ingrediente a la receta").click().run()
+    comprobar(sin_excepciones(at, "coste al crear receta")
+              and any("Coste del plato por comensal: 3,00 €" in t for t in textos(at.markdown)),
+              "Al crear una receta, el coste del plato por comensal se ve según añades ingredientes (3,00 €)")
+    at.selectbox(key="ing_select").select("Azafrán").run()
+    at.number_input(key="cantidad_ing_Azafrán").set_value(0.1).run()
+    boton(at.button, "➕ Añadir ingrediente a la receta").click().run()
+    comprobar(any("Sin precio todavía" in t and "Azafrán" in t for t in textos(at.warning)),
+              "Si un ingrediente aún no tiene precio, se avisa (el coste real será mayor)")
+    at.button(key="receta_vaciar").click().run()
+    comprobar(not at.session_state["receta_ingredientes"], "Se puede empezar la receta de nuevo")
+    comprobar(any("€/comensal (sin IVA)" in t or "€/comensal (con IVA)" in t for t in textos(at.markdown)),
+              "En la lista de recetas, cada plato dice su coste por comensal y si es con o sin IVA")
+
+
 @prueba("Preparar una base desde el Recetario y guía de primer uso (mejora 5)")
 def prueba_mejora5(at: AppTest) -> None:
     import os
@@ -1718,6 +1752,7 @@ def main() -> int:
     prueba_mejora3(at)
     prueba_mejora5(at)
     prueba_sobrantes(at)
+    prueba_costes_platos(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")
