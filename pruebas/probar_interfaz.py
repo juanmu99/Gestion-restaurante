@@ -1653,8 +1653,7 @@ def prueba_costes_platos(at: AppTest) -> None:
     from inventario import Producto
 
     inv = at.session_state["inventario"]
-    if "Azafrán" not in inv.productos:
-        inv.agregar_producto(Producto("Azafrán", "Especias", 0, "g", 0, "Especias SL"))
+    inv.agregar_producto(Producto("Trufa sin comprar", "Especias", 0, "g", 0, "Especias SL"))
     ir_a(at, "Recetario")
     at.multiselect(key="recetas_multiselect").select("Merluza a la plancha").run()
     comprobar(sin_excepciones(at, "coste al crear menú")
@@ -1671,10 +1670,10 @@ def prueba_costes_platos(at: AppTest) -> None:
     comprobar(sin_excepciones(at, "coste al crear receta")
               and any("Coste del plato por comensal: 3,00 €" in t for t in textos(at.markdown)),
               "Al crear una receta, el coste del plato por comensal se ve según añades ingredientes (3,00 €)")
-    at.selectbox(key="ing_select").select("Azafrán").run()
-    at.number_input(key="cantidad_ing_Azafrán").set_value(0.1).run()
+    at.selectbox(key="ing_select").select("Trufa sin comprar").run()
+    at.number_input(key="cantidad_ing_Trufa sin comprar").set_value(0.1).run()
     boton(at.button, "➕ Añadir ingrediente a la receta").click().run()
-    comprobar(any("Sin precio todavía" in t and "Azafrán" in t for t in textos(at.warning)),
+    comprobar(any("Sin precio todavía" in t and "Trufa sin comprar" in t for t in textos(at.warning)),
               "Si un ingrediente aún no tiene precio, se avisa (el coste real será mayor)")
     at.button(key="receta_vaciar").click().run()
     comprobar(not at.session_state["receta_ingredientes"], "Se puede empezar la receta de nuevo")
