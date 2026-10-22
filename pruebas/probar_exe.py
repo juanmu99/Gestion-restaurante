@@ -1,8 +1,10 @@
 """
 pruebas/probar_exe.py
 -----------------------
-Prueba el .exe YA CONSTRUIDO, tal y como lo usaría el cliente, en la
-máquina Windows de GitHub Actions (ver .github/workflows/build-windows.yml).
+Prueba el ejecutable YA CONSTRUIDO, tal y como lo usaría el cliente, en la
+máquina Windows o Mac de GitHub Actions (ver .github/workflows/build-windows.yml
+y build-mac.yml). En Mac, "el .exe" es el programa GestionRestaurante y la
+carpeta de datos es ~/Library/Application Support/GestionRestaurante.
 
 Las otras pruebas (probar_interfaz.py, capturas.py) usan el código fuente
 en Linux. Esta comprueba el archivo que de verdad se entrega: que
@@ -32,6 +34,7 @@ resultados/capturas_exe/.
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -63,15 +66,27 @@ def comprobar(condicion: bool, descripcion: str, detalle: str = "") -> bool:
 
 
 LOCALAPPDATA_PRUEBA = Path(tempfile.mkdtemp(prefix="localappdata_"))
+EN_MAC = sys.platform == "darwin"
+
+
+def carpeta_datos_en(base: Path) -> Path:
+    """Dónde deja el programa sus datos, si la carpeta de datos del sistema (o la casa, en Mac) es `base`."""
+    if EN_MAC:
+        return base / "Library" / "Application Support" / "GestionRestaurante"
+    return base / "GestionRestaurante"
 
 
 def arrancar_exe(exe: Path, log: Path, localappdata: Path = LOCALAPPDATA_PRUEBA) -> subprocess.Popen:
     # Se ejecuta desde SU carpeta, como cuando el cliente hace doble clic.
-    # LOCALAPPDATA apunta a una carpeta temporal: así la prueba no toca nada
-    # del ordenador y se sabe exactamente dónde deben aparecer los datos.
+    # LOCALAPPDATA (Windows) o la carpeta de casa (Mac) apuntan a una carpeta
+    # temporal: así la prueba no toca nada del ordenador y se sabe
+    # exactamente dónde deben aparecer los datos.
     salida = open(log, "a", encoding="utf-8", errors="replace")
     entorno = {**os.environ, "LOCALAPPDATA": str(localappdata)}
-    return subprocess.Popen([str(exe)], cwd=exe.parent, stdout=salida, stderr=subprocess.STDOUT, env=entorno)
+    if EN_MAC:
+        entorno["HOME"] = str(localappdata)
+    return subprocess.Popen([str(exe)], cwd=exe.parent, stdout=salida, stderr=subprocess.STDOUT, env=entorno,
+                            start_new_session=not os.name == "nt")
 
 
 def esperar_servidor(proceso: subprocess.Popen, segundos: int = 180) -> bool:
@@ -91,8 +106,14 @@ def esperar_servidor(proceso: subprocess.Popen, segundos: int = 180) -> bool:
 
 
 def cerrar_exe(proceso: subprocess.Popen) -> None:
-    # /T cierra también el proceso "hijo" que crea el .exe de un solo archivo.
-    subprocess.run(["taskkill", "/PID", str(proceso.pid), "/T", "/F"], capture_output=True)
+    # Se cierra también el proceso "hijo" que crea el ejecutable de un solo archivo.
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proceso.pid), "/T", "/F"], capture_output=True)
+    else:
+        try:
+            os.killpg(os.getpgid(proceso.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
     try:
         proceso.wait(timeout=30)
     except subprocess.TimeoutExpired:
@@ -140,7 +161,7 @@ def probar(exe_original: Path) -> None:
     exe = carpeta / exe_original.name
     shutil.copy2(exe_original, exe)
     log = RESULTADOS / "exe_consola.log"
-    datos = LOCALAPPDATA_PRUEBA / "GestionRestaurante"
+    datos = carpeta_datos_en(LOCALAPPDATA_PRUEBA)
 
     # --- Primer arranque ---
     proceso = arrancar_exe(exe, log)
@@ -170,9 +191,10 @@ def probar(exe_original: Path) -> None:
                 except Exception as e:  # noqa: BLE001
                     comprobar(False, f"Página '{pagina}' se puede abrir", str(e)[:300])
 
-            # Guardado automático -> sesion.json en %LOCALAPPDATA%\\GestionRestaurante
+            # Guardado automático -> sesion.json en la carpeta de datos del sistema
+            sitio = "~/Library/Application Support/GestionRestaurante" if EN_MAC else "%LOCALAPPDATA%\\GestionRestaurante"
             comprobar((datos / "sesion.json").exists() and not (carpeta / "datos" / "sesion.json").exists(),
-                      "Los cambios se guardan solos en %LOCALAPPDATA%\\GestionRestaurante (no junto al .exe)")
+                      f"Los cambios se guardan solos en {sitio} (no junto al programa)")
             comprobar(any((datos / "copias").glob("sesion_*.json")), "Se crea la copia de seguridad del día")
 
             # Volver a abrir el .exe con el programa abierto: la segunda copia se cierra sola
@@ -247,7 +269,7 @@ def probar_actualizacion(exe_original: Path) -> None:
     guardados con una versión anterior y abre el .exe nuevo.
     """
     localappdata = Path(tempfile.mkdtemp(prefix="localappdata_v1_"))
-    datos = localappdata / "GestionRestaurante"
+    datos = carpeta_datos_en(localappdata)
     datos.mkdir(parents=True)
     antiguos = RAIZ / "pruebas" / "datos_guardados" / "sesion_v1.json"
     shutil.copy2(antiguos, datos / "sesion.json")

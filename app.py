@@ -4310,9 +4310,13 @@ def pagina_exportar() -> None:
              f"(se conservan las últimas 30). Todo está en esta carpeta:")
     st.code(str(CARPETA_DATOS), language=None)
     st.caption("Para tener una copia fuera del ordenador, copia esa carpeta entera a un pendrive o a la nube de vez en cuando.")
-    if os.name == "nt" and st.button("📂 Abrir la carpeta de datos"):
+    if (os.name == "nt" or sys.platform == "darwin") and st.button("📂 Abrir la carpeta de datos"):
         CARPETA_DATOS.mkdir(parents=True, exist_ok=True)
-        os.startfile(CARPETA_DATOS)  # solo existe en Windows
+        if os.name == "nt":
+            os.startfile(CARPETA_DATOS)  # solo existe en Windows
+        else:
+            import subprocess
+            subprocess.run(["open", str(CARPETA_DATOS)], check=False)  # Mac: lo abre en el Finder
 
     _restaurar_copia()
 

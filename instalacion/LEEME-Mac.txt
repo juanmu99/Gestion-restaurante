@@ -1,0 +1,35 @@
+GESTIÓN CATERING PARA MAC
+=========================
+
+ABRIRLO
+-------
+1. Mueve esta carpeta (GestionRestaurante) a un sitio fijo, por ejemplo a tu
+   carpeta de usuario o a Aplicaciones. No la dejes en Descargas.
+2. Haz doble clic en "GestionRestaurante". Se abre una ventana de Terminal
+   (es el programa funcionando: no la cierres) y, al poco, el navegador con
+   el programa. La primera vez tarda un poco más.
+3. Para cerrarlo: botón "⏻ Cerrar el programa" de la barra lateral.
+
+LA PRIMERA VEZ, EL MAC PUEDE BLOQUEARLO
+---------------------------------------
+Como el programa no viene de la App Store, el Mac puede decir que "no se
+puede verificar el desarrollador" o que "no se puede abrir". Es normal:
+  1. Pulsa "Aceptar" o "Hecho" en ese aviso.
+  2. Abre Ajustes del Sistema > Privacidad y seguridad.
+  3. Baja hasta el final: verás un aviso sobre "GestionRestaurante" con un
+     botón "Abrir igualmente". Púlsalo y confirma con tu contraseña.
+  4. Vuelve a hacer doble clic en el programa. Ya no lo volverá a preguntar.
+
+TUS DATOS
+---------
+Se guardan solos en:
+    (tu carpeta de usuario)/Library/Application Support/GestionRestaurante
+El programa te enseña la ruta exacta y tiene un botón para abrirla en
+"Exportar / Backup". Copia esa carpeta de vez en cuando a un pendrive o a la
+nube.
+
+ACTUALIZAR
+----------
+Sustituye el archivo "GestionRestaurante" por el nuevo. Tus datos no se
+tocan: están en otra carpeta. La primera vez que la versión nueva los abre,
+hace antes una copia de seguridad.

@@ -12,6 +12,8 @@ on:
       - "pruebas/probar_interfaz.py"
       - "pruebas/capturas.py"
       - ".github/workflows/probar-interfaz.yml"
+      - ".github/workflows/build-mac.yml"
+      - "instalacion/LEEME-Mac.txt"
 
 # Necesario para publicar los resultados en la rama "resultados-exe".
 permissions:

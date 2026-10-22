@@ -1,0 +1,138 @@
+name: Construir programa para Mac
+
+# Igual que build-windows.yml, pero en Macs de verdad que presta GitHub: uno
+# con chip de Apple (M1, M2...) y otro con Intel. El programa es EL MISMO;
+# solo cambia cómo se empaqueta. Se puede lanzar a mano desde la pestaña
+# "Actions" (botón "Run workflow") y se lanza solo al subir cambios a main.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "pruebas/probar_interfaz.py"
+      - "pruebas/capturas.py"
+      - ".github/workflows/probar-interfaz.yml"
+      - ".github/workflows/build-windows.yml"
+
+# Necesario para publicar los resultados en las ramas "resultados-mac-...".
+permissions:
+  contents: write
+
+concurrency:
+  group: build-mac
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest       # Mac con chip de Apple (M1, M2, M3...)
+            nombre: AppleSilicon
+            rama: resultados-mac-applesilicon
+          - runner: macos-15-intel     # Mac con procesador Intel
+            nombre: Intel
+            rama: resultados-mac-intel
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Descargar el código del repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar las dependencias del proyecto y PyInstaller
+        run: |
+          pip install -r requirements.txt -c restricciones.txt
+          pip install pyinstaller==6.22.3 -c restricciones.txt
+
+      # Las mismas opciones que en Windows (ver build-windows.yml para qué es
+      # cada una). La única diferencia: en Mac --add-data separa con ":"
+      # en vez de ";". --console: al abrirlo con doble clic sale una ventana
+      # de Terminal, como la ventana negra en Windows (es el programa
+      # funcionando; al cerrarla se cierra el programa).
+      - name: Construir el programa
+        run: >
+          pyinstaller --onefile --console --name GestionRestaurante
+          --paths modulos
+          --hidden-import inventario
+          --hidden-import servicios
+          --hidden-import recetario
+          --hidden-import compras
+          --hidden-import dashboard
+          --hidden-import exportador
+          --hidden-import persistencia
+          --hidden-import metricas
+          --hidden-import gastos
+          --hidden-import materiales
+          --hidden-import historial
+          --hidden-import elaboraciones
+          --hidden-import sobrantes
+          --hidden-import google_drive_backup
+          --collect-all google_auth_oauthlib
+          --collect-all googleapiclient
+          --collect-all google_auth_httplib2
+          --collect-all google
+          --add-data "app.py:."
+          --add-data ".streamlit:.streamlit"
+          --collect-all streamlit
+          iniciar_app.py
+
+      # La misma prueba que el .exe de Windows: arrancarlo, abrir todas las
+      # páginas, guardar, exportar, cerrarlo, reabrirlo y abrir datos de la
+      # versión anterior.
+      - name: Instalar el navegador para probar el programa
+        run: |
+          pip install playwright==1.63.0 -c restricciones.txt
+          python -m playwright install chromium
+
+      - name: Probar el programa
+        id: prueba
+        continue-on-error: true
+        run: python pruebas/probar_exe.py dist/GestionRestaurante
+
+      - name: Publicar resultados en la rama ${{ matrix.rama }}
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resultados
+          cp -r resultados /tmp/publicar
+          cd /tmp/publicar
+          {
+            echo "Resultados de la prueba del programa para Mac (${{ matrix.nombre }}) del cambio ${GITHUB_SHA}"
+            echo "Prueba: ${{ steps.prueba.outcome }}"
+          } > LEEME.txt
+          git init -q -b ${{ matrix.rama }}
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Resultados de la prueba para Mac (${{ matrix.nombre }}) de ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:${{ matrix.rama }}
+
+      # Se empaqueta en un .tar.gz: las descargas de GitHub son .zip y en un
+      # .zip se pierde el permiso de "ejecutable" (el programa no se abriría).
+      # Al hacer doble clic en el .tar.gz, el Mac lo descomprime con el permiso.
+      - name: Empaquetar
+        if: steps.prueba.outcome == 'success'
+        run: |
+          mkdir -p paquete/GestionRestaurante
+          cp dist/GestionRestaurante paquete/GestionRestaurante/
+          cp instalacion/LEEME-Mac.txt paquete/GestionRestaurante/
+          tar -czf GestionRestaurante-Mac-${{ matrix.nombre }}.tar.gz -C paquete GestionRestaurante
+
+      - name: Subir el programa como descarga
+        if: steps.prueba.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GestionRestaurante-Mac-${{ matrix.nombre }}
+          path: GestionRestaurante-Mac-${{ matrix.nombre }}.tar.gz
+
+      - name: Marcar la ejecución como fallida si el programa no pasó la prueba
+        if: steps.prueba.outcome != 'success'
+        run: |
+          echo "El programa no ha pasado la prueba: revisa resultado_exe.txt en la rama ${{ matrix.rama }}."
+          exit 1

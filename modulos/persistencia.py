@@ -53,6 +53,7 @@ class Sesion:
 # ---------- Dónde se guardan los datos ----------
 
 NOMBRE_CARPETA_WINDOWS = "GestionRestaurante"
+NOMBRE_CARPETA_MAC = "GestionRestaurante"
 
 # Versión del FORMATO de los datos guardados. Se sube cada vez que una
 # actualización añade algo nuevo al archivo (los datos antiguos se siguen
@@ -77,13 +78,19 @@ def carpeta_datos(carpeta_programa: Path) -> Path:
       NO junto al .exe: si el .exe se abre desde dentro del ZIP o se mueve
       de carpeta, los datos se quedarían atrás. Si ya había datos junto al
       .exe (versiones anteriores), se copian aquí la primera vez.
+    - Programa empaquetado en Mac: ~/Library/Application Support/GestionRestaurante
+      (el sitio normal de los datos de los programas en Mac), por lo mismo.
     - Resto (python / streamlit run): carpeta_programa/datos, como siempre.
     """
     forzada = os.environ.get("GESTION_RESTAURANTE_DATOS")
     if forzada:
         return Path(forzada)
+    destino = None
     if getattr(sys, "frozen", False) and os.name == "nt" and os.environ.get("LOCALAPPDATA"):
         destino = Path(os.environ["LOCALAPPDATA"]) / NOMBRE_CARPETA_WINDOWS
+    elif getattr(sys, "frozen", False) and sys.platform == "darwin":
+        destino = Path.home() / "Library" / "Application Support" / NOMBRE_CARPETA_MAC
+    if destino is not None:
         antigua = carpeta_programa / "datos"
         if (antigua / "sesion.json").exists() and not (destino / "sesion.json").exists():
             destino.mkdir(parents=True, exist_ok=True)
