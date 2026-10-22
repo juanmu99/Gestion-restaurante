@@ -44,8 +44,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      # En el Mac Intel, `cryptography` (la usan las librerías de Google) no
+      # tiene versión ya compilada y se compila aquí. Por defecto enlazaría
+      # con el OpenSSL del sistema, que es más nuevo que el que va dentro del
+      # programa, y al abrirlo fallaría ("Symbol not found"). Con
+      # OPENSSL_STATIC=1 lleva su propio OpenSSL dentro y no depende de nada.
       - name: Instalar las dependencias del proyecto y PyInstaller
         run: |
+          if [ "${{ matrix.nombre }}" = "Intel" ]; then
+            export OPENSSL_DIR="$(brew --prefix openssl@3)"
+            export OPENSSL_STATIC=1
+          fi
           pip install -r requirements.txt -c restricciones.txt
           pip install pyinstaller==6.22.3 -c restricciones.txt
 
@@ -95,6 +104,7 @@ jobs:
             --collect-all google_auth_oauthlib --collect-all googleapiclient --collect-all google_auth_httplib2 \
             --collect-all google --distpath dist_diag --workpath build_diag pruebas/diagnostico_importes.py > /dev/null 2>&1 || true
           ./dist_diag/diagnostico > resultados/diagnostico_importes.txt 2>&1 || true
+          otool -L "$(python -c 'import cryptography.hazmat.bindings._rust as r; print(r.__file__)')" >> resultados/diagnostico_importes.txt 2>&1 || true
 
       # La misma prueba que el .exe de Windows: arrancarlo, abrir todas las
       # páginas, guardar, exportar, cerrarlo, reabrirlo y abrir datos de la
