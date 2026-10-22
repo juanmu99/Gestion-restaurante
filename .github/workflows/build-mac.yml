@@ -81,6 +81,17 @@ jobs:
           --collect-all streamlit
           iniciar_app.py
 
+      # Diagnóstico (se publica con los resultados): qué no ha encontrado
+      # PyInstaller y si las librerías de Google se importan bien en este Mac.
+      - name: Diagnóstico de la compilación
+        if: always()
+        run: |
+          mkdir -p resultados
+          cp build/GestionRestaurante/warn-GestionRestaurante.txt resultados/ || true
+          python -c "import platform, sys; print(platform.machine(), sys.version)" > resultados/importes.txt 2>&1
+          python -c "import google.auth.transport.requests, google.oauth2.credentials, google_auth_oauthlib.flow, googleapiclient.discovery, googleapiclient.http; print('Google OK')" >> resultados/importes.txt 2>&1 || true
+          pip freeze >> resultados/importes.txt
+
       # La misma prueba que el .exe de Windows: arrancarlo, abrir todas las
       # páginas, guardar, exportar, cerrarlo, reabrirlo y abrir datos de la
       # versión anterior.
