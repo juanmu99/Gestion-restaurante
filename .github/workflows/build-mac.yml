@@ -91,6 +91,7 @@ jobs:
           python -c "import platform, sys; print(platform.machine(), sys.version)" > resultados/importes.txt 2>&1
           python -c "import google.auth.transport.requests, google.oauth2.credentials, google_auth_oauthlib.flow, googleapiclient.discovery, googleapiclient.http; print('Google OK')" >> resultados/importes.txt 2>&1 || true
           pip freeze >> resultados/importes.txt
+          pyi-archive_viewer --list --recursive dist/GestionRestaurante > resultados/contenido.txt 2>&1 || true
 
       # La misma prueba que el .exe de Windows: arrancarlo, abrir todas las
       # páginas, guardar, exportar, cerrarlo, reabrirlo y abrir datos de la
