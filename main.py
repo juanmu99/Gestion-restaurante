@@ -35,7 +35,8 @@ from recetario import Recetario, Receta, Menu
 from compras import GestorCompras, ItemCompra
 from dashboard import Dashboard
 from exportador import exportar_todo
-from persistencia import guardar_sesion, cargar_sesion, cargar_sesion_segura, carpeta_datos, SesionIlegible
+from persistencia import guardar_sesion, cargar_sesion, cargar_sesion_segura, carpeta_datos, SesionIlegible, VERSION_DATOS
+import registro_errores
 from persistencia import copia_antes_de_empezar_de_cero, sesion_a_dict, sesion_vacia
 from gastos import Gasto, RegistroGastos, resumen_servicio, NOTA_COSTE_AL_COMPLETAR
 from materiales import Material, RegistroMaterial, lista_de_carga
@@ -62,6 +63,7 @@ def _carpeta_base() -> Path:
 
 CARPETA_DATOS = carpeta_datos(_carpeta_base())
 RUTA_SESION = str(CARPETA_DATOS / "sesion.json")
+registro_errores.configurar(CARPETA_DATOS, f"Gestión Catering · consola · formato de datos {VERSION_DATOS}")
 
 
 # --- Estado global de la aplicación (vive mientras el programa esté abierto) ---
@@ -1690,9 +1692,11 @@ def accion_cargar_sesion():
     try:
         sesion, aviso = cargar_sesion_segura(RUTA_SESION)
     except SesionIlegible as error:
+        registro_errores.apuntar("No se han podido abrir los datos guardados (consola)", excepcion=error.__cause__ or error)
         print(f"❌ {error}")
         sys.exit(1)
     if aviso:
+        registro_errores.apuntar("Aviso al abrir los datos (consola)", detalle=aviso)
         print(f"⚠️  {aviso}")
     if sesion is None:
         return
@@ -2455,8 +2459,17 @@ def menu_principal():
 
 
 if __name__ == "__main__":
-    if Path(RUTA_SESION).exists():
-        respuesta = pedir_texto("Hay una sesión guardada. ¿Cargarla? (s/n): ").strip().lower()
-        if respuesta == "s":
-            accion_cargar_sesion()
-    menu_principal()
+    try:
+        if Path(RUTA_SESION).exists():
+            respuesta = pedir_texto("Hay una sesión guardada. ¿Cargarla? (s/n): ").strip().lower()
+            if respuesta == "s":
+                accion_cargar_sesion()
+        menu_principal()
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as error:  # noqa: BLE001
+        # Un error inesperado: queda en el registro de errores (en la carpeta de datos).
+        registro_errores.apuntar("Error inesperado (consola)", excepcion=error)
+        print(f"\n❌ Ha ocurrido un error inesperado: {error}")
+        print(f"Se ha apuntado en {registro_errores.ruta()}: si se repite, envíaselo al desarrollador.")
+        raise

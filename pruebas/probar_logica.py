@@ -1965,6 +1965,42 @@ comprobar(copia.valor_derivados == {"Cabeza de rape": 10} and copia.coste_limpio
 comprobar(ingredientes_sin_precio({"Cabeza de rape": 0.1}, inv) == [] and not subproductos_a_cero({"Cabeza de rape": 0.1}, inv),
           "Un subproducto con valor ya cuesta algo en las recetas")
 
+print("\n--- Registro de errores ---")
+import registro_errores  # noqa: E402
+with tempfile.TemporaryDirectory() as carpeta:
+    registro_errores.configurar(Path(carpeta), "Gestión Catering · pruebas")
+    registro_errores._ultimos.clear()
+    try:
+        {}["no existe"]
+    except KeyError as e:
+        error_prueba = e
+    comprobar(registro_errores.apuntar("Error inesperado", pantalla="Inventario", excepcion=error_prueba),
+              "Un error se apunta en el registro")
+    texto = (Path(carpeta) / "registro_errores.log").read_text(encoding="utf-8")
+    comprobar("Qué: Error inesperado" in texto and "Pantalla: Inventario" in texto and "KeyError" in texto
+              and "Traceback" in texto and "Ordenador:" in texto and "Gestión Catering · pruebas" in texto,
+              "Con fecha, qué pasó, la pantalla, el programa, el ordenador y el detalle técnico")
+    comprobar(not registro_errores.apuntar("Error inesperado", pantalla="Inventario", excepcion=error_prueba),
+              "El mismo error repetido enseguida no se vuelve a apuntar (no llena el registro)")
+    registro_errores.apuntar("Otro error", detalle="algo distinto")
+    info = registro_errores.resumen()
+    comprobar(info["errores"] == 2 and info["ultimo"] is not None, "El resumen dice cuántos hay y cuándo fue el último")
+    maximo = registro_errores.TAMANO_MAXIMO
+    registro_errores.TAMANO_MAXIMO = 600
+    for i in range(10):
+        registro_errores.apuntar(f"Error {i}", detalle="x" * 100)
+    registro_errores.TAMANO_MAXIMO = maximo
+    actual = Path(carpeta) / "registro_errores.log"
+    anterior = Path(carpeta) / "registro_errores.log.1"
+    comprobar(anterior.exists() and actual.stat().st_size <= 600 and not (Path(carpeta) / "registro_errores.log.2").exists(),
+              "Al pasar del tamaño máximo se aparta el antiguo (solo se guarda uno) y se empieza otro")
+    comprobar(registro_errores.contenido() == anterior.read_bytes() + actual.read_bytes(),
+              "Para enviarlo se descargan los dos juntos")
+registro_errores.configurar(Path("/ruta/que/no/existe/\0imposible"))
+comprobar(registro_errores.apuntar("Error en una carpeta imposible") is False,
+          "Si no se puede escribir el registro, no pasa nada (nunca hace fallar al programa)")
+registro_errores._carpeta = None
+
 print("\n--- Compatibilidad con los datos que ya hay guardados ---")
 FOTO_V1 = RAIZ / "pruebas" / "datos_guardados" / "sesion_v1.json"
 

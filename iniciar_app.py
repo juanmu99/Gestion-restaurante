@@ -92,10 +92,37 @@ def _salida_en_utf8() -> None:
             flujo.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _apuntar_fallo_al_arrancar(error: BaseException) -> None:
+    """
+    Si el programa no llega a arrancar, lo apunta en el registro de errores
+    (en la carpeta de datos) y deja la ventana abierta para que se lea el aviso.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "modulos"))
+        import registro_errores
+        from persistencia import carpeta_datos, VERSION_DATOS
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+        registro_errores.configurar(carpeta_datos(base), f"Gestión Catering · arranque · formato de datos {VERSION_DATOS}")
+        registro_errores.apuntar("El programa no ha podido arrancar", excepcion=error)
+        donde = registro_errores.ruta()
+    except Exception:  # noqa: BLE001
+        donde = None
+    print(f"\n❌ El programa no ha podido arrancar: {error}")
+    if donde:
+        print(f"Se ha apuntado en {donde}: envíaselo al desarrollador.")
+    try:
+        input("Pulsa Intro para cerrar esta ventana.")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 if __name__ == "__main__":
     _salida_en_utf8()
-
-    from streamlit.web import cli as stcli
+    try:
+        from streamlit.web import cli as stcli
+    except Exception as error:  # noqa: BLE001
+        _apuntar_fallo_al_arrancar(error)
+        sys.exit(1)
 
     puerto = PUERTO
     url = f"http://{DIRECCION}:{puerto}"
@@ -125,4 +152,11 @@ if __name__ == "__main__":
         "--browser.gatherUsageStats", "false",
         "--client.toolbarMode", "minimal",
     ]
-    sys.exit(stcli.main())
+    try:
+        codigo = stcli.main()
+    except SystemExit:
+        raise
+    except Exception as error:  # noqa: BLE001
+        _apuntar_fallo_al_arrancar(error)
+        sys.exit(1)
+    sys.exit(codigo)

@@ -56,6 +56,12 @@ def sin_excepciones(at: AppTest, contexto: str) -> bool:
             for linea in getattr(exc, "stack_trace", [])[-8:]:
                 registrar(f"      {linea}")
         return False
+    # Los errores inesperados ya no salen como excepción: se apuntan en el
+    # registro de errores y se enseña un aviso. También cuentan como fallo.
+    if any("error inesperado" in str(e.value) for e in at.error):
+        detalle = [str(c.value) for c in at.code]
+        registrar(f"   💥 Error inesperado en {contexto}: {detalle[-1] if detalle else '(sin detalle)'}")
+        return False
     return True
 
 
@@ -1715,6 +1721,26 @@ def prueba_valor_derivados(at: AppTest) -> None:
               "Se registra con ese valor: la cabeza entra a 5 €/kg")
 
 
+@prueba("Registro de errores")
+def prueba_registro_errores(at: AppTest) -> None:
+    registro = RAIZ / "datos" / "registro_errores.log"
+    antes = registro.read_text(encoding="utf-8") if registro.exists() else ""
+    ir_a(at, "Dashboard")
+    at.session_state["_error_de_prueba"] = True
+    at.run()
+    comprobar(not at.exception and any("Ha ocurrido un error inesperado" in str(e.value) for e in at.error),
+              "Si algo falla, sale un aviso claro (no el texto técnico en rojo)")
+    nuevo = registro.read_text(encoding="utf-8")[len(antes):] if registro.exists() else ""
+    comprobar("Qué: Error inesperado" in nuevo and "Pantalla: Dashboard" in nuevo and "Error de prueba" in nuevo
+              and "Traceback" in nuevo, "El error queda apuntado en registro_errores.log (qué, pantalla y detalle técnico)")
+    ir_a(at, "Inventario")
+    comprobar(sin_excepciones(at, "seguir tras un error"), "El programa sigue funcionando después del error")
+    ir_a(at, "Exportar / Backup")
+    comprobar(any("error(es) apuntado(s)" in str(m.value) for m in at.markdown)
+              and any(getattr(b, "label", "") == "⬇️ Descargar el registro de errores" for b in at.get("download_button")),
+              "En Exportar / Backup se ve cuántos errores hay y se puede descargar el registro")
+
+
 @prueba("Preparar una base desde el Recetario y guía de primer uso (mejora 5)")
 def prueba_mejora5(at: AppTest) -> None:
     import os
@@ -1787,6 +1813,7 @@ def main() -> int:
     prueba_sobrantes(at)
     prueba_costes_platos(at)
     prueba_valor_derivados(at)
+    prueba_registro_errores(at)
 
     total = sum(1 for linea in lineas if linea.startswith(("✅", "❌")))
     registrar(f"\nRESULTADO: {total - len(fallos)}/{total} comprobaciones correctas")

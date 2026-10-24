@@ -31,6 +31,7 @@ from compras import GestorCompras
 from metricas import ArchivoInformes
 from gastos import RegistroGastos
 from materiales import RegistroMaterial
+import registro_errores
 
 
 @dataclass
@@ -157,6 +158,7 @@ def escribir_sesion(datos: dict, ruta: str) -> None:
             shutil.copy2(ruta, ruta.with_name(ruta.name + ".bak"))
         except OSError as error:
             print(f"⚠️  No se ha podido hacer la copia .bak: {error}")
+            registro_errores.apuntar("No se ha podido hacer la copia .bak de los datos", excepcion=error)
     os.replace(temporal, ruta)  # a partir de aquí, lo importante ya está guardado
 
     # Las copias son un extra: si fallan (archivo bloqueado...), el guardado sigue siendo bueno.
@@ -169,6 +171,7 @@ def escribir_sesion(datos: dict, ruta: str) -> None:
             vieja.unlink(missing_ok=True)
     except OSError as error:
         print(f"⚠️  No se ha podido hacer la copia de seguridad del día: {error}")
+        registro_errores.apuntar("No se ha podido hacer la copia de seguridad del día", excepcion=error)
 
 
 def copia_antes_de_empezar_de_cero(datos: dict, ruta: str, motivo: str = "empezar_de_cero") -> Path:

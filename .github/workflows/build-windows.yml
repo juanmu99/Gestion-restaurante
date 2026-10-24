@@ -73,6 +73,7 @@ jobs:
           --hidden-import historial
           --hidden-import elaboraciones
           --hidden-import sobrantes
+          --hidden-import registro_errores
           --hidden-import google_drive_backup
           --collect-all google_auth_oauthlib
           --collect-all googleapiclient

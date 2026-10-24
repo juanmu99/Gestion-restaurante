@@ -134,7 +134,11 @@ def esperar(page) -> None:
 def errores_en_pantalla(page) -> str:
     """Texto de los errores de Python que Streamlit muestra en rojo, si hay."""
     cajas = page.locator('[data-testid="stException"]')
-    return " | ".join(cajas.nth(i).inner_text()[:300] for i in range(cajas.count()))
+    errores = [cajas.nth(i).inner_text()[:300] for i in range(cajas.count())]
+    # Los errores inesperados ahora salen como aviso (y se apuntan en el registro de errores).
+    avisos = page.locator('[data-testid="stAlert"]')
+    errores += [t[:300] for t in avisos.all_inner_texts() if "error inesperado" in t]
+    return " | ".join(errores)
 
 
 def abrir_app(navegador):

@@ -51,8 +51,9 @@ from compras import GestorCompras
 from exportador import exportar_todo
 from persistencia import (
     Sesion, SesionIlegible, carpeta_datos, cargar_sesion_segura, escribir_sesion, firma, sesion_a_dict,
-    copia_antes_de_empezar_de_cero, sesion_vacia, listar_copias, cargar_sesion,
+    copia_antes_de_empezar_de_cero, sesion_vacia, listar_copias, cargar_sesion, VERSION_DATOS,
 )
+import registro_errores
 from gastos import Gasto, RegistroGastos, resumen_servicio, resumen_periodo, NOTA_COSTE_AL_COMPLETAR
 from materiales import Material, RegistroMaterial, lista_de_carga
 import historial
@@ -79,6 +80,13 @@ def _carpeta_base() -> Path:
 
 CARPETA_DATOS = carpeta_datos(_carpeta_base())
 RUTA_SESION = str(CARPETA_DATOS / "sesion.json")
+# Registro de errores (registro_errores.log), en la misma carpeta que los datos.
+registro_errores.configurar(CARPETA_DATOS, f"Gestión Catering · interfaz · formato de datos {VERSION_DATOS}")
+
+TEXTO_ERROR_INESPERADO = (
+    "Ha ocurrido un error inesperado. Tus datos están a salvo. Se ha apuntado en el registro de errores: si se "
+    "repite, envíaselo al desarrollador (Exportar / Backup › 🧾 Registro de errores)."
+)
 
 # set_page_config DEBE ser el primer comando de Streamlit del script.
 st.set_page_config(page_title="Gestión Catering", page_icon="🍽️", layout="wide")
@@ -222,9 +230,11 @@ def inicializar_estado() -> None:
         sesion, aviso = cargar_sesion_segura(RUTA_SESION)
     except SesionIlegible as error:
         # No se arranca vacío encima de los datos: se para aquí (y no se guarda nada).
+        registro_errores.apuntar("No se han podido abrir los datos guardados", excepcion=error.__cause__ or error)
         st.error(f"❌ {error}")
         st.stop()
     if aviso:
+        registro_errores.apuntar("Aviso al abrir los datos", detalle=aviso)
         avisar("warning", aviso)
     if sesion is None:
         sesion = Sesion(Inventario(), RegistroServicios(), Recetario(), GestorCompras(), ArchivoInformes())
@@ -285,6 +295,7 @@ def autoguardar(zona) -> None:
         try:
             escribir_sesion(datos, RUTA_SESION)
         except OSError as error:
+            registro_errores.apuntar("No se han podido guardar los cambios", excepcion=error)
             zona.error(f"❌ No se han podido guardar los cambios: {error}. Comprueba que hay espacio en el disco.")
             return
         ss._firma_guardada = huella
@@ -4302,6 +4313,23 @@ def _restaurar_copia() -> None:
             st.rerun()
 
 
+def _seccion_registro_errores() -> None:
+    """Cuántos errores hay apuntados y un botón para descargar el registro y enviárselo al desarrollador."""
+    st.subheader("🧾 Registro de errores")
+    info = registro_errores.resumen()
+    if not info["errores"]:
+        st.caption("No se ha apuntado ningún error. Si algo fallara, quedaría apuntado aquí para poder "
+                   "enviárselo al desarrollador.")
+        return
+    cuando = info["ultimo"].strftime("%d/%m/%Y a las %H:%M") if info["ultimo"] else "—"
+    st.write(f"Hay **{info['errores']}** error(es) apuntado(s); el último, el {cuando}. Si algo falla, descarga el "
+             "registro y envíaselo al desarrollador (por correo o WhatsApp).")
+    st.download_button("⬇️ Descargar el registro de errores", registro_errores.contenido(),
+                       file_name=f"registro_errores_{datetime.now():%Y-%m-%d}.log", mime="text/plain",
+                       key="descargar_registro_errores")
+    st.caption(f"Está en la carpeta de datos: {info['ruta']}")
+
+
 def pagina_exportar() -> None:
     st.header("📁 Exportar y backup")
 
@@ -4319,6 +4347,7 @@ def pagina_exportar() -> None:
             subprocess.run(["open", str(CARPETA_DATOS)], check=False)  # Mac: lo abre en el Finder
 
     _restaurar_copia()
+    _seccion_registro_errores()
 
     st.divider()
     st.subheader("Exportar a Excel")
@@ -4752,6 +4781,9 @@ if st.sidebar.button("⏻ Cerrar el programa", key="cerrar_programa",
 # st.rerun() o si falla al dibujarse (finally se ejecuta en los dos casos).
 try:
     mostrar_avisos()
+    # Solo para las pruebas automáticas: provoca un error a propósito.
+    if st.session_state.pop("_error_de_prueba", False):
+        raise RuntimeError("Error de prueba (solo en las pruebas automáticas)")
 
     if pagina == "Dashboard":
         pagina_dashboard()
@@ -4773,5 +4805,15 @@ try:
         pagina_exportar()
     elif pagina == "Ajustes":
         pagina_ajustes()
+except Exception as error:  # noqa: BLE001
+    # st.rerun() y st.stop() no son errores: se dejan pasar.
+    if type(error).__name__ in ("RerunException", "StopException"):
+        raise
+    # Un error inesperado: se apunta en el registro y se explica con
+    # palabras normales. El resto del programa sigue funcionando.
+    registro_errores.apuntar("Error inesperado", pantalla=pagina, excepcion=error)
+    st.error(TEXTO_ERROR_INESPERADO)
+    with st.expander("Detalle técnico (para el desarrollador)"):
+        st.code(f"{type(error).__name__}: {error}", language=None)
 finally:
     autoguardar(zona_guardado)
