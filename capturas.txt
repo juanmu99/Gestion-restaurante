@@ -1,0 +1,31 @@
+📸 Dashboard
+📸 Inventario
+📸 Inventario > ✏️ Editar producto
+📸 Inventario > 📦 Actualizar stock
+📸 Inventario > 🏷️ Lotes
+📸 Inventario > 📈 Historial de precios
+📸 Inventario > 🔪 Limpiar producto
+📸 Inventario > 📜 Limpiezas
+📸 Inventario > Consumibles
+📸 Inventario > Elaboraciones
+📸 Inventario > Elaboraciones > Preparar base
+📸 Inventario > Preparaciones de bases
+📸 Inventario > Material
+📸 Servicios
+📸 Servicios > 🚚 Material
+📸 Servicios > 💶 Rentabilidad
+📸 Servicios > Completar > paso 3 (Sobrantes)
+📸 Historial
+📸 Historial > ficha > Sobrantes
+📸 Recetario
+📸 Recetario > Detalle de menú
+📸 Recetario > Crear menú (coste)
+📸 Recetario > Crear receta (coste)
+📸 Recetario > Elaboraciones base
+📸 Compras
+📸 Gastos
+📸 Métricas
+📸 Métricas > Sobrantes
+📸 Métricas > IVA
+📸 Exportar / Backup
+📸 Ajustes

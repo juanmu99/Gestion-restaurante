@@ -1,0 +1,4 @@
+Resultados de las pruebas del cambio 4da12f5c1f572a5a81623f01f0f5bda7c9c86b30
+Pruebas de la lógica: success
+Pruebas de la interfaz: success
+Capturas de pantalla: success
