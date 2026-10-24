@@ -1,0 +1,13 @@
+OK  cryptography
+OK  cryptography.hazmat.bindings._rust
+OK  requests
+OK  google.auth.transport.requests
+OK  google.oauth2.credentials
+OK  google_auth_oauthlib.flow
+OK  googleapiclient.discovery
+OK  googleapiclient.http
+OK  google_drive_backup
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/cryptography/hazmat/bindings/_rust.abi3.so:
+	@rpath/cryptography.hazmat.bindings._rust.abi3.so (compatibility version 0.0.0, current version 0.0.0)
+	/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
